@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions / chat
+    url: https://github.com/YOUR_USERNAME/underlit/discussions
+    about: For usage questions or open-ended discussion, please use Discussions rather than Issues.

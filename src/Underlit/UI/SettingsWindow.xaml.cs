@@ -1,0 +1,304 @@
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using Underlit.Display;
+using Underlit.Settings;
+using Underlit.Sys;
+using Color = System.Windows.Media.Color;
+using TextBox = System.Windows.Controls.TextBox;
+
+namespace Underlit.UI;
+
+public partial class SettingsWindow : Window
+{
+    public event Action<AppSettings>? Applied;
+    private AppSettings _snapshot;
+    private readonly IReadOnlyList<DisplayInfo> _displays;
+    private readonly HardwareBrightness _hardware;
+
+    public sealed class MonitorRow
+    {
+        public string DeviceName { get; set; } = "";
+        public string StableId { get; set; } = "";
+        public string Path { get; set; } = "";
+        public double BrightnessOffset { get; set; }
+        public int WarmthOffset { get; set; }
+    }
+
+    private readonly ObservableCollection<MonitorRow> _monRows = new();
+    private readonly FrameworkElement[] _pages;
+    private readonly Action<bool> _themeHandler;
+
+    public SettingsWindow(AppSettings settings, IReadOnlyList<DisplayInfo> displays, HardwareBrightness hardware)
+    {
+        InitializeComponent();
+        _snapshot = Clone(settings);
+        _displays = displays;
+        _hardware = hardware;
+        LstMonitors.ItemsSource = _monRows;
+
+        // Sidebar → page switching
+        _pages = new FrameworkElement[] { PageGeneral, PageHotkeys, PageSchedule, PageMonitors, PageExclusions };
+        NavList.SelectionChanged += (_, _) => ShowSelectedPage();
+
+        // Theming — initial, plus live follow on Windows theme change
+        ApplyTheme(ThemeInfo.IsDarkMode());
+        _themeHandler = isDark => Dispatcher.BeginInvoke(() => ApplyTheme(isDark));
+        ThemeInfo.ThemeChanged += _themeHandler;
+        Closed += (_, _) => ThemeInfo.ThemeChanged -= _themeHandler;
+
+        // Populate the sidebar logo. Render our programmatic icon to a WPF ImageSource.
+        AppLogo.Source = RenderLogoToImageSource(56);
+
+        LoadFromSettings();
+        UpdateAllValueChips();
+
+        // Live-apply: push as you change, don't require save/close
+        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled })
+        {
+            cb.Checked   += (_, _) => PushSettings();
+            cb.Unchecked += (_, _) => PushSettings();
+        }
+        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth })
+        {
+            sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
+        }
+        foreach (var tb in new TextBox[] { TxtHkBrDown, TxtHkBrUp, TxtHkWrDown, TxtHkWrUp, TxtHkBoost, TxtHkToggle,
+                                           TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd, TxtExclusions })
+        {
+            tb.LostFocus += (_, _) => PushSettings();
+        }
+
+        LstMonitors.SelectionChanged += OnMonitorSelected;
+        SldMonBrOffset.ValueChanged += OnMonitorOffsetChanged;
+        SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
+    }
+
+    // ---- Sidebar navigation ----
+
+    private void ShowSelectedPage()
+    {
+        int idx = NavList.SelectedIndex < 0 ? 0 : NavList.SelectedIndex;
+        for (int i = 0; i < _pages.Length; i++)
+            _pages[i].Visibility = i == idx ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ---- Theme ----
+
+    private void ApplyTheme(bool isDark)
+    {
+        // Colors picked to match Windows 11's Settings/System look — subtle Mica-like
+        // backgrounds, accent blue, plenty of contrast for text.
+        var r = Resources;
+        if (isDark)
+        {
+            r["App.WindowBg"]      = Brush(0xFF202020);
+            r["App.SidebarBg"]     = Brush(0xFF1A1A1A);
+            r["App.CardBg"]        = Brush(0xFF2B2B2B);
+            r["App.CardBorder"]    = Brush(0x1FFFFFFF);
+            r["App.Divider"]       = Brush(0x14FFFFFF);
+            r["App.TextPrimary"]   = Brush(0xFFFFFFFF);
+            r["App.TextSecondary"] = Brush(0xB3FFFFFF);
+            r["App.HoverBg"]       = Brush(0x14FFFFFF);
+            r["App.SelectedBg"]    = Brush(0x24FFFFFF);
+            r["App.Accent"]        = Brush(0xFF60CDFF);
+            r["App.TrackBg"]       = Brush(0x33FFFFFF);
+            r["App.InputBg"]       = Brush(0xFF1E1E1E);
+            r["App.ToggleTrackOff"] = Brush(0x33FFFFFF);
+        }
+        else
+        {
+            r["App.WindowBg"]      = Brush(0xFFF3F3F3);
+            r["App.SidebarBg"]     = Brush(0xFFEDEDED);
+            r["App.CardBg"]        = Brush(0xFFFFFFFF);
+            r["App.CardBorder"]    = Brush(0x14000000);
+            r["App.Divider"]       = Brush(0x0D000000);
+            r["App.TextPrimary"]   = Brush(0xFF1F1F1F);
+            r["App.TextSecondary"] = Brush(0x99000000);
+            r["App.HoverBg"]       = Brush(0x0D000000);
+            r["App.SelectedBg"]    = Brush(0x1A000000);
+            r["App.Accent"]        = Brush(0xFF005FB8);
+            r["App.TrackBg"]       = Brush(0x22000000);
+            r["App.InputBg"]       = Brush(0xFFFFFFFF);
+            r["App.ToggleTrackOff"] = Brush(0x22000000);
+        }
+    }
+
+    private static SolidColorBrush Brush(uint argb)
+    {
+        byte a = (byte)((argb >> 24) & 0xFF);
+        byte r = (byte)((argb >> 16) & 0xFF);
+        byte g = (byte)((argb >> 8)  & 0xFF);
+        byte b = (byte)(argb         & 0xFF);
+        var br = new SolidColorBrush(Color.FromArgb(a, r, g, b));
+        br.Freeze();
+        return br;
+    }
+
+    // ---- Logo rendering ----
+
+    /// <summary>
+    /// Borrows the System.Drawing-generated logo from TrayIcon.CreateLogoIcon
+    /// and converts to a WPF ImageSource for display in the sidebar.
+    /// </summary>
+    private static ImageSource RenderLogoToImageSource(int size)
+    {
+        using var icon = TrayIcon.CreateLogoIcon(size);
+        using var bmp = icon.ToBitmap();
+        using var ms = new System.IO.MemoryStream();
+        bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+        ms.Position = 0;
+        var img = new BitmapImage();
+        img.BeginInit();
+        img.CacheOption = BitmapCacheOption.OnLoad;
+        img.StreamSource = ms;
+        img.EndInit();
+        img.Freeze();
+        return img;
+    }
+
+    // ---- Live value labels next to sliders ----
+
+    private void UpdateAllValueChips()
+    {
+        LblBrightnessStep.Text = ((int)SldBrightnessStep.Value).ToString();
+        LblWarmthStep.Text     = ((int)SldWarmthStep.Value) + " K";
+        LblRampDuration.Text   = ((int)SldRampDuration.Value) + " ms";
+        LblNightWarmth.Text    = ((int)SldNightWarmth.Value) + " K";
+        LblMonBr.Text          = ((int)SldMonBrOffset.Value >= 0 ? "+" : "") + (int)SldMonBrOffset.Value;
+        LblMonWr.Text          = ((int)SldMonWrOffset.Value) + " K";
+    }
+
+    // ---- Settings load/save ----
+
+    private static AppSettings Clone(AppSettings s)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(s);
+        return System.Text.Json.JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+    }
+
+    private void LoadFromSettings()
+    {
+        ChkStartWithWindows.IsChecked  = _snapshot.StartWithWindows;
+        ChkDisableNightLight.IsChecked = _snapshot.DisableWindowsNightLight;
+        ChkHookNativeKeys.IsChecked    = _snapshot.HookNativeBrightnessKeys;
+        ChkScheduleEnabled.IsChecked   = _snapshot.ScheduleEnabled;
+
+        SldBrightnessStep.Value = _snapshot.BrightnessStep;
+        SldWarmthStep.Value     = _snapshot.WarmthStep;
+        SldRampDuration.Value   = _snapshot.RampDurationMs;
+        SldNightWarmth.Value    = _snapshot.NightWarmthKelvin;
+
+        TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
+        TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;
+        TxtHkWrDown.Text = _snapshot.HotkeyWarmthDown;
+        TxtHkWrUp.Text   = _snapshot.HotkeyWarmthUp;
+        TxtHkBoost.Text  = _snapshot.HotkeyBoost;
+        TxtHkToggle.Text = _snapshot.HotkeyToggle;
+
+        TxtBedStart.Text  = Fmt(_snapshot.BedtimeStart);
+        TxtBedEnd.Text    = Fmt(_snapshot.BedtimeEnd);
+        TxtWakeStart.Text = Fmt(_snapshot.WakeupStart);
+        TxtWakeEnd.Text   = Fmt(_snapshot.WakeupEnd);
+
+        TxtExclusions.Text = string.Join(Environment.NewLine, _snapshot.ExcludedProcessNames);
+
+        _monRows.Clear();
+        foreach (var d in _displays)
+        {
+            var pm = _snapshot.PerMonitor.TryGetValue(d.StableId, out var p) ? p : new PerMonitor();
+            _monRows.Add(new MonitorRow
+            {
+                DeviceName = d.DeviceName,
+                StableId = d.StableId,
+                Path = _hardware.PathFor(d).ToString(),
+                BrightnessOffset = pm.BrightnessOffset,
+                WarmthOffset = pm.WarmthOffsetKelvin
+            });
+        }
+    }
+
+    private void OnMonitorSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (LstMonitors.SelectedItem is MonitorRow row)
+        {
+            SldMonBrOffset.Value = row.BrightnessOffset;
+            SldMonWrOffset.Value = row.WarmthOffset;
+            UpdateAllValueChips();
+        }
+    }
+
+    private void OnMonitorOffsetChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LstMonitors.SelectedItem is MonitorRow row)
+        {
+            row.BrightnessOffset = SldMonBrOffset.Value;
+            row.WarmthOffset = (int)SldMonWrOffset.Value;
+            LstMonitors.Items.Refresh();
+            UpdateAllValueChips();
+            PushSettings();
+        }
+    }
+
+    private static string Fmt(TimeOfDay t) => $"{t.Hour:D2}:{t.Minute:D2}";
+
+    private static TimeOfDay ParseTime(string? s, TimeOfDay fallback)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return fallback;
+        var parts = s.Split(':');
+        if (parts.Length != 2) return fallback;
+        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return fallback;
+        return new TimeOfDay(Math.Clamp(h, 0, 23), Math.Clamp(m, 0, 59));
+    }
+
+    private void PushSettings()
+    {
+        _snapshot.StartWithWindows          = ChkStartWithWindows.IsChecked == true;
+        _snapshot.DisableWindowsNightLight  = ChkDisableNightLight.IsChecked == true;
+        _snapshot.HookNativeBrightnessKeys  = ChkHookNativeKeys.IsChecked == true;
+        _snapshot.ScheduleEnabled           = ChkScheduleEnabled.IsChecked == true;
+
+        _snapshot.BrightnessStep  = SldBrightnessStep.Value;
+        _snapshot.WarmthStep      = (int)SldWarmthStep.Value;
+        _snapshot.RampDurationMs  = (int)SldRampDuration.Value;
+        _snapshot.SmoothRamping   = _snapshot.RampDurationMs > 10;
+        _snapshot.NightWarmthKelvin = (int)SldNightWarmth.Value;
+
+        _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();
+        _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Text.Trim();
+        _snapshot.HotkeyWarmthDown     = TxtHkWrDown.Text.Trim();
+        _snapshot.HotkeyWarmthUp       = TxtHkWrUp.Text.Trim();
+        _snapshot.HotkeyBoost          = TxtHkBoost.Text.Trim();
+        _snapshot.HotkeyToggle         = TxtHkToggle.Text.Trim();
+
+        _snapshot.BedtimeStart = ParseTime(TxtBedStart.Text, _snapshot.BedtimeStart);
+        _snapshot.BedtimeEnd   = ParseTime(TxtBedEnd.Text, _snapshot.BedtimeEnd);
+        _snapshot.WakeupStart  = ParseTime(TxtWakeStart.Text, _snapshot.WakeupStart);
+        _snapshot.WakeupEnd    = ParseTime(TxtWakeEnd.Text, _snapshot.WakeupEnd);
+
+        _snapshot.ExcludedProcessNames = TxtExclusions.Text
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.Replace(".exe", "", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        _snapshot.PerMonitor.Clear();
+        foreach (var r in _monRows)
+        {
+            if (r.BrightnessOffset != 0 || r.WarmthOffset != 0)
+            {
+                _snapshot.PerMonitor[r.StableId] = new PerMonitor
+                {
+                    BrightnessOffset = r.BrightnessOffset,
+                    WarmthOffsetKelvin = r.WarmthOffset
+                };
+            }
+        }
+
+        Applied?.Invoke(_snapshot);
+    }
+}

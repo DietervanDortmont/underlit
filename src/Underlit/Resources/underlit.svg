@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Underlit logo — reference SVG.
+  Rendered programmatically by TrayIcon.CreateLogoIcon at run time, so we don't
+  actually need a .ico file on disk. Kept here as documentation of the design.
+
+  Concept: a light source that's been dimmed below its normal range. The circle
+  reads as a lamp/sun; the gradient fading from bright (top) to dark (bottom)
+  is the "underlit" metaphor — the light is there, but most of it is muted.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="dimGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="1"   stop-color="#3A3A42" stop-opacity="1"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" ry="14" fill="#1E1E22"/>
+  <circle cx="32" cy="32" r="18" fill="url(#dimGrad)"/>
+</svg>

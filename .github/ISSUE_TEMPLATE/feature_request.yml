@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest something you'd like Underlit to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like Underlit to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why? What problem does it solve?
+      description: Helps prioritise — what pain does this relieve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: how
+    attributes:
+      label: How would it work, roughly?
+      description: Optional — sketches of UX or behavior are welcome.

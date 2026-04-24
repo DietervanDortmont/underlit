@@ -1,0 +1,494 @@
+<Window x:Class="Underlit.UI.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Underlit Settings"
+        Width="760" Height="600"
+        MinWidth="680" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        FontSize="13"
+        UseLayoutRounding="True">
+
+    <Window.Resources>
+        <!-- All theme-reactive brushes are DynamicResource. Values set in code by ApplyTheme(). -->
+
+        <Style x:Key="SidebarItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="Margin" Value="8,2"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.HoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.SelectedBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource App.CardBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="Margin" Value="0,0,0,16"/>
+        </Style>
+
+        <Style x:Key="CardCaption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
+            <Setter Property="Margin" Value="4,14,0,6"/>
+        </Style>
+
+        <Style x:Key="Row" TargetType="Grid">
+            <Setter Property="MinHeight" Value="48"/>
+        </Style>
+
+        <Style x:Key="RowDivider" TargetType="Border">
+            <Setter Property="Height" Value="1"/>
+            <Setter Property="Background" Value="{DynamicResource App.Divider}"/>
+            <Setter Property="Margin" Value="14,0"/>
+        </Style>
+
+        <Style x:Key="RowLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Margin" Value="14,0,12,0"/>
+        </Style>
+
+        <Style x:Key="RowHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="14,0,12,0"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="0,0,14,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Track" Width="40" Height="22"
+                                CornerRadius="11"
+                                Background="{DynamicResource App.ToggleTrackOff}">
+                            <Grid>
+                                <Ellipse x:Name="Knob"
+                                         Width="16" Height="16"
+                                         Margin="3"
+                                         HorizontalAlignment="Left"
+                                         Fill="White"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource App.Accent}"/>
+                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="AppleSlider" TargetType="Slider">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="MinWidth" Value="180"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.Accent}"/>
+            <Setter Property="Background" Value="{DynamicResource App.TrackBg}"/>
+        </Style>
+
+        <Style x:Key="AppleTextBox" TargetType="TextBox">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="0,0,14,0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border CornerRadius="6"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer x:Name="PART_ContentHost"
+                                          Padding="{TemplateBinding Padding}"
+                                          VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ValueChip" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="MinWidth" Value="54"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="Margin" Value="8,0,14,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <Style x:Key="PageTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{DynamicResource App.WindowBg}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Sidebar -->
+        <Border Grid.Column="0" Background="{DynamicResource App.SidebarBg}" Padding="0,16">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Margin="16,4,16,16" Orientation="Horizontal">
+                    <Image x:Name="AppLogo" Width="28" Height="28" Margin="0,0,10,0"/>
+                    <TextBlock Text="Underlit"
+                               FontSize="17" FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource App.TextPrimary}"/>
+                </StackPanel>
+                <ListBox x:Name="NavList"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         SelectedIndex="0"
+                         ItemContainerStyle="{StaticResource SidebarItem}">
+                    <ListBoxItem Content="General"/>
+                    <ListBoxItem Content="Hotkeys"/>
+                    <ListBoxItem Content="Schedule"/>
+                    <ListBoxItem Content="Monitors"/>
+                    <ListBoxItem Content="Exclusions"/>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- Content -->
+        <Grid Grid.Column="1">
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="32,28,32,32">
+                <Grid>
+                    <!-- GENERAL -->
+                    <StackPanel x:Name="PageGeneral">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="General"/>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="BEHAVIOR"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Start with Windows"/>
+                                    <CheckBox Grid.Column="1" x:Name="ChkStartWithWindows" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Disable Windows Night Light"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Prevents Windows' built-in warmth from conflicting with Underlit's."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkDisableNightLight" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Hook Fn brightness keys"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Extends the laptop Fn+brightness keys past the Windows minimum."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkHookNativeKeys" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="STEP SIZES"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Brightness per keypress"/>
+                                    <Slider Grid.Column="1" x:Name="SldBrightnessStep" Style="{StaticResource AppleSlider}"
+                                            Minimum="1" Maximum="20" TickFrequency="1"
+                                            IsSnapToTickEnabled="True" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblBrightnessStep"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmth per keypress"/>
+                                    <Slider Grid.Column="1" x:Name="SldWarmthStep" Style="{StaticResource AppleSlider}"
+                                            Minimum="50" Maximum="600" TickFrequency="50"
+                                            IsSnapToTickEnabled="True" SmallChange="50"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblWarmthStep"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="ANIMATION"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Software fade duration"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Smooths the overlay fade. Hardware brightness always snaps."/>
+                                    </StackPanel>
+                                    <Slider Grid.Column="1" x:Name="SldRampDuration" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="400" TickFrequency="20" IsSnapToTickEnabled="True"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblRampDuration"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- HOTKEYS -->
+                    <StackPanel x:Name="PageHotkeys" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Hotkeys"/>
+                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
+                                   Text="Type a combination like 'Ctrl+Alt+Down'. Modifiers: Ctrl, Alt, Shift, Win. Keys: letters, digits, F1..F12, Left, Right, Up, Down, Space, Enter."/>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="BRIGHTNESS"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Brightness down"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkBrDown" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Brightness up"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkBrUp" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="WARMTH"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmer"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkWrDown" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Cooler"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkWrUp" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="OTHER"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Boost"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Toggle: once jumps to full, again restores."/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkBoost" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Toggle Underlit on/off"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtHkToggle" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- SCHEDULE -->
+                    <StackPanel x:Name="PageSchedule" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Schedule"/>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Warmth follows a schedule"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Only warmth — scheduled brightness jumps felt disorienting."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkScheduleEnabled" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="BEDTIME RAMP"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Ramp starts"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtBedStart" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Reaches night warmth by"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtBedEnd" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="WAKEUP RAMP"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Ramp starts"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtWakeStart" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Fully daytime by"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtWakeEnd" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="NIGHT WARMTH"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmth at night (K)"/>
+                                    <Slider Grid.Column="1" x:Name="SldNightWarmth" Style="{StaticResource AppleSlider}"
+                                            Minimum="1500" Maximum="6500" TickFrequency="100" IsSnapToTickEnabled="True"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblNightWarmth"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- MONITORS -->
+                    <StackPanel x:Name="PageMonitors" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Monitors"/>
+                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
+                                   Text="Per-monitor offsets are ADDED to the global brightness and warmth. Handy for a main monitor that's physically much brighter than a secondary."/>
+                        <Border Style="{StaticResource Card}" Padding="0">
+                            <ListView x:Name="LstMonitors" Background="Transparent" BorderThickness="0">
+                                <ListView.View>
+                                    <GridView>
+                                        <GridViewColumn Header="Display" Width="200" DisplayMemberBinding="{Binding DeviceName}"/>
+                                        <GridViewColumn Header="Path" Width="100" DisplayMemberBinding="{Binding Path}"/>
+                                        <GridViewColumn Header="Brightness offset" Width="140" DisplayMemberBinding="{Binding BrightnessOffset}"/>
+                                        <GridViewColumn Header="Warmth offset (K)" Width="140" DisplayMemberBinding="{Binding WarmthOffset}"/>
+                                    </GridView>
+                                </ListView.View>
+                            </ListView>
+                        </Border>
+                        <TextBlock Style="{StaticResource CardCaption}" Text="ADJUST SELECTED MONITOR"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Brightness offset"/>
+                                    <Slider Grid.Column="1" x:Name="SldMonBrOffset" Style="{StaticResource AppleSlider}"
+                                            Minimum="-50" Maximum="50" TickFrequency="5"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonBr"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmth offset (K)"/>
+                                    <Slider Grid.Column="1" x:Name="SldMonWrOffset" Style="{StaticResource AppleSlider}"
+                                            Minimum="-2000" Maximum="0" TickFrequency="100"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonWr"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- EXCLUSIONS -->
+                    <StackPanel x:Name="PageExclusions" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Exclusions"/>
+                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
+                                   Text="When any of these apps is focused, Underlit suspends its dimming. Enter process names WITHOUT the .exe — one per line."/>
+                        <Border Style="{StaticResource Card}" Padding="4">
+                            <TextBox x:Name="TxtExclusions"
+                                     Style="{StaticResource AppleTextBox}"
+                                     MinHeight="240"
+                                     HorizontalAlignment="Stretch"
+                                     Margin="0"
+                                     FontFamily="Cascadia Mono, Consolas"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     TextWrapping="NoWrap"/>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

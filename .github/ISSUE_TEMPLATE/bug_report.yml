@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Underlit isn't working the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report! Please fill in what you can.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did Underlit do, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Underlit
+        2. Press Ctrl+Alt+Down until the screen is dim
+        3. Observe …
+
+  - type: input
+    id: winver
+    attributes:
+      label: Windows version
+      placeholder: e.g. Windows 11 23H2
+    validations:
+      required: true
+
+  - type: input
+    id: appver
+    attributes:
+      label: Underlit version
+      placeholder: e.g. v0.1.2 (see the release you installed)
+    validations:
+      required: true
+
+  - type: input
+    id: displays
+    attributes:
+      label: Display setup
+      placeholder: e.g. 1 laptop screen, or laptop + external 4K
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log snippet
+      description: |
+        Open `%LOCALAPPDATA%\Underlit\underlit.log` and paste any `ERROR` or `WARN` lines from the time the bug happened.
+      render: shell

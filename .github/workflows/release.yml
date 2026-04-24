@@ -1,0 +1,61 @@
+name: Build & release
+
+# Fires whenever a tag shaped like "v1.2.3" is pushed (or created via the
+# GitHub web UI's "Draft a new release" button). Builds the app, compiles the
+# Inno Setup installer, and attaches the installer to the GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed so the workflow can upload the installer to the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Extract version number from tag
+        id: version
+        shell: pwsh
+        run: |
+          # ref_name is e.g. "v0.1.3" — strip the leading "v" to get "0.1.3".
+          $v = "${{ github.ref_name }}" -replace '^v', ''
+          "value=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8
+
+      - name: Publish self-contained single-file build
+        shell: pwsh
+        run: |
+          dotnet publish src/Underlit/Underlit.csproj `
+            -c Release -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:Version=${{ steps.version.outputs.value }} `
+            -o publish
+
+      - name: Install Inno Setup via Chocolatey
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=${{ steps.version.outputs.value }}" `
+            installer/Underlit.iss
+
+      - name: Create GitHub Release and attach installer
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/Output/*.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true

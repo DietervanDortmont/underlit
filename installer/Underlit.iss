@@ -42,7 +42,10 @@ Source: "..\publish\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+; {autodesktop} = user's desktop on per-user installs, all-users desktop on admin installs.
+; Using {commondesktop} here caused "Access is denied" (0x80070005) on per-user installs
+; because writing to C:\Users\Public\Desktop needs admin.
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Underlit"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startwithwindows

@@ -27,14 +27,17 @@ public sealed class HotkeyManager : IDisposable
         _source.AddHook(WndProc);
     }
 
-    public bool Register(string name, Hotkey hk)
+    /// <param name="allowRepeat">
+    /// If true, holding the hotkey down will fire WM_HOTKEY repeatedly (at the system
+    /// key-repeat rate). Good for brightness/warmth stepping. If false, only one fire
+    /// per press — correct for toggles (boost, pause) where a repeat would undo itself.
+    /// </param>
+    public bool Register(string name, Hotkey hk, bool allowRepeat = true)
     {
         Unregister(name);
         int id = _nextId++;
-        // NOTE: intentionally NOT setting MOD_NOREPEAT — when the user holds the
-        // brightness/warmth hotkey down, we want Windows to keep firing WM_HOTKEY
-        // at the system key-repeat rate so the level keeps stepping.
         uint mods = (uint)hk.Modifiers;
+        if (!allowRepeat) mods |= NativeMethods.MOD_NOREPEAT;
         if (!NativeMethods.RegisterHotKey(_source.Handle, id, mods, hk.VirtualKey))
         {
             Logger.Warn($"RegisterHotKey failed for {name} ({hk})");

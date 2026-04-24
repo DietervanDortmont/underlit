@@ -368,10 +368,7 @@
                             <StackPanel>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Warmth follows a schedule"/>
-                                        <TextBlock Style="{StaticResource RowHint}" Text="Only warmth — scheduled brightness jumps felt disorienting."/>
-                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmth follows a schedule"/>
                                     <CheckBox Grid.Column="1" x:Name="ChkScheduleEnabled" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
                             </StackPanel>

@@ -253,21 +253,23 @@ public sealed class UnderlitHost : IDisposable
     private void RegisterAllHotkeys()
     {
         if (_hotkeys == null) return;
-        TryRegister("brDown", _settings.HotkeyBrightnessDown);
-        TryRegister("brUp",   _settings.HotkeyBrightnessUp);
-        TryRegister("wrDown", _settings.HotkeyWarmthDown);
-        TryRegister("wrUp",   _settings.HotkeyWarmthUp);
-        TryRegister("boost",  _settings.HotkeyBoost);
-        TryRegister("toggle", _settings.HotkeyToggle);
+        // Stepping hotkeys should repeat while held — holding brightness-down keeps dimming.
+        TryRegister("brDown", _settings.HotkeyBrightnessDown, allowRepeat: true);
+        TryRegister("brUp",   _settings.HotkeyBrightnessUp,   allowRepeat: true);
+        TryRegister("wrDown", _settings.HotkeyWarmthDown,     allowRepeat: true);
+        TryRegister("wrUp",   _settings.HotkeyWarmthUp,       allowRepeat: true);
+        // Toggles must NOT repeat — a second fire within ~500 ms flips the state back, undoing the user's press.
+        TryRegister("boost",  _settings.HotkeyBoost,          allowRepeat: false);
+        TryRegister("toggle", _settings.HotkeyToggle,         allowRepeat: false);
     }
 
-    private void TryRegister(string name, string hkStr)
+    private void TryRegister(string name, string hkStr, bool allowRepeat)
     {
         if (_hotkeys == null) return;
         try
         {
             var hk = Hotkey.Parse(hkStr);
-            _hotkeys.Register(name, hk);
+            _hotkeys.Register(name, hk, allowRepeat);
         }
         catch (Exception ex)
         {

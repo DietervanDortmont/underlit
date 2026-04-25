@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
+using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color (WinForms is referenced)
 
 namespace Underlit.Sys;
 

@@ -1,32 +1,34 @@
 using System;
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media;              // TranslateTransform, StreamGeometry, SolidColorBrush
-using System.Windows.Media.Effects;       // DropShadowEffect, RenderingBias
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Underlit.Display;
-using Underlit.Settings;                   // TransparencyMode
+using Underlit.Settings;
 using Underlit.Sys;
-using Point = System.Windows.Point;       // disambiguate vs System.Drawing.Point
 using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color
 
 namespace Underlit.UI;
 
 /// <summary>
-/// Transient OSD matching Windows 11's brightness flyout in size/position/animation.
+/// OSD flyout for brightness / warmth. Modeled on the Windows 11 quick-change flyout.
 ///
-/// Differences from the native flyout worth naming:
-///   • The rounded corners are a COMPOUND BEZIER squircle (two cubics per corner,
-///     meeting at 45° with a shared tangent direction) — continuous curvature, iOS-ish.
-///   • The brightness bar is BIPOLAR. A tall mid-marker divides it. Right-of-center
-///     fills with the "positive" colour (Windows' native brightness range). Left-of-center
-///     fills with a distinct amber for Underlit's extended sub-zero range, so you can see
-///     at a glance whether you're in or past Windows' own range.
-///   • The warmth bar has a grey track; the filled portion is a gradient from the 1500 K
-///     colour up to the CURRENT Kelvin colour. So as you warm up/cool down, the colour
-///     AT the bar's leading edge matches the actual on-screen warmth.
-///   • The whole flyout repaints when Windows' dark/light theme toggles.
+/// Architecture (Win11 22H2+ path):
+///   • Window is exactly the visible flyout's footprint — no transparent margin
+///     around it — so the DWM acrylic backdrop fills only the menu's area.
+///   • AllowsTransparency is FALSE so the modern DWM backdrop API works.
+///   • Rounded corners + soft shadow are provided by DWM (DWMWA_WINDOW_CORNER_PREFERENCE
+///     and the natural DWM window shadow).
+///   • Slide animation moves Window.Top (entire window slides), not an internal transform —
+///     this lets DWM keep the backdrop sampling live as the window moves.
+///
+/// Older Windows fall back to legacy ACCENT_ENABLE_ACRYLICBLURBEHIND (cached blur).
+///
+/// Three backdrop styles (chosen via settings):
+///   • None         — opaque tinted background
+///   • Acrylic      — DWM transient acrylic (live blur)
+///   • LiquidGlass  — Acrylic + a top-edge specular highlight + lower tint alpha
 /// </summary>
 public partial class OsdWindow : Window
 {
@@ -40,66 +42,59 @@ public partial class OsdWindow : Window
     private const int ShowDurationMs = 1300;
     private const int EntryMs = 240;
     private const int ExitMs  = 180;
-    /// <summary>
-    /// DIPs the flyout slides on entry/exit. The visible Path sits at window-Y 63..107
-    /// (Flyout top at 20, +vertical centering 43 inside the 130-tall Flyout Grid).
-    /// With slide 96 the Path's bottom reaches window-Y 203 but the window ends at 180,
-    /// so ~23 DIPs of the flyout clip against the window edge — which visually reads
-    /// as "sliding behind the taskbar" (window bottom is pinned to the taskbar top).
-    /// </summary>
-    private const double SlideDistance = 96;
+    /// <summary>How many DIPs the WHOLE WINDOW slides on entry/exit.</summary>
+    private const double SlideDistance = 28;
+    /// <summary>Distance from taskbar top to flyout's bottom edge at rest.</summary>
+    private const double BottomMarginDip = 60;
 
-
-    // ---- Theme palettes (colors picked to match Windows 11's native flyout) ----
+    // ---- Theme palettes ----
     private sealed record Palette(
-        Color Background, Color Border,
+        Color Background,
+        Color BackgroundTransparent,
+        Color Border,
         Color Track,
         Color FillPositive, Color FillNegative,
         Color MidMarker, Color Icon,
-        Color WarmthStart, Color WarmthEnd,
-        double ShadowOpacity);
+        Color WarmthStart, Color WarmthEnd);
 
     private static readonly Palette Dark = new(
-        // Windows 11 dark flyout: ~#202020 with subtle translucency (Mica-like).
-        Background:   Color.FromArgb(0xF2, 0x20, 0x20, 0x20),
-        Border:       Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF),
-        Track:        Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF),
-        // Windows dark-mode accent uses the "Light 2" variant of the system accent —
-        // default is a cyan-blue ~#60CDFF. Looks brighter/cooler than light-mode accent.
-        FillPositive: Color.FromRgb(0x60, 0xCD, 0xFF),
-        // Warm amber for the sub-zero extended-dim range — distinct from the accent above.
-        FillNegative: Color.FromRgb(0xE5, 0xB6, 0x75),
-        MidMarker:    Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF),
-        Icon:         Color.FromRgb(0xFF, 0xFF, 0xFF),
-        WarmthStart:  Color.FromRgb(0xFF, 0x5A, 0x00),   // 1500 K
-        WarmthEnd:    Color.FromRgb(0xFF, 0xF9, 0xFB),   // 6500 K near-white
-        ShadowOpacity: 0.60
+        Background:            Color.FromArgb(0xF2, 0x20, 0x20, 0x20),  // Off when no backdrop
+        BackgroundTransparent: Color.FromArgb(0x66, 0x20, 0x20, 0x20),  // Acrylic — let blur through
+        Border:                Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF),
+        Track:                 Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF),
+        FillPositive:          Color.FromRgb(0x60, 0xCD, 0xFF),
+        FillNegative:          Color.FromRgb(0xE5, 0xB6, 0x75),
+        MidMarker:             Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF),
+        Icon:                  Color.FromRgb(0xFF, 0xFF, 0xFF),
+        WarmthStart:           Color.FromRgb(0xFF, 0x5A, 0x00),
+        WarmthEnd:             Color.FromRgb(0xFF, 0xF9, 0xFB)
     );
 
     private static readonly Palette Light = new(
-        // Windows 11 light flyout: ~#F3F3F3 off-white (Mica-like).
-        Background:   Color.FromArgb(0xF2, 0xF3, 0xF3, 0xF3),
-        Border:       Color.FromArgb(0x1F, 0x00, 0x00, 0x00),
-        Track:        Color.FromArgb(0x1A, 0x00, 0x00, 0x00),
-        // Windows light-mode accent for fills is the darker variant (~#005FB8 for default blue).
-        FillPositive: Color.FromRgb(0x00, 0x5F, 0xB8),
-        FillNegative: Color.FromRgb(0xB0, 0x6B, 0x17),
-        MidMarker:    Color.FromArgb(0x66, 0x00, 0x00, 0x00),
-        Icon:         Color.FromRgb(0x1F, 0x1F, 0x1F),
-        WarmthStart:  Color.FromRgb(0xFF, 0x5A, 0x00),
-        // Cool blue at the top of the spectrum so the gradient is visible on a light background.
-        WarmthEnd:    Color.FromRgb(0x6B, 0xB0, 0xE0),
-        ShadowOpacity: 0.30
+        Background:            Color.FromArgb(0xF2, 0xF3, 0xF3, 0xF3),
+        BackgroundTransparent: Color.FromArgb(0x66, 0xF3, 0xF3, 0xF3),
+        Border:                Color.FromArgb(0x1F, 0x00, 0x00, 0x00),
+        Track:                 Color.FromArgb(0x1A, 0x00, 0x00, 0x00),
+        FillPositive:          Color.FromRgb(0x00, 0x5F, 0xB8),
+        FillNegative:          Color.FromRgb(0xB0, 0x6B, 0x17),
+        MidMarker:             Color.FromArgb(0x66, 0x00, 0x00, 0x00),
+        Icon:                  Color.FromRgb(0x1F, 0x1F, 0x1F),
+        WarmthStart:           Color.FromRgb(0xFF, 0x5A, 0x00),
+        WarmthEnd:             Color.FromRgb(0x6B, 0xB0, 0xE0)
     );
 
     private Palette _palette = Dark;
-    private DropShadowEffect? _shadow;
 
-    // ---- Accent + acrylic state, set via UpdateVisualSettings ----
+    // ---- Visual settings (set by host) ----
     private bool _followWindowsAccent = true;
-    private Color? _customAccent;          // null => use Windows accent
-    private bool _useAcrylic = true;       // true => apply legacy acrylic blur to OSD
+    private Color? _customAccent;
+    private bool _useTransparency = true;
+    private BackdropStyle _backdrop = BackdropStyle.Acrylic;
 
+    // ---- Window position state ----
+    private double _restTop;  // computed by PositionAboveTaskbar — the rest Y for animation
+
+    // ---- Event subscriptions ----
     private readonly Action<bool> _themeHandler;
     private readonly Action<Color> _accentHandler;
     private readonly Action<bool> _transparencyHandler;
@@ -111,20 +106,19 @@ public partial class OsdWindow : Window
         Loaded += (_, _) =>
         {
             ApplyTheme(ThemeInfo.IsDarkMode() ? Dark : Light);
-            ApplyAcrylic();
+            ApplyBackdrop();
         };
 
         _themeHandler = isDark => Dispatcher.BeginInvoke(() =>
         {
             ApplyTheme(isDark ? Dark : Light);
-            ApplyAcrylic();
+            ApplyBackdrop();
         });
         _accentHandler = _ => Dispatcher.BeginInvoke(() =>
         {
-            // Only react if we're set to follow Windows.
             if (_followWindowsAccent) ApplyTheme(_palette);
         });
-        _transparencyHandler = _ => Dispatcher.BeginInvoke(ApplyAcrylic);
+        _transparencyHandler = _ => Dispatcher.BeginInvoke(ApplyBackdrop);
 
         ThemeInfo.ThemeChanged += _themeHandler;
         AccentColorReader.AccentChanged += _accentHandler;
@@ -134,38 +128,35 @@ public partial class OsdWindow : Window
             ThemeInfo.ThemeChanged -= _themeHandler;
             AccentColorReader.AccentChanged -= _accentHandler;
             TransparencyPreference.Changed -= _transparencyHandler;
-            CompositionTarget.Rendering -= OnRenderTickForRegion;
         };
     }
 
-    /// <summary>
-    /// Called by the host whenever visual settings change (accent override, transparency mode).
-    /// </summary>
-    public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent, TransparencyMode mode)
+    /// <summary>Called by the host whenever visual settings change.</summary>
+    public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
+                                     TransparencyMode transparencyMode, BackdropStyle backdrop)
     {
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
 
-        _useAcrylic = mode switch
+        _useTransparency = transparencyMode switch
         {
             TransparencyMode.On  => true,
             TransparencyMode.Off => false,
             _                    => TransparencyPreference.IsEnabled(),
         };
 
+        _backdrop = backdrop;
+
         if (IsLoaded)
         {
             ApplyTheme(_palette);
-            ApplyAcrylic();
+            ApplyBackdrop();
         }
     }
 
-    /// <summary>The accent color to draw the brightness bar's positive fill in.</summary>
     private Color CurrentAccent()
     {
         Color baseAccent = _customAccent ?? AccentColorReader.GetAccentColor();
-        // In dark mode, lighten the accent slightly toward white (matches how Windows
-        // shows the "Light 2" accent variant in dark surfaces). In light mode, leave it.
         if (_palette == Dark) return Lerp(baseAccent, Color.FromRgb(255, 255, 255), 0.30);
         return baseAccent;
     }
@@ -196,8 +187,10 @@ public partial class OsdWindow : Window
         double waWidthDip  = primary.WorkingArea.Width  / scale;
         double waHeightDip = primary.WorkingArea.Height / scale;
 
-        Left = waLeftDip + (waWidthDip  - Width)  / 2;
-        Top  = waTopDip  +  waHeightDip - Height;
+        // Centered horizontally; resting position has flyout's bottom BottomMarginDip
+        // above the taskbar.
+        Left = waLeftDip + (waWidthDip - Width) / 2;
+        _restTop = waTopDip + waHeightDip - Height - BottomMarginDip;
     }
 
     // ---- Public API ----
@@ -205,7 +198,7 @@ public partial class OsdWindow : Window
     public void ShowBrightness(double levelSigned)
     {
         SetMode(Mode.Brightness);
-        IconText.Text = "\uE706"; // sun
+        IconText.Text = "\uE706";
         UpdateBrightnessBar(levelSigned);
         Flash();
     }
@@ -213,7 +206,6 @@ public partial class OsdWindow : Window
     public void ShowWarmth(int kelvin)
     {
         SetMode(Mode.Warmth);
-        // Candle icon replaces the Segoe glyph.
         UpdateWarmthBar(kelvin);
         Flash();
     }
@@ -221,12 +213,10 @@ public partial class OsdWindow : Window
     public void ShowPaused(bool paused)
     {
         SetMode(Mode.Brightness);
-        IconText.Text = paused ? "\uE769" : "\uE768"; // pause / play
+        IconText.Text = paused ? "\uE769" : "\uE768";
         UpdateBrightnessBar(paused ? 0 : 100);
         Flash();
     }
-
-    // ---- Mode switching ----
 
     private void SetMode(Mode m)
     {
@@ -275,27 +265,15 @@ public partial class OsdWindow : Window
 
         double f = Math.Clamp((kelvin - 1500) / 5000.0, 0, 1);
         WarmthFill.Width = f * total;
-
-        // Gradient start is fixed at 1500 K (palette.WarmthStart).
-        // Gradient end follows the current Kelvin — but clamped to the palette's theme-appropriate
-        // "cool" color so the top of the spectrum stays visible in light mode.
-        Color endColor = BlendKelvin(kelvin);
-        WarmthEndStop.Color = endColor;
+        WarmthEndStop.Color = BlendKelvin(kelvin);
     }
 
-    /// <summary>
-    /// Returns the visible colour to use at a given Kelvin in the current theme.
-    /// In dark mode we use the actual blackbody colour (near-white at 6500 K).
-    /// In light mode we blend toward the palette's cool end to keep contrast.
-    /// </summary>
     private Color BlendKelvin(int kelvin)
     {
         var (r, g, b) = GammaRampApplier.KelvinToRgbMultipliers(kelvin);
         Color actual = Color.FromRgb((byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
-
         if (_palette == Light)
         {
-            // Interpolate between WarmthStart at 1500 K and WarmthEnd at 6500 K.
             double f = Math.Clamp((kelvin - 1500) / 5000.0, 0, 1);
             return Lerp(_palette.WarmthStart, _palette.WarmthEnd, f);
         }
@@ -314,124 +292,50 @@ public partial class OsdWindow : Window
     {
         _palette = p;
 
-        // Background alpha: when acrylic is enabled the OS provides its own blurred backdrop,
-        // so we want our Border tint to be more transparent; when acrylic is off we use the
-        // palette's nominal nearly-opaque value.
-        Color bg = _useAcrylic
-            ? Color.FromArgb(0x80, p.Background.R, p.Background.G, p.Background.B)
-            : p.Background;
+        // Pick the right Background tint for the current backdrop style.
+        // With Acrylic / LiquidGlass we use a low-alpha tint so the live blur shows.
+        // With None we use the nominal opaque colour.
+        bool transparentBg = _useTransparency && _backdrop != BackdropStyle.None;
+        Color bg = transparentBg ? p.BackgroundTransparent : p.Background;
+
+        // LiquidGlass uses an even more transparent base so the highlight reads.
+        if (transparentBg && _backdrop == BackdropStyle.LiquidGlass)
+        {
+            bg = Color.FromArgb(0x40, p.Background.R, p.Background.G, p.Background.B);
+        }
+
         BackgroundBorder.Background  = new SolidColorBrush(bg);
         BackgroundBorder.BorderBrush = new SolidColorBrush(p.Border);
         TrackLeft.Background   = new SolidColorBrush(p.Track);
         TrackRight.Background  = new SolidColorBrush(p.Track);
         FillLeft.Background    = new SolidColorBrush(p.FillNegative);
-        // Positive-fill uses the live accent (Windows' or user override).
         FillRight.Background   = new SolidColorBrush(CurrentAccent());
         MidMarker.Background   = new SolidColorBrush(p.MidMarker);
         IconText.Foreground    = new SolidColorBrush(p.Icon);
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
         WarmthTrack.Background = new SolidColorBrush(p.Track);
         WarmthStartStop.Color  = p.WarmthStart;
-        // WarmthEndStop.Color is set dynamically in UpdateWarmthBar.
 
-        // Drop shadow: soft long-blur, more opaque than before so it's clearly visible
-        // (Windows' native flyout shadow is fairly prominent). Theme-tuned opacity.
-        if (_shadow == null)
-        {
-            _shadow = new DropShadowEffect
-            {
-                BlurRadius = 36,
-                ShadowDepth = 5,
-                Direction = 270,
-                Color = Colors.Black,
-                RenderingBias = RenderingBias.Performance
-            };
-            BackgroundBorder.Effect = _shadow;
-        }
-        _shadow.Opacity = p.ShadowOpacity;
+        // Show/hide the LiquidGlass specular highlight.
+        GlassHighlight.Visibility = (transparentBg && _backdrop == BackdropStyle.LiquidGlass)
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    /// <summary>Apply or remove the Win32 acrylic backdrop based on _useAcrylic.</summary>
-    private void ApplyAcrylic()
+    /// <summary>Apply the OS-level backdrop based on current settings.</summary>
+    private void ApplyBackdrop()
     {
         if (Hwnd == IntPtr.Zero) return;
-        if (_useAcrylic)
-        {
-            // Tint matches the theme. Low alpha keeps the blur visible behind it.
-            Color tint = _palette == Dark
-                ? Color.FromRgb(0x20, 0x20, 0x20)
-                : Color.FromRgb(0xF3, 0xF3, 0xF3);
-            Acrylic.Enable(Hwnd, tint, 0x40);
 
-            // Clip the window region so acrylic only fills the flyout's footprint,
-            // not the whole 360×180 transparent canvas behind it. We use
-            // CompositionTarget.Rendering to keep the region in sync with the
-            // slide animation (Border moves; the region must follow it).
-            CompositionTarget.Rendering -= OnRenderTickForRegion;
-            CompositionTarget.Rendering += OnRenderTickForRegion;
-            UpdateWindowRegion();
+        bool wantBackdrop = _useTransparency && _backdrop != BackdropStyle.None;
+        if (wantBackdrop)
+        {
+            Acrylic.EnableLiveAcrylic(Hwnd, _palette == Dark);
         }
         else
         {
             Acrylic.Disable(Hwnd);
-            // Lift the region clip so the full window draws normally again.
-            CompositionTarget.Rendering -= OnRenderTickForRegion;
-            NativeMethods.SetWindowRgn(Hwnd, IntPtr.Zero, true);
-            _lastRegionTopPx = int.MinValue;
         }
     }
-
-    private int _lastRegionTopPx = int.MinValue;
-
-    /// <summary>
-    /// Updates the OS-level window region to a rounded rect that tightly hugs the
-    /// Border's CURRENT position (including the slide-transform), with shadow padding.
-    /// Called per frame during the slide animation; cheap because we early-out when
-    /// the position hasn't changed since the last call.
-    /// </summary>
-    private void UpdateWindowRegion()
-    {
-        if (Hwnd == IntPtr.Zero) return;
-
-        double translateY = SlideTransform.Y;
-
-        // Border layout in the window (DIPs):
-        //   Width 260, Height 44, centered horizontally in window (Width 360),
-        //   Margin from window top = 26.
-        const double WindowWidthDip = 360;
-        const double BorderWidthDip = 260;
-        const double BorderHeightDip = 44;
-        const double BorderTopMarginDip = 26;
-        const double ShadowMarginDip = 32;
-        const double ShadowDepthDip  = 6;
-        const double CornerRadiusDip = 16;
-
-        double borderLeft = (WindowWidthDip - BorderWidthDip) / 2.0;
-        double borderTop  = BorderTopMarginDip + translateY;
-
-        double left   = borderLeft - ShadowMarginDip;
-        double top    = borderTop  - ShadowMarginDip;
-        double right  = borderLeft + BorderWidthDip + ShadowMarginDip;
-        double bottom = borderTop  + BorderHeightDip + ShadowMarginDip + ShadowDepthDip;
-
-        // Convert to pixels. PerMonitorV2 means the window has its own DPI.
-        var dpi = VisualTreeHelper.GetDpi(this);
-        int leftPx   = (int)Math.Round(left * dpi.DpiScaleX);
-        int topPx    = (int)Math.Round(top  * dpi.DpiScaleY);
-        int rightPx  = (int)Math.Round(right  * dpi.DpiScaleX);
-        int bottomPx = (int)Math.Round(bottom * dpi.DpiScaleY);
-        int radiusPx = (int)Math.Round(CornerRadiusDip * dpi.DpiScaleX);
-
-        // Skip update if nothing meaningful changed since last frame.
-        if (Math.Abs(_lastRegionTopPx - topPx) < 1) return;
-        _lastRegionTopPx = topPx;
-
-        IntPtr rgn = NativeMethods.CreateRoundRectRgn(leftPx, topPx, rightPx, bottomPx, radiusPx, radiusPx);
-        // SetWindowRgn takes ownership of rgn — no DeleteObject call needed afterwards.
-        NativeMethods.SetWindowRgn(Hwnd, rgn, true);
-    }
-
-    private void OnRenderTickForRegion(object? sender, EventArgs e) => UpdateWindowRegion();
 
     // ---- Animation ----
 
@@ -440,22 +344,29 @@ public partial class OsdWindow : Window
         PositionAboveTaskbar();
         _hideTimer?.Stop();
 
-        if (!IsVisible) Show();
+        if (!IsVisible)
+        {
+            // Start position: a bit below rest, fully transparent.
+            Top = _restTop + SlideDistance;
+            Opacity = 0;
+            Show();
+        }
 
+        // Animate Window.Top (entire window slides) and Opacity in parallel.
+        var slideIn = new DoubleAnimation
+        {
+            To = _restTop,
+            Duration = TimeSpan.FromMilliseconds(EntryMs),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
         var fadeIn = new DoubleAnimation
         {
             To = 1.0,
             Duration = TimeSpan.FromMilliseconds(EntryMs),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
-        var slideIn = new DoubleAnimation
-        {
-            To = 0,
-            Duration = TimeSpan.FromMilliseconds(EntryMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
+        BeginAnimation(TopProperty, slideIn);
         BeginAnimation(OpacityProperty, fadeIn);
-        SlideTransform.BeginAnimation(TranslateTransform.YProperty, slideIn);
 
         _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ShowDurationMs) };
         _hideTimer.Tick += (_, _) =>
@@ -468,15 +379,15 @@ public partial class OsdWindow : Window
 
     private void StartExitAnimation()
     {
-        var fadeOut = new DoubleAnimation
+        var slideOut = new DoubleAnimation
         {
-            To = 0.0,
+            To = _restTop + SlideDistance,
             Duration = TimeSpan.FromMilliseconds(ExitMs),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
         };
-        var slideOut = new DoubleAnimation
+        var fadeOut = new DoubleAnimation
         {
-            To = SlideDistance,
+            To = 0.0,
             Duration = TimeSpan.FromMilliseconds(ExitMs),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
         };
@@ -484,7 +395,7 @@ public partial class OsdWindow : Window
         {
             if (Opacity <= 0.01) Hide();
         };
+        BeginAnimation(TopProperty, slideOut);
         BeginAnimation(OpacityProperty, fadeOut);
-        SlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);
     }
 }

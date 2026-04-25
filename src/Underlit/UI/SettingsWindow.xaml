@@ -340,6 +340,23 @@
                                         <ComboBoxItem Content="Off"/>
                                     </ComboBox>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Backdrop style"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="None = solid tint. Acrylic = live frosted blur. Liquid Glass adds an Apple-style highlight on top of acrylic."/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" x:Name="CboBackdrop"
+                                              Margin="0,0,14,0" MinWidth="120">
+                                        <ComboBoxItem Content="None"/>
+                                        <ComboBoxItem Content="Acrylic"/>
+                                        <ComboBoxItem Content="Liquid Glass"/>
+                                    </ComboBox>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

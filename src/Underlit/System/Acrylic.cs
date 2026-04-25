@@ -6,45 +6,107 @@ using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Colo
 namespace Underlit.Sys;
 
 /// <summary>
-/// Applies a Win32 acrylic blur backdrop to a window via the undocumented
-/// <c>SetWindowCompositionAttribute</c> API.
+/// Backdrop helpers for the OSD window.
 ///
-/// We use the legacy path rather than the modern <c>DwmSetWindowAttribute</c>
-/// (DWMWA_SYSTEMBACKDROP_TYPE) because it works alongside <c>AllowsTransparency=True</c>
-/// — required for our non-rectangular OSD shape — and is supported on Win10 1803+
-/// as well as all of Win11.
+/// Two paths, picked at runtime depending on Windows version:
 ///
-/// The "tint" you pass in is a semi-transparent color blended over the blurred backdrop.
-/// Our OSD's existing rounded Border already contributes a tint; the acrylic API's tint
-/// can be a near-zero alpha so we don't double-tint.
+///   1. Modern DWM API — Windows 11 22H2 build 22621+:
+///        DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW)
+///      gives a TRUE live-updating acrylic backdrop (the same one the Quick Settings
+///      flyout uses). Pairs with DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND for
+///      proper anti-aliased rounded corners and an automatic DWM-provided shadow.
+///      Requires the window to NOT have WS_EX_LAYERED (i.e. AllowsTransparency=False).
+///
+///   2. Legacy fallback — Windows 10 / pre-22H2 Windows 11:
+///        SetWindowCompositionAttribute(WCA_ACCENT_POLICY, ACCENT_ENABLE_ACRYLICBLURBEHIND)
+///      gives a frosted blur but the backdrop is captured at composite time and does
+///      NOT update live as content moves behind the window. Best we can do without
+///      the modern API.
 /// </summary>
 public static class Acrylic
 {
-    public static void Enable(IntPtr hwnd, Color tint, byte tintOpacity = 0x40)
-    {
-        ApplyAccentPolicy(hwnd, AccentState.AcrylicBlurBehind, tint, tintOpacity);
-    }
+    public static bool IsModernSupported =>
+        Environment.OSVersion.Version.Major >= 10
+        && Environment.OSVersion.Version.Build >= 22621;
 
-    public static void EnablePlainBlur(IntPtr hwnd)
+    /// <summary>
+    /// Enable a live-updating acrylic backdrop. Returns true if the modern path
+    /// was used; false if the call fell back to legacy or did nothing.
+    /// </summary>
+    public static bool EnableLiveAcrylic(IntPtr hwnd, bool darkMode)
     {
-        // For older Windows that doesn't support acrylic, fall back to plain blur.
-        ApplyAccentPolicy(hwnd, AccentState.BlurBehind, Color.FromRgb(0, 0, 0), 0);
+        if (IsModernSupported)
+        {
+            // Honor the system's current dark/light setting on the window borders.
+            int useDark = darkMode ? 1 : 0;
+            DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
+
+            // Round corners — DWM does this with proper anti-aliasing, no manual region.
+            int corner = (int)DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND;
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+
+            // Acrylic transient backdrop. Updates live as desktop content changes.
+            int backdrop = (int)DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW;
+            int hr = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            return hr == 0;
+        }
+        else
+        {
+            // Fallback: legacy acrylic. Not live-updating but better than nothing.
+            ApplyAccentPolicy(hwnd, AccentState.AcrylicBlurBehind, Color.FromRgb(0x20, 0x20, 0x20), 0x40);
+            return false;
+        }
     }
 
     public static void Disable(IntPtr hwnd)
     {
-        ApplyAccentPolicy(hwnd, AccentState.Disabled, Color.FromRgb(0, 0, 0), 0);
+        if (IsModernSupported)
+        {
+            int backdrop = (int)DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE;
+            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+            // Leave DWMWCP_ROUND in place — rounded corners are a feature regardless.
+        }
+        else
+        {
+            ApplyAccentPolicy(hwnd, AccentState.Disabled, Color.FromRgb(0, 0, 0), 0);
+        }
     }
 
-    // ---------------- internals ----------------
+    // ---------------- Modern DWM API ----------------
+
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE      = 20;
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE     = 33;
+    private const int DWMWA_SYSTEMBACKDROP_TYPE          = 38;
+
+    private enum DWM_WINDOW_CORNER_PREFERENCE
+    {
+        DWMWCP_DEFAULT    = 0,
+        DWMWCP_DONOTROUND = 1,
+        DWMWCP_ROUND      = 2,
+        DWMWCP_ROUNDSMALL = 3,
+    }
+
+    private enum DWM_SYSTEMBACKDROP_TYPE
+    {
+        DWMSBT_AUTO              = 0,
+        DWMSBT_NONE              = 1,
+        DWMSBT_MAINWINDOW        = 2,  // Mica
+        DWMSBT_TRANSIENTWINDOW   = 3,  // Acrylic — what we want for an OSD flyout
+        DWMSBT_TABBEDWINDOW      = 4,  // Tabbed Mica
+    }
+
+    [DllImport("dwmapi.dll", SetLastError = false, PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    // ---------------- Legacy fallback ----------------
 
     private enum AccentState : int
     {
-        Disabled                = 0,
-        EnableGradient          = 1,
+        Disabled                  = 0,
+        EnableGradient            = 1,
         EnableTransparentGradient = 2,
-        BlurBehind              = 3,
-        AcrylicBlurBehind       = 4,
+        BlurBehind                = 3,
+        AcrylicBlurBehind         = 4,
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -71,8 +133,6 @@ public static class Acrylic
 
     private static void ApplyAccentPolicy(IntPtr hwnd, AccentState state, Color tint, byte tintOpacity)
     {
-        // AccentPolicy.GradientColor is ABGR (alpha high byte, blue, green, red).
-        // For BlurBehind (legacy Aero blur), the gradient color is ignored.
         uint abgr = ((uint)tintOpacity << 24)
                   | ((uint)tint.B      << 16)
                   | ((uint)tint.G      << 8)
@@ -81,7 +141,6 @@ public static class Acrylic
         var policy = new AccentPolicy
         {
             AccentState = state,
-            // Flag 2 = GradientColor is the tint to blend over the blur.
             AccentFlags = state == AccentState.AcrylicBlurBehind ? 2 : 0,
             GradientColor = abgr,
             AnimationId = 0

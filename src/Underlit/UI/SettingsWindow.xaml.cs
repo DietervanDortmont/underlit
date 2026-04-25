@@ -81,6 +81,7 @@ public partial class SettingsWindow : Window
 
         BtnPickAccent.Click += OnPickAccent;
         CboTransparency.SelectionChanged += (_, _) => PushSettings();
+        CboBackdrop.SelectionChanged += (_, _) => PushSettings();
     }
 
     private void OnPickAccent(object sender, RoutedEventArgs e)
@@ -247,6 +248,7 @@ public partial class SettingsWindow : Window
         ChkScheduleEnabled.IsChecked   = _snapshot.ScheduleEnabled;
         ChkFollowAccent.IsChecked      = _snapshot.FollowWindowsAccent;
         CboTransparency.SelectedIndex  = (int)_snapshot.TransparencyEffects;
+        CboBackdrop.SelectedIndex      = (int)_snapshot.OsdBackdrop;
         RefreshAccentSwatch();
 
         SldBrightnessStep.Value = _snapshot.BrightnessStep;
@@ -324,6 +326,7 @@ public partial class SettingsWindow : Window
         _snapshot.ScheduleEnabled           = ChkScheduleEnabled.IsChecked == true;
         _snapshot.FollowWindowsAccent       = ChkFollowAccent.IsChecked == true;
         _snapshot.TransparencyEffects       = (TransparencyMode)Math.Max(0, CboTransparency.SelectedIndex);
+        _snapshot.OsdBackdrop               = (BackdropStyle)Math.Max(0, CboBackdrop.SelectedIndex);
 
         _snapshot.BrightnessStep  = SldBrightnessStep.Value;
         _snapshot.WarmthStep      = (int)SldWarmthStep.Value;

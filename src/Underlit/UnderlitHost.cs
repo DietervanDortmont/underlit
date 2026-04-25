@@ -54,7 +54,8 @@ public sealed class UnderlitHost : IDisposable
         _osd.UpdateVisualSettings(
             _settings.FollowWindowsAccent,
             ParseColor(_settings.OsdAccentColor),
-            _settings.TransparencyEffects);
+            _settings.TransparencyEffects,
+            _settings.OsdBackdrop);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -264,7 +265,8 @@ public sealed class UnderlitHost : IDisposable
         _osd?.UpdateVisualSettings(
             next.FollowWindowsAccent,
             ParseColor(next.OsdAccentColor),
-            next.TransparencyEffects);
+            next.TransparencyEffects,
+            next.OsdBackdrop);
     }
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>

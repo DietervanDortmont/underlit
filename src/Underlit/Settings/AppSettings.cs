@@ -78,12 +78,16 @@ public sealed class AppSettings
     public string OsdAccentColor { get; set; } = "#FF005FB8";
 
     /// <summary>
-    /// Whether to apply Win32 acrylic blur to the OSD background.
+    /// Whether transparency effects are allowed at all.
     ///   Auto = follow Windows' "Transparency effects" toggle (default).
     ///   On   = always on regardless of Windows setting.
     ///   Off  = always off, opaque-tinted background only.
+    /// When Off, <see cref="OsdBackdrop"/> is ignored.
     /// </summary>
     public TransparencyMode TransparencyEffects { get; set; } = TransparencyMode.Auto;
+
+    /// <summary>The visual style of the OSD background when transparency is on.</summary>
+    public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Acrylic;
 
     // ---- Schedule (optional baseline curve) ----
 
@@ -170,4 +174,17 @@ public enum TransparencyMode
     Auto = 0,
     On   = 1,
     Off  = 2,
+}
+
+/// <summary>
+/// Visual style for the OSD's translucent background.
+///   None         — opaque tinted background, no blur.
+///   Acrylic      — Windows 11 frosted-glass acrylic (live blur on Win11 22H2+).
+///   LiquidGlass  — Acrylic plus a top-edge specular highlight overlay (Apple-ish look).
+/// </summary>
+public enum BackdropStyle
+{
+    None        = 0,
+    Acrylic     = 1,
+    LiquidGlass = 2,
 }

@@ -11,7 +11,7 @@
         IsHitTestVisible="False"
         ResizeMode="NoResize"
         Width="280"
-        Height="48"
+        Height="46"
         Opacity="0"
         WindowStartupLocation="Manual"
         Title="Underlit">
@@ -32,22 +32,49 @@
         <!-- Tint layer. Per-mode background colour. -->
         <Border x:Name="TintLayer" CornerRadius="8"/>
 
-        <!-- Liquid Glass: top-edge specular highlight (white grad on top ~45%). -->
+        <!-- ====== Liquid Glass overlay stack ======
+             We can't access the DWM-blurred backdrop pixels for a real refraction
+             shader, so we simulate the visual cues a glass surface produces:
+               • Top specular  — bright reflection at the top edge ("crown of glass")
+               • Side refraction gradient — light bends at the left edge, darkens at right
+               • Bottom sheen — faint catch-light at the bottom rim
+               • Inner glow — a soft white wash near the top suggesting volume
+               • Edge ring — a thin bright outline (the rim of refraction)
+             All hidden in Solid/Subtle modes. -->
+
+        <!-- Top specular: strong white highlight on top ~25%, fades to nothing -->
         <Border x:Name="GlassSpecular"
                 CornerRadius="8"
                 IsHitTestVisible="False"
                 Visibility="Collapsed">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Offset="0.00" Color="#66FFFFFF"/>
-                    <GradientStop Offset="0.18" Color="#28FFFFFF"/>
-                    <GradientStop Offset="0.50" Color="#00FFFFFF"/>
+                    <GradientStop Offset="0.00" Color="#80FFFFFF"/>
+                    <GradientStop Offset="0.06" Color="#50FFFFFF"/>
+                    <GradientStop Offset="0.18" Color="#1AFFFFFF"/>
+                    <GradientStop Offset="0.40" Color="#00FFFFFF"/>
                     <GradientStop Offset="1.00" Color="#00FFFFFF"/>
                 </LinearGradientBrush>
             </Border.Background>
         </Border>
 
-        <!-- Liquid Glass: bottom-edge sheen (faint white near bottom for "lens" depth). -->
+        <!-- Side refraction: slight brightening on the left edge, very subtle dark on the right -->
+        <Border x:Name="GlassSideRefraction"
+                CornerRadius="8"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                    <GradientStop Offset="0.00" Color="#28FFFFFF"/>
+                    <GradientStop Offset="0.04" Color="#10FFFFFF"/>
+                    <GradientStop Offset="0.50" Color="#00FFFFFF"/>
+                    <GradientStop Offset="0.96" Color="#00000000"/>
+                    <GradientStop Offset="1.00" Color="#15000000"/>
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <!-- Bottom sheen: subtle catch-light at the very bottom edge -->
         <Border x:Name="GlassBottomSheen"
                 CornerRadius="8"
                 IsHitTestVisible="False"
@@ -55,13 +82,14 @@
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                     <GradientStop Offset="0.00" Color="#00FFFFFF"/>
-                    <GradientStop Offset="0.70" Color="#00FFFFFF"/>
-                    <GradientStop Offset="1.00" Color="#22FFFFFF"/>
+                    <GradientStop Offset="0.78" Color="#00FFFFFF"/>
+                    <GradientStop Offset="0.92" Color="#1AFFFFFF"/>
+                    <GradientStop Offset="1.00" Color="#33FFFFFF"/>
                 </LinearGradientBrush>
             </Border.Background>
         </Border>
 
-        <!-- Subtle 1px border ring (theme-coloured in code). -->
+        <!-- Edge ring (thicker / brighter for Glass) -->
         <Border x:Name="EdgeRing"
                 CornerRadius="8"
                 BorderBrush="#1FFFFFFF"

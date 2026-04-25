@@ -330,12 +330,23 @@ public partial class OsdWindow : Window
         };
         TintLayer.Background = new SolidColorBrush(tint);
 
-        // Edge ring colour (slightly stronger for Glass to give a thin "lens" outline).
-        EdgeRing.BorderBrush = new SolidColorBrush(p.Border);
+        // Edge ring: thin and theme-coloured in Solid/Subtle; thicker/brighter
+        // in Liquid Glass to give a defined "rim of light" like a real glass edge.
+        if (isGlass)
+        {
+            EdgeRing.BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF));
+            EdgeRing.BorderThickness = new Thickness(1);
+        }
+        else
+        {
+            EdgeRing.BorderBrush = new SolidColorBrush(p.Border);
+            EdgeRing.BorderThickness = new Thickness(1);
+        }
 
         // Glass overlays show only in LiquidGlass mode.
-        GlassSpecular.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
-        GlassBottomSheen.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        GlassSpecular.Visibility       = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        GlassSideRefraction.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        GlassBottomSheen.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
 
         // Bar elements
         TrackLeft.Background   = new SolidColorBrush(p.Track);

@@ -134,6 +134,7 @@ public partial class OsdWindow : Window
             ThemeInfo.ThemeChanged -= _themeHandler;
             AccentColorReader.AccentChanged -= _accentHandler;
             TransparencyPreference.Changed -= _transparencyHandler;
+            CompositionTarget.Rendering -= OnRenderTickForRegion;
         };
     }
 
@@ -361,12 +362,76 @@ public partial class OsdWindow : Window
                 ? Color.FromRgb(0x20, 0x20, 0x20)
                 : Color.FromRgb(0xF3, 0xF3, 0xF3);
             Acrylic.Enable(Hwnd, tint, 0x40);
+
+            // Clip the window region so acrylic only fills the flyout's footprint,
+            // not the whole 360×180 transparent canvas behind it. We use
+            // CompositionTarget.Rendering to keep the region in sync with the
+            // slide animation (Border moves; the region must follow it).
+            CompositionTarget.Rendering -= OnRenderTickForRegion;
+            CompositionTarget.Rendering += OnRenderTickForRegion;
+            UpdateWindowRegion();
         }
         else
         {
             Acrylic.Disable(Hwnd);
+            // Lift the region clip so the full window draws normally again.
+            CompositionTarget.Rendering -= OnRenderTickForRegion;
+            NativeMethods.SetWindowRgn(Hwnd, IntPtr.Zero, true);
+            _lastRegionTopPx = int.MinValue;
         }
     }
+
+    private int _lastRegionTopPx = int.MinValue;
+
+    /// <summary>
+    /// Updates the OS-level window region to a rounded rect that tightly hugs the
+    /// Border's CURRENT position (including the slide-transform), with shadow padding.
+    /// Called per frame during the slide animation; cheap because we early-out when
+    /// the position hasn't changed since the last call.
+    /// </summary>
+    private void UpdateWindowRegion()
+    {
+        if (Hwnd == IntPtr.Zero) return;
+
+        double translateY = SlideTransform.Y;
+
+        // Border layout in the window (DIPs):
+        //   Width 260, Height 44, centered horizontally in window (Width 360),
+        //   Margin from window top = 26.
+        const double WindowWidthDip = 360;
+        const double BorderWidthDip = 260;
+        const double BorderHeightDip = 44;
+        const double BorderTopMarginDip = 26;
+        const double ShadowMarginDip = 32;
+        const double ShadowDepthDip  = 6;
+        const double CornerRadiusDip = 16;
+
+        double borderLeft = (WindowWidthDip - BorderWidthDip) / 2.0;
+        double borderTop  = BorderTopMarginDip + translateY;
+
+        double left   = borderLeft - ShadowMarginDip;
+        double top    = borderTop  - ShadowMarginDip;
+        double right  = borderLeft + BorderWidthDip + ShadowMarginDip;
+        double bottom = borderTop  + BorderHeightDip + ShadowMarginDip + ShadowDepthDip;
+
+        // Convert to pixels. PerMonitorV2 means the window has its own DPI.
+        var dpi = VisualTreeHelper.GetDpi(this);
+        int leftPx   = (int)Math.Round(left * dpi.DpiScaleX);
+        int topPx    = (int)Math.Round(top  * dpi.DpiScaleY);
+        int rightPx  = (int)Math.Round(right  * dpi.DpiScaleX);
+        int bottomPx = (int)Math.Round(bottom * dpi.DpiScaleY);
+        int radiusPx = (int)Math.Round(CornerRadiusDip * dpi.DpiScaleX);
+
+        // Skip update if nothing meaningful changed since last frame.
+        if (Math.Abs(_lastRegionTopPx - topPx) < 1) return;
+        _lastRegionTopPx = topPx;
+
+        IntPtr rgn = NativeMethods.CreateRoundRectRgn(leftPx, topPx, rightPx, bottomPx, radiusPx, radiusPx);
+        // SetWindowRgn takes ownership of rgn — no DeleteObject call needed afterwards.
+        NativeMethods.SetWindowRgn(Hwnd, rgn, true);
+    }
+
+    private void OnRenderTickForRegion(object? sender, EventArgs e) => UpdateWindowRegion();
 
     // ---- Animation ----
 

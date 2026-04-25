@@ -119,6 +119,16 @@ internal static class NativeMethods
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     public const int SW_SHOWNOACTIVATE = 4;
 
+    /// <summary>Restrict a window's drawn area to a region (in pixels). Window takes ownership of the region.</summary>
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int SetWindowRgn(IntPtr hWnd, IntPtr hRgn, bool bRedraw);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int cx, int cy);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    public static extern bool DeleteObject(IntPtr hObject);
+
     // ---------- Hotkeys ----------
 
     [DllImport("user32.dll", SetLastError = true)]

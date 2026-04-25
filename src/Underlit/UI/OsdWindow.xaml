@@ -29,6 +29,21 @@
 
     <Grid x:Name="WindowRoot">
 
+        <!-- ====== TRUE LIQUID GLASS layer ======
+             In LiquidGlass mode we BitBlt the screen pixels currently behind this window,
+             run a 3-pass box blur + edge displacement on them in C#, and paint the result
+             here as the actual visual backdrop. This is the only way to get real refraction
+             on Windows since DWM doesn't expose its own blurred backdrop pixels.
+             Hidden in Solid/Subtle modes (where DWM provides the backdrop directly). -->
+        <Border x:Name="GlassBackdrop"
+                CornerRadius="8"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border.Background>
+                <ImageBrush x:Name="GlassBackdropBrush" Stretch="Fill"/>
+            </Border.Background>
+        </Border>
+
         <!-- Tint layer. Per-mode background colour. -->
         <Border x:Name="TintLayer" CornerRadius="8"/>
 

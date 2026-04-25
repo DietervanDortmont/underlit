@@ -1,13 +1,16 @@
 using System;
+using System.Drawing;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Underlit.Display;
 using Underlit.Settings;
 using Underlit.Sys;
-using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color
+using Color  = System.Windows.Media.Color;     // disambiguate vs System.Drawing.Color
+using DBitmap = System.Drawing.Bitmap;          // disambiguate vs System.Windows.Media.Bitmap*
 
 namespace Underlit.UI;
 
@@ -17,9 +20,11 @@ namespace Underlit.UI;
 /// Backdrop modes (chosen via settings):
 ///   • Solid       — opaque tinted Border. Theme-aware (dark/light).
 ///   • Subtle      — DWM transient acrylic. Live blur on Win11 22H2+. Theme-aware tint.
-///   • LiquidGlass — DWM transient acrylic + multi-layer overlays (specular highlight,
-///                   bottom sheen, edge ring). Theme-NEUTRAL — same look in dark and light,
-///                   because real glass doesn't change colour with the room theme.
+///   • LiquidGlass — REAL glass. We BitBlt the screen pixels currently behind the OSD's
+///                   location, run a 3-pass box blur + edge refraction shader on them
+///                   in C#, and use the result as our actual backdrop. On top of that
+///                   we layer the existing specular / sheen / edge-ring overlays for
+///                   the "wet rim" highlight Apple's Liquid Glass shows. Theme-NEUTRAL.
 ///
 /// Architecture notes:
 ///   • The window is exactly the visible flyout's footprint (280×48). DWM applies the
@@ -348,6 +353,15 @@ public partial class OsdWindow : Window
         GlassSideRefraction.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
         GlassBottomSheen.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
 
+        // Captured-and-blurred backdrop is only used in Liquid Glass mode and only if
+        // we have a captured image (set just before each Show() — see CaptureGlassBackdrop).
+        // We keep it Collapsed until a capture has populated GlassBackdropBrush.ImageSource.
+        if (!isGlass)
+        {
+            GlassBackdrop.Visibility = Visibility.Collapsed;
+            GlassBackdropBrush.ImageSource = null;
+        }
+
         // Bar elements
         TrackLeft.Background   = new SolidColorBrush(p.Track);
         TrackRight.Background  = new SolidColorBrush(p.Track);
@@ -372,6 +386,52 @@ public partial class OsdWindow : Window
         Acrylic.Apply(Hwnd, kind, _darkMode);
     }
 
+    // ---- Liquid Glass backdrop capture ----
+
+    /// <summary>
+    /// Grab the screen pixels currently behind where this window will appear, run them
+    /// through GlassRenderer (blur + edge refraction + sheen), and assign the result
+    /// to GlassBackdropBrush so the rest of the OSD's layers composite over real,
+    /// locally-refracted glass instead of a flat tint.
+    ///
+    /// Must be called BEFORE Show() so the OSD window itself isn't the thing we capture.
+    /// </summary>
+    private void CaptureGlassBackdrop()
+    {
+        try
+        {
+            var src = PresentationSource.FromVisual(this);
+            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+            // Some launches will have no presentation source yet (window hasn't been
+            // shown once). Fall back to the primary screen's DPI in that case.
+            if (src == null)
+            {
+                using var g = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
+                scale = g.DpiX / 96.0;
+            }
+
+            int physX = (int)Math.Round(Left * scale);
+            int physY = (int)Math.Round(Top  * scale);
+            int physW = (int)Math.Round(Width  * scale);
+            int physH = (int)Math.Round(Height * scale);
+
+            using DBitmap captured = ScreenCapture.CaptureRegion(physX, physY, physW, physH);
+            BitmapSource glass = GlassRenderer.Render(captured);
+
+            GlassBackdropBrush.ImageSource = glass;
+            GlassBackdrop.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            // Capture is best-effort — if it fails, fall back to the existing layered
+            // glass overlays (specular + sheen + DWM acrylic underneath).
+            Logger.Warn("LiquidGlass capture failed", ex);
+            GlassBackdrop.Visibility = Visibility.Collapsed;
+            GlassBackdropBrush.ImageSource = null;
+        }
+    }
+
     // ---- Animation ----
 
     private void Flash()
@@ -381,6 +441,11 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
+            // Capture screen pixels behind us BEFORE Show() so the OSD window isn't in
+            // the way of the BitBlt. Only used in Liquid Glass mode; cheap no-op otherwise.
+            if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
+                CaptureGlassBackdrop();
+
             // Initial states for the in-animation
             Opacity = 0;
             BarSlideTransform.Y = SlideDistance;

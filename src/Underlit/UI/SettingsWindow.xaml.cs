@@ -10,6 +10,7 @@ using Underlit.Display;
 using Underlit.Settings;
 using Underlit.Sys;
 using Color = System.Windows.Media.Color;
+using ColorConverter = System.Windows.Media.ColorConverter;
 using TextBox = System.Windows.Controls.TextBox;
 
 namespace Underlit.UI;

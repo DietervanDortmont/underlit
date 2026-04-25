@@ -1,27 +1,27 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Media;
-using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color (WinForms is referenced)
+using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color
 
 namespace Underlit.Sys;
 
 /// <summary>
-/// Backdrop helpers for the OSD window.
+/// DWM backdrop helpers. Two paths:
 ///
-/// Two paths, picked at runtime depending on Windows version:
+///   1. Modern (Win11 22H2+, build 22621):
+///        DwmExtendFrameIntoClientArea(margins=-1,-1,-1,-1) opens the whole client
+///        area to DWM compositing. Then DwmSetWindowAttribute sets DWMWA_SYSTEMBACKDROP_TYPE
+///        to DWMSBT_TRANSIENTWINDOW (live acrylic) and DWMWA_WINDOW_CORNER_PREFERENCE
+///        to DWMWCP_ROUND for native rounded corners. DWM redraws the backdrop live as
+///        windows move beneath.
 ///
-///   1. Modern DWM API — Windows 11 22H2 build 22621+:
-///        DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_TRANSIENTWINDOW)
-///      gives a TRUE live-updating acrylic backdrop (the same one the Quick Settings
-///      flyout uses). Pairs with DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND for
-///      proper anti-aliased rounded corners and an automatic DWM-provided shadow.
-///      Requires the window to NOT have WS_EX_LAYERED (i.e. AllowsTransparency=False).
-///
-///   2. Legacy fallback — Windows 10 / pre-22H2 Windows 11:
+///   2. Legacy fallback (Win10 / pre-22H2 Win11):
 ///        SetWindowCompositionAttribute(WCA_ACCENT_POLICY, ACCENT_ENABLE_ACRYLICBLURBEHIND)
-///      gives a frosted blur but the backdrop is captured at composite time and does
-///      NOT update live as content moves behind the window. Best we can do without
-///      the modern API.
+///        gives a frosted blur but the backdrop is captured at composite time and does
+///        NOT update live as content moves behind the window.
+///
+/// Important caveat: the modern path requires the window to NOT be layered, i.e.
+/// AllowsTransparency=False in WPF.
 /// </summary>
 public static class Acrylic
 {
@@ -29,54 +29,65 @@ public static class Acrylic
         Environment.OSVersion.Version.Major >= 10
         && Environment.OSVersion.Version.Build >= 22621;
 
-    /// <summary>
-    /// Enable a live-updating acrylic backdrop. Returns true if the modern path
-    /// was used; false if the call fell back to legacy or did nothing.
-    /// </summary>
-    public static bool EnableLiveAcrylic(IntPtr hwnd, bool darkMode)
+    public enum Backdrop
     {
+        None              = 1,
+        Acrylic           = 3,   // DWMSBT_TRANSIENTWINDOW — frosted, live
+        Mica              = 2,   // DWMSBT_MAINWINDOW — solid Mica (less blur)
+    }
+
+    /// <summary>
+    /// Apply a backdrop. Returns true if the modern DWM path was used; false on legacy fallback or no-op.
+    /// </summary>
+    public static bool Apply(IntPtr hwnd, Backdrop kind, bool darkMode)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+
         if (IsModernSupported)
         {
-            // Honor the system's current dark/light setting on the window borders.
+            // Tell DWM to render its frame across the entire client area. Without this,
+            // the backdrop never shows on a non-layered WPF window.
+            var margins = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+            DwmExtendFrameIntoClientArea(hwnd, ref margins);
+
+            // Dark window borders match dark backdrop tint.
             int useDark = darkMode ? 1 : 0;
             DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
 
-            // Round corners — DWM does this with proper anti-aliasing, no manual region.
+            // Native anti-aliased rounded corners.
             int corner = (int)DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND;
             DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
 
-            // Acrylic transient backdrop. Updates live as desktop content changes.
-            int backdrop = (int)DWM_SYSTEMBACKDROP_TYPE.DWMSBT_TRANSIENTWINDOW;
+            // System backdrop type. DWMSBT_TRANSIENTWINDOW is the acrylic one Windows
+            // uses for transient flyouts; updates live as desktop content changes.
+            int backdrop = (int)kind;
             int hr = DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
             return hr == 0;
         }
+        else if (kind == Backdrop.None)
+        {
+            ApplyAccentPolicy(hwnd, AccentState.Disabled, Color.FromRgb(0, 0, 0), 0);
+            return false;
+        }
         else
         {
-            // Fallback: legacy acrylic. Not live-updating but better than nothing.
+            // Legacy: cached acrylic blur.
             ApplyAccentPolicy(hwnd, AccentState.AcrylicBlurBehind, Color.FromRgb(0x20, 0x20, 0x20), 0x40);
             return false;
         }
     }
 
-    public static void Disable(IntPtr hwnd)
-    {
-        if (IsModernSupported)
-        {
-            int backdrop = (int)DWM_SYSTEMBACKDROP_TYPE.DWMSBT_NONE;
-            DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
-            // Leave DWMWCP_ROUND in place — rounded corners are a feature regardless.
-        }
-        else
-        {
-            ApplyAccentPolicy(hwnd, AccentState.Disabled, Color.FromRgb(0, 0, 0), 0);
-        }
-    }
-
     // ---------------- Modern DWM API ----------------
 
-    private const int DWMWA_USE_IMMERSIVE_DARK_MODE      = 20;
-    private const int DWMWA_WINDOW_CORNER_PREFERENCE     = 33;
-    private const int DWMWA_SYSTEMBACKDROP_TYPE          = 38;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MARGINS
+    {
+        public int Left, Right, Top, Bottom;
+    }
+
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE  = 20;
+    private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    private const int DWMWA_SYSTEMBACKDROP_TYPE      = 38;
 
     private enum DWM_WINDOW_CORNER_PREFERENCE
     {
@@ -86,26 +97,17 @@ public static class Acrylic
         DWMWCP_ROUNDSMALL = 3,
     }
 
-    private enum DWM_SYSTEMBACKDROP_TYPE
-    {
-        DWMSBT_AUTO              = 0,
-        DWMSBT_NONE              = 1,
-        DWMSBT_MAINWINDOW        = 2,  // Mica
-        DWMSBT_TRANSIENTWINDOW   = 3,  // Acrylic — what we want for an OSD flyout
-        DWMSBT_TABBEDWINDOW      = 4,  // Tabbed Mica
-    }
-
     [DllImport("dwmapi.dll", SetLastError = false, PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    [DllImport("dwmapi.dll", SetLastError = false, PreserveSig = true)]
+    private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
 
     // ---------------- Legacy fallback ----------------
 
     private enum AccentState : int
     {
         Disabled                  = 0,
-        EnableGradient            = 1,
-        EnableTransparentGradient = 2,
-        BlurBehind                = 3,
         AcrylicBlurBehind         = 4,
     }
 
@@ -114,7 +116,7 @@ public static class Acrylic
     {
         public AccentState AccentState;
         public int AccentFlags;
-        public uint GradientColor;  // ABGR
+        public uint GradientColor;
         public int AnimationId;
     }
 

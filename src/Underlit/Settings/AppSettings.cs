@@ -86,8 +86,8 @@ public sealed class AppSettings
     /// </summary>
     public TransparencyMode TransparencyEffects { get; set; } = TransparencyMode.Auto;
 
-    /// <summary>The visual style of the OSD background when transparency is on.</summary>
-    public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Acrylic;
+    /// <summary>The visual style of the OSD background.</summary>
+    public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Subtle;
 
     // ---- Schedule (optional baseline curve) ----
 
@@ -177,14 +177,15 @@ public enum TransparencyMode
 }
 
 /// <summary>
-/// Visual style for the OSD's translucent background.
-///   None         — opaque tinted background, no blur.
-///   Acrylic      — Windows 11 frosted-glass acrylic (live blur on Win11 22H2+).
-///   LiquidGlass  — Acrylic plus a top-edge specular highlight overlay (Apple-ish look).
+/// Visual style for the OSD's background.
+///   Solid        — opaque tinted background, dark/light theme aware.
+///   Subtle       — Windows-style live frosted blur, dark/light tint, like Quick Settings.
+///   LiquidGlass  — Apple-style multi-layer glass: live blur + specular highlight + edge sheen,
+///                  theme-neutral (looks the same in dark and light).
 /// </summary>
 public enum BackdropStyle
 {
-    None        = 0,
-    Acrylic     = 1,
+    Solid       = 0,
+    Subtle      = 1,
     LiquidGlass = 2,
 }

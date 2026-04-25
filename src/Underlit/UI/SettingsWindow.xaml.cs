@@ -80,8 +80,38 @@ public partial class SettingsWindow : Window
         SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
 
         BtnPickAccent.Click += OnPickAccent;
-        CboTransparency.SelectionChanged += (_, _) => PushSettings();
-        CboBackdrop.SelectionChanged += (_, _) => PushSettings();
+        CboTransparency.SelectionChanged += (_, _) =>
+        {
+            PushSettings();
+            ApplyBackdropToWindow();
+            ApplyTheme(ThemeInfo.IsDarkMode());
+        };
+        CboBackdrop.SelectionChanged += (_, _) =>
+        {
+            PushSettings();
+            ApplyBackdropToWindow();
+            ApplyTheme(ThemeInfo.IsDarkMode());
+        };
+
+        // Apply DWM backdrop to this window so the settings UI matches the OSD's mode.
+        SourceInitialized += (_, _) => ApplyBackdropToWindow();
+    }
+
+    private void ApplyBackdropToWindow()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+
+        bool useTransparency = _snapshot.TransparencyEffects switch
+        {
+            TransparencyMode.On  => true,
+            TransparencyMode.Off => false,
+            _                    => TransparencyPreference.IsEnabled(),
+        };
+
+        bool useBackdrop = useTransparency && _snapshot.OsdBackdrop != BackdropStyle.Solid;
+        var kind = useBackdrop ? Acrylic.Backdrop.Acrylic : Acrylic.Backdrop.None;
+        Acrylic.Apply(hwnd, kind, ThemeInfo.IsDarkMode());
     }
 
     private void OnPickAccent(object sender, RoutedEventArgs e)
@@ -150,14 +180,41 @@ public partial class SettingsWindow : Window
 
     private void ApplyTheme(bool isDark)
     {
-        // Colors picked to match Windows 11's Settings/System look — subtle Mica-like
-        // backgrounds, accent blue, plenty of contrast for text.
-        var r = Resources;
-        if (isDark)
+        // The window's WindowBg/SidebarBg become semi-transparent when a DWM backdrop
+        // is in play, so the live blur shows through. Cards stay more opaque to keep
+        // text readable. In Solid mode, everything is opaque as before.
+        bool transparency = _snapshot.TransparencyEffects switch
         {
-            r["App.WindowBg"]      = Brush(0xFF202020);
-            r["App.SidebarBg"]     = Brush(0xFF1A1A1A);
-            r["App.CardBg"]        = Brush(0xFF2B2B2B);
+            TransparencyMode.On  => true,
+            TransparencyMode.Off => false,
+            _                    => TransparencyPreference.IsEnabled(),
+        };
+        bool useBackdrop = transparency && _snapshot.OsdBackdrop != BackdropStyle.Solid;
+        bool isGlass = useBackdrop && _snapshot.OsdBackdrop == BackdropStyle.LiquidGlass;
+
+        var r = Resources;
+        if (isGlass)
+        {
+            // Liquid Glass — theme-neutral, white-on-glass. Same in dark & light.
+            r["App.WindowBg"]      = Brush(0x00000000);  // fully transparent
+            r["App.SidebarBg"]     = Brush(0x14FFFFFF);  // faint white wash
+            r["App.CardBg"]        = Brush(0x14FFFFFF);
+            r["App.CardBorder"]    = Brush(0x33FFFFFF);
+            r["App.Divider"]       = Brush(0x14FFFFFF);
+            r["App.TextPrimary"]   = Brush(0xFFFFFFFF);
+            r["App.TextSecondary"] = Brush(0xCCFFFFFF);
+            r["App.HoverBg"]       = Brush(0x18FFFFFF);
+            r["App.SelectedBg"]    = Brush(0x28FFFFFF);
+            r["App.Accent"]        = Brush(0xFF60CDFF);
+            r["App.TrackBg"]       = Brush(0x33FFFFFF);
+            r["App.InputBg"]       = Brush(0x14FFFFFF);
+            r["App.ToggleTrackOff"]= Brush(0x33FFFFFF);
+        }
+        else if (isDark)
+        {
+            r["App.WindowBg"]      = Brush(useBackdrop ? 0x66202020u : 0xFF202020u);
+            r["App.SidebarBg"]     = Brush(useBackdrop ? 0x55181818u : 0xFF1A1A1Au);
+            r["App.CardBg"]        = Brush(useBackdrop ? 0xCC2B2B2Bu : 0xFF2B2B2Bu);
             r["App.CardBorder"]    = Brush(0x1FFFFFFF);
             r["App.Divider"]       = Brush(0x14FFFFFF);
             r["App.TextPrimary"]   = Brush(0xFFFFFFFF);
@@ -166,14 +223,14 @@ public partial class SettingsWindow : Window
             r["App.SelectedBg"]    = Brush(0x24FFFFFF);
             r["App.Accent"]        = Brush(0xFF60CDFF);
             r["App.TrackBg"]       = Brush(0x33FFFFFF);
-            r["App.InputBg"]       = Brush(0xFF1E1E1E);
-            r["App.ToggleTrackOff"] = Brush(0x33FFFFFF);
+            r["App.InputBg"]       = Brush(useBackdrop ? 0x661E1E1Eu : 0xFF1E1E1Eu);
+            r["App.ToggleTrackOff"]= Brush(0x33FFFFFF);
         }
         else
         {
-            r["App.WindowBg"]      = Brush(0xFFF3F3F3);
-            r["App.SidebarBg"]     = Brush(0xFFEDEDED);
-            r["App.CardBg"]        = Brush(0xFFFFFFFF);
+            r["App.WindowBg"]      = Brush(useBackdrop ? 0x66F3F3F3u : 0xFFF3F3F3u);
+            r["App.SidebarBg"]     = Brush(useBackdrop ? 0x55EDEDEDu : 0xFFEDEDEDu);
+            r["App.CardBg"]        = Brush(useBackdrop ? 0xCCFFFFFFu : 0xFFFFFFFFu);
             r["App.CardBorder"]    = Brush(0x14000000);
             r["App.Divider"]       = Brush(0x0D000000);
             r["App.TextPrimary"]   = Brush(0xFF1F1F1F);
@@ -182,8 +239,8 @@ public partial class SettingsWindow : Window
             r["App.SelectedBg"]    = Brush(0x1A000000);
             r["App.Accent"]        = Brush(0xFF005FB8);
             r["App.TrackBg"]       = Brush(0x22000000);
-            r["App.InputBg"]       = Brush(0xFFFFFFFF);
-            r["App.ToggleTrackOff"] = Brush(0x22000000);
+            r["App.InputBg"]       = Brush(useBackdrop ? 0x66FFFFFFu : 0xFFFFFFFFu);
+            r["App.ToggleTrackOff"]= Brush(0x22000000);
         }
     }
 

@@ -11,47 +11,64 @@
         IsHitTestVisible="False"
         ResizeMode="NoResize"
         Width="280"
-        Height="60"
+        Height="48"
         Opacity="0"
         WindowStartupLocation="Manual"
         Title="Underlit">
     <!--
-        Modern OSD layout (Win11 22H2+):
-          • Window is exactly the visible flyout's footprint (280x60), so the DWM
-            backdrop fills only the menu's area — no "huge frame" of blur around it.
-          • AllowsTransparency=False is required for DwmSetWindowAttribute backdrop
-            to apply. Rounded corners and the soft shadow are provided by DWM via
-            DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND (set in code).
-          • No internal slide transform — slide animation moves Window.Top.
-
-        On older Windows that don't support the modern API, code falls back to the
-        legacy ACCENT_ENABLE_ACRYLICBLURBEHIND with manual rounded corners.
+        Layout strategy:
+          • Window IS the visible flyout (280x48). DWM applies its backdrop, rounded
+            corners, and shadow to the whole window. No extra margin = no "huge frame".
+          • Background="Transparent" lets the DWM backdrop bleed through wherever no
+            opaque pixel is drawn.
+          • The "TintLayer" Border provides a per-mode tint over the backdrop.
+          • Liquid Glass adds two more visual layers on top of the tint: a top
+            specular gradient and a bottom edge sheen, both purely white at varying
+            alpha so they don't fight dark/light mode.
     -->
 
     <Grid x:Name="WindowRoot">
-        <!-- Tint layer. With Acrylic the DWM backdrop shows through the alpha;
-             with None we use an opaque colour. -->
-        <Border x:Name="BackgroundBorder"
-                CornerRadius="8"
-                Background="#80202020"
-                BorderBrush="#1FFFFFFF"
-                BorderThickness="1"/>
 
-        <!-- LiquidGlass mode shows this top-edge specular highlight overlay. -->
-        <Border x:Name="GlassHighlight"
+        <!-- Tint layer. Per-mode background colour. -->
+        <Border x:Name="TintLayer" CornerRadius="8"/>
+
+        <!-- Liquid Glass: top-edge specular highlight (white grad on top ~45%). -->
+        <Border x:Name="GlassSpecular"
                 CornerRadius="8"
                 IsHitTestVisible="False"
                 Visibility="Collapsed">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Offset="0.0"  Color="#80FFFFFF"/>
-                    <GradientStop Offset="0.45" Color="#10FFFFFF"/>
-                    <GradientStop Offset="0.55" Color="#00FFFFFF"/>
-                    <GradientStop Offset="1.0"  Color="#00FFFFFF"/>
+                    <GradientStop Offset="0.00" Color="#66FFFFFF"/>
+                    <GradientStop Offset="0.18" Color="#28FFFFFF"/>
+                    <GradientStop Offset="0.50" Color="#00FFFFFF"/>
+                    <GradientStop Offset="1.00" Color="#00FFFFFF"/>
                 </LinearGradientBrush>
             </Border.Background>
         </Border>
 
+        <!-- Liquid Glass: bottom-edge sheen (faint white near bottom for "lens" depth). -->
+        <Border x:Name="GlassBottomSheen"
+                CornerRadius="8"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Offset="0.00" Color="#00FFFFFF"/>
+                    <GradientStop Offset="0.70" Color="#00FFFFFF"/>
+                    <GradientStop Offset="1.00" Color="#22FFFFFF"/>
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
+
+        <!-- Subtle 1px border ring (theme-coloured in code). -->
+        <Border x:Name="EdgeRing"
+                CornerRadius="8"
+                BorderBrush="#1FFFFFFF"
+                BorderThickness="1"
+                IsHitTestVisible="False"/>
+
+        <!-- Content: icon + bar -->
         <Grid Margin="12,0,14,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="22"/>
@@ -89,7 +106,10 @@
             </Grid>
 
             <Grid Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center"
-                  Height="4" x:Name="BarRoot">
+                  Height="4" x:Name="BarRoot" RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <TranslateTransform x:Name="BarSlideTransform" Y="0"/>
+                </Grid.RenderTransform>
 
                 <Grid x:Name="BrightnessBar">
                     <Grid.ColumnDefinitions>

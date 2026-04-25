@@ -12,23 +12,24 @@ using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Colo
 namespace Underlit.UI;
 
 /// <summary>
-/// OSD flyout for brightness / warmth. Modeled on the Windows 11 quick-change flyout.
+/// OSD flyout for brightness / warmth.
 ///
-/// Architecture (Win11 22H2+ path):
-///   • Window is exactly the visible flyout's footprint — no transparent margin
-///     around it — so the DWM acrylic backdrop fills only the menu's area.
-///   • AllowsTransparency is FALSE so the modern DWM backdrop API works.
-///   • Rounded corners + soft shadow are provided by DWM (DWMWA_WINDOW_CORNER_PREFERENCE
-///     and the natural DWM window shadow).
-///   • Slide animation moves Window.Top (entire window slides), not an internal transform —
-///     this lets DWM keep the backdrop sampling live as the window moves.
+/// Backdrop modes (chosen via settings):
+///   • Solid       — opaque tinted Border. Theme-aware (dark/light).
+///   • Subtle      — DWM transient acrylic. Live blur on Win11 22H2+. Theme-aware tint.
+///   • LiquidGlass — DWM transient acrylic + multi-layer overlays (specular highlight,
+///                   bottom sheen, edge ring). Theme-NEUTRAL — same look in dark and light,
+///                   because real glass doesn't change colour with the room theme.
 ///
-/// Older Windows fall back to legacy ACCENT_ENABLE_ACRYLICBLURBEHIND (cached blur).
-///
-/// Three backdrop styles (chosen via settings):
-///   • None         — opaque tinted background
-///   • Acrylic      — DWM transient acrylic (live blur)
-///   • LiquidGlass  — Acrylic + a top-edge specular highlight + lower tint alpha
+/// Architecture notes:
+///   • The window is exactly the visible flyout's footprint (280×48). DWM applies the
+///     backdrop only to that area — no "huge frame" of blur around it.
+///   • AllowsTransparency=False so DWM compositing works; rounded corners come from
+///     DWMWA_WINDOW_CORNER_PREFERENCE; soft shadow from DWM itself.
+///   • Slide animation is internal (TranslateTransform on a content layer) — moving
+///     Window.Top would cause DWM to re-render the backdrop on every frame which the
+///     user reported as laggy. Instead we Show/Hide and fade Opacity with a tiny
+///     internal slide of the bar contents, while the window itself stays put.
 /// </summary>
 public partial class OsdWindow : Window
 {
@@ -40,61 +41,75 @@ public partial class OsdWindow : Window
 
     private DispatcherTimer? _hideTimer;
     private const int ShowDurationMs = 1300;
-    private const int EntryMs = 240;
-    private const int ExitMs  = 180;
-    /// <summary>How many DIPs the WHOLE WINDOW slides on entry/exit.</summary>
-    private const double SlideDistance = 28;
-    /// <summary>Distance from taskbar top to flyout's bottom edge at rest.</summary>
-    private const double BottomMarginDip = 60;
+    private const int EntryMs = 220;
+    private const int ExitMs  = 170;
+    private const double SlideDistance = 8;       // small internal bar slide on entry/exit
+    private const double BottomMarginDip = 60;    // distance from taskbar to flyout bottom
 
     // ---- Theme palettes ----
-    private sealed record Palette(
-        Color Background,
-        Color BackgroundTransparent,
+    private sealed record ThemeTints(
+        Color SolidBg,
+        Color AcrylicTint,
         Color Border,
         Color Track,
-        Color FillPositive, Color FillNegative,
-        Color MidMarker, Color Icon,
-        Color WarmthStart, Color WarmthEnd);
+        Color FillNegative,
+        Color MidMarker,
+        Color Icon,
+        Color WarmthStart,
+        Color WarmthEnd);
 
-    private static readonly Palette Dark = new(
-        Background:            Color.FromArgb(0xF2, 0x20, 0x20, 0x20),  // Off when no backdrop
-        BackgroundTransparent: Color.FromArgb(0x66, 0x20, 0x20, 0x20),  // Acrylic — let blur through
-        Border:                Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF),
-        Track:                 Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF),
-        FillPositive:          Color.FromRgb(0x60, 0xCD, 0xFF),
-        FillNegative:          Color.FromRgb(0xE5, 0xB6, 0x75),
-        MidMarker:             Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF),
-        Icon:                  Color.FromRgb(0xFF, 0xFF, 0xFF),
-        WarmthStart:           Color.FromRgb(0xFF, 0x5A, 0x00),
-        WarmthEnd:             Color.FromRgb(0xFF, 0xF9, 0xFB)
+    private static readonly ThemeTints Dark = new(
+        SolidBg:      Color.FromArgb(0xF5, 0x20, 0x20, 0x20),
+        AcrylicTint:  Color.FromArgb(0x66, 0x20, 0x20, 0x20),
+        Border:       Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF),
+        Track:        Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF),
+        FillNegative: Color.FromRgb(0xE5, 0xB6, 0x75),
+        MidMarker:    Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF),
+        Icon:         Color.FromRgb(0xFF, 0xFF, 0xFF),
+        WarmthStart:  Color.FromRgb(0xFF, 0x5A, 0x00),
+        WarmthEnd:    Color.FromRgb(0xFF, 0xF9, 0xFB)
     );
 
-    private static readonly Palette Light = new(
-        Background:            Color.FromArgb(0xF2, 0xF3, 0xF3, 0xF3),
-        BackgroundTransparent: Color.FromArgb(0x66, 0xF3, 0xF3, 0xF3),
-        Border:                Color.FromArgb(0x1F, 0x00, 0x00, 0x00),
-        Track:                 Color.FromArgb(0x1A, 0x00, 0x00, 0x00),
-        FillPositive:          Color.FromRgb(0x00, 0x5F, 0xB8),
-        FillNegative:          Color.FromRgb(0xB0, 0x6B, 0x17),
-        MidMarker:             Color.FromArgb(0x66, 0x00, 0x00, 0x00),
-        Icon:                  Color.FromRgb(0x1F, 0x1F, 0x1F),
-        WarmthStart:           Color.FromRgb(0xFF, 0x5A, 0x00),
-        WarmthEnd:             Color.FromRgb(0x6B, 0xB0, 0xE0)
+    private static readonly ThemeTints Light = new(
+        SolidBg:      Color.FromArgb(0xF5, 0xF3, 0xF3, 0xF3),
+        AcrylicTint:  Color.FromArgb(0x66, 0xF3, 0xF3, 0xF3),
+        Border:       Color.FromArgb(0x1F, 0x00, 0x00, 0x00),
+        Track:        Color.FromArgb(0x1A, 0x00, 0x00, 0x00),
+        FillNegative: Color.FromRgb(0xB0, 0x6B, 0x17),
+        MidMarker:    Color.FromArgb(0x66, 0x00, 0x00, 0x00),
+        Icon:         Color.FromRgb(0x1F, 0x1F, 0x1F),
+        WarmthStart:  Color.FromRgb(0xFF, 0x5A, 0x00),
+        WarmthEnd:    Color.FromRgb(0x6B, 0xB0, 0xE0)
     );
 
-    private Palette _palette = Dark;
+    /// <summary>
+    /// Liquid Glass values are theme-neutral. The tint is a faint white-ish wash so
+    /// the live blur dominates; text/icons stay light because that's how iOS glass
+    /// always looks (white symbols on a translucent pane).
+    /// </summary>
+    private static readonly ThemeTints Glass = new(
+        SolidBg:      Color.FromArgb(0xC0, 0x80, 0x80, 0x88),    // unused in Glass mode
+        AcrylicTint:  Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF),    // very faint white wash
+        Border:       Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF),
+        Track:        Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF),
+        FillNegative: Color.FromRgb(0xFF, 0xC9, 0x88),
+        MidMarker:    Color.FromArgb(0xB3, 0xFF, 0xFF, 0xFF),
+        Icon:         Color.FromRgb(0xFF, 0xFF, 0xFF),
+        WarmthStart:  Color.FromRgb(0xFF, 0x5A, 0x00),
+        WarmthEnd:    Color.FromRgb(0xFF, 0xF9, 0xFB)
+    );
+
+    private bool _darkMode = true;
+    private ThemeTints _palette = Dark;
 
     // ---- Visual settings (set by host) ----
     private bool _followWindowsAccent = true;
     private Color? _customAccent;
     private bool _useTransparency = true;
-    private BackdropStyle _backdrop = BackdropStyle.Acrylic;
+    private BackdropStyle _backdrop = BackdropStyle.Subtle;
 
-    // ---- Window position state ----
-    private double _restTop;  // computed by PositionAboveTaskbar — the rest Y for animation
+    private double _restTop;
 
-    // ---- Event subscriptions ----
     private readonly Action<bool> _themeHandler;
     private readonly Action<Color> _accentHandler;
     private readonly Action<bool> _transparencyHandler;
@@ -105,20 +120,20 @@ public partial class OsdWindow : Window
         SourceInitialized += OnSourceInitialized;
         Loaded += (_, _) =>
         {
-            ApplyTheme(ThemeInfo.IsDarkMode() ? Dark : Light);
-            ApplyBackdrop();
+            _darkMode = ThemeInfo.IsDarkMode();
+            ApplyAll();
         };
 
         _themeHandler = isDark => Dispatcher.BeginInvoke(() =>
         {
-            ApplyTheme(isDark ? Dark : Light);
-            ApplyBackdrop();
+            _darkMode = isDark;
+            ApplyAll();
         });
         _accentHandler = _ => Dispatcher.BeginInvoke(() =>
         {
-            if (_followWindowsAccent) ApplyTheme(_palette);
+            if (_followWindowsAccent) ApplyVisuals();
         });
-        _transparencyHandler = _ => Dispatcher.BeginInvoke(ApplyBackdrop);
+        _transparencyHandler = _ => Dispatcher.BeginInvoke(ApplyAll);
 
         ThemeInfo.ThemeChanged += _themeHandler;
         AccentColorReader.AccentChanged += _accentHandler;
@@ -131,7 +146,6 @@ public partial class OsdWindow : Window
         };
     }
 
-    /// <summary>Called by the host whenever visual settings change.</summary>
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
                                      TransparencyMode transparencyMode, BackdropStyle backdrop)
     {
@@ -147,18 +161,7 @@ public partial class OsdWindow : Window
 
         _backdrop = backdrop;
 
-        if (IsLoaded)
-        {
-            ApplyTheme(_palette);
-            ApplyBackdrop();
-        }
-    }
-
-    private Color CurrentAccent()
-    {
-        Color baseAccent = _customAccent ?? AccentColorReader.GetAccentColor();
-        if (_palette == Dark) return Lerp(baseAccent, Color.FromRgb(255, 255, 255), 0.30);
-        return baseAccent;
+        if (IsLoaded) ApplyAll();
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -166,10 +169,12 @@ public partial class OsdWindow : Window
         Hwnd = new WindowInteropHelper(this).Handle;
         Source = HwndSource.FromHwnd(Hwnd);
 
+        // Note: we deliberately do NOT set WS_EX_TRANSPARENT here. That style suppresses
+        // hit-testing AND can interfere with DWM compositing for the backdrop. We use
+        // IsHitTestVisible="False" on the WPF side to make the OSD click-through.
         int ex = NativeMethods.GetWindowLong(Hwnd, NativeMethods.GWL_EXSTYLE);
         ex |= NativeMethods.WS_EX_TOOLWINDOW
             | NativeMethods.WS_EX_NOACTIVATE
-            | NativeMethods.WS_EX_TRANSPARENT
             | NativeMethods.WS_EX_TOPMOST;
         NativeMethods.SetWindowLong(Hwnd, NativeMethods.GWL_EXSTYLE, ex);
     }
@@ -187,10 +192,9 @@ public partial class OsdWindow : Window
         double waWidthDip  = primary.WorkingArea.Width  / scale;
         double waHeightDip = primary.WorkingArea.Height / scale;
 
-        // Centered horizontally; resting position has flyout's bottom BottomMarginDip
-        // above the taskbar.
         Left = waLeftDip + (waWidthDip - Width) / 2;
         _restTop = waTopDip + waHeightDip - Height - BottomMarginDip;
+        Top = _restTop;
     }
 
     // ---- Public API ----
@@ -262,7 +266,6 @@ public partial class OsdWindow : Window
             Dispatcher.BeginInvoke(() => UpdateWarmthBar(kelvin), DispatcherPriority.Loaded);
             return;
         }
-
         double f = Math.Clamp((kelvin - 1500) / 5000.0, 0, 1);
         WarmthFill.Width = f * total;
         WarmthEndStop.Color = BlendKelvin(kelvin);
@@ -286,26 +289,55 @@ public partial class OsdWindow : Window
         return Color.FromArgb(L(a.A, b.A), L(a.R, b.R), L(a.G, b.G), L(a.B, b.B));
     }
 
-    // ---- Theme application ----
-
-    private void ApplyTheme(Palette p)
+    private Color CurrentAccent()
     {
-        _palette = p;
+        Color baseAccent = _customAccent ?? AccentColorReader.GetAccentColor();
+        // Lighten in dark mode (Windows' "Light 2" variant). In light, leave as-is.
+        if (_darkMode || _backdrop == BackdropStyle.LiquidGlass)
+            return Lerp(baseAccent, Color.FromRgb(255, 255, 255), 0.30);
+        return baseAccent;
+    }
 
-        // Pick the right Background tint for the current backdrop style.
-        // With Acrylic / LiquidGlass we use a low-alpha tint so the live blur shows.
-        // With None we use the nominal opaque colour.
-        bool transparentBg = _useTransparency && _backdrop != BackdropStyle.None;
-        Color bg = transparentBg ? p.BackgroundTransparent : p.Background;
+    // ---- Theme + backdrop application ----
 
-        // LiquidGlass uses an even more transparent base so the highlight reads.
-        if (transparentBg && _backdrop == BackdropStyle.LiquidGlass)
+    /// <summary>Re-apply EVERYTHING — palette, brushes, DWM backdrop. Idempotent.</summary>
+    private void ApplyAll()
+    {
+        _palette = _backdrop switch
         {
-            bg = Color.FromArgb(0x40, p.Background.R, p.Background.G, p.Background.B);
-        }
+            BackdropStyle.LiquidGlass => Glass,
+            _                          => _darkMode ? Dark : Light,
+        };
+        ApplyVisuals();
+        ApplyBackdrop();
+    }
 
-        BackgroundBorder.Background  = new SolidColorBrush(bg);
-        BackgroundBorder.BorderBrush = new SolidColorBrush(p.Border);
+    /// <summary>Updates brushes and visual layers. No DWM API calls.</summary>
+    private void ApplyVisuals()
+    {
+        var p = _palette;
+
+        bool useBlur = _useTransparency && _backdrop != BackdropStyle.Solid;
+        bool isGlass = _backdrop == BackdropStyle.LiquidGlass;
+
+        // Tint layer colour:
+        Color tint = _backdrop switch
+        {
+            BackdropStyle.Solid       => p.SolidBg,
+            BackdropStyle.Subtle      => useBlur ? p.AcrylicTint : p.SolidBg,
+            BackdropStyle.LiquidGlass => p.AcrylicTint,    // already glass-light
+            _                         => p.SolidBg,
+        };
+        TintLayer.Background = new SolidColorBrush(tint);
+
+        // Edge ring colour (slightly stronger for Glass to give a thin "lens" outline).
+        EdgeRing.BorderBrush = new SolidColorBrush(p.Border);
+
+        // Glass overlays show only in LiquidGlass mode.
+        GlassSpecular.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        GlassBottomSheen.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
+
+        // Bar elements
         TrackLeft.Background   = new SolidColorBrush(p.Track);
         TrackRight.Background  = new SolidColorBrush(p.Track);
         FillLeft.Background    = new SolidColorBrush(p.FillNegative);
@@ -315,26 +347,18 @@ public partial class OsdWindow : Window
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
         WarmthTrack.Background = new SolidColorBrush(p.Track);
         WarmthStartStop.Color  = p.WarmthStart;
-
-        // Show/hide the LiquidGlass specular highlight.
-        GlassHighlight.Visibility = (transparentBg && _backdrop == BackdropStyle.LiquidGlass)
-            ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    /// <summary>Apply the OS-level backdrop based on current settings.</summary>
+    /// <summary>Applies (or removes) the DWM backdrop.</summary>
     private void ApplyBackdrop()
     {
         if (Hwnd == IntPtr.Zero) return;
-
-        bool wantBackdrop = _useTransparency && _backdrop != BackdropStyle.None;
-        if (wantBackdrop)
-        {
-            Acrylic.EnableLiveAcrylic(Hwnd, _palette == Dark);
-        }
-        else
-        {
-            Acrylic.Disable(Hwnd);
-        }
+        // For Solid mode: no backdrop. For Subtle/LiquidGlass with transparency on: acrylic.
+        bool useBackdrop = _useTransparency && _backdrop != BackdropStyle.Solid;
+        var kind = useBackdrop ? Acrylic.Backdrop.Acrylic : Acrylic.Backdrop.None;
+        // For LiquidGlass, dark-immersive isn't really right (glass is theme-neutral),
+        // but DWM treats this attribute as just "dark borders" — pass _darkMode anyway.
+        Acrylic.Apply(Hwnd, kind, _darkMode);
     }
 
     // ---- Animation ----
@@ -346,27 +370,29 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
-            // Start position: a bit below rest, fully transparent.
-            Top = _restTop + SlideDistance;
+            // Initial states for the in-animation
             Opacity = 0;
+            BarSlideTransform.Y = SlideDistance;
             Show();
         }
 
-        // Animate Window.Top (entire window slides) and Opacity in parallel.
-        var slideIn = new DoubleAnimation
-        {
-            To = _restTop,
-            Duration = TimeSpan.FromMilliseconds(EntryMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
+        // Fade in. Slight bar slide for a touch of motion. Window itself stays put —
+        // moving Window.Top causes DWM to re-render acrylic each frame, which the user
+        // reported as laggy.
         var fadeIn = new DoubleAnimation
         {
             To = 1.0,
             Duration = TimeSpan.FromMilliseconds(EntryMs),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
-        BeginAnimation(TopProperty, slideIn);
+        var slideIn = new DoubleAnimation
+        {
+            To = 0,
+            Duration = TimeSpan.FromMilliseconds(EntryMs),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
         BeginAnimation(OpacityProperty, fadeIn);
+        BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideIn);
 
         _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ShowDurationMs) };
         _hideTimer.Tick += (_, _) =>
@@ -379,15 +405,15 @@ public partial class OsdWindow : Window
 
     private void StartExitAnimation()
     {
-        var slideOut = new DoubleAnimation
-        {
-            To = _restTop + SlideDistance,
-            Duration = TimeSpan.FromMilliseconds(ExitMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-        };
         var fadeOut = new DoubleAnimation
         {
             To = 0.0,
+            Duration = TimeSpan.FromMilliseconds(ExitMs),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+        };
+        var slideOut = new DoubleAnimation
+        {
+            To = SlideDistance,
             Duration = TimeSpan.FromMilliseconds(ExitMs),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
         };
@@ -395,7 +421,7 @@ public partial class OsdWindow : Window
         {
             if (Opacity <= 0.01) Hide();
         };
-        BeginAnimation(TopProperty, slideOut);
         BeginAnimation(OpacityProperty, fadeOut);
+        BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);
     }
 }

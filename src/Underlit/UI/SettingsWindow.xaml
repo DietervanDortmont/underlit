@@ -6,6 +6,7 @@
         MinWidth="680" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
+        Background="Transparent"
         FontFamily="Segoe UI Variable, Segoe UI"
         FontSize="13"
         UseLayoutRounding="True">
@@ -352,8 +353,8 @@
                                     </StackPanel>
                                     <ComboBox Grid.Column="1" x:Name="CboBackdrop"
                                               Margin="0,0,14,0" MinWidth="120">
-                                        <ComboBoxItem Content="None"/>
-                                        <ComboBoxItem Content="Acrylic"/>
+                                        <ComboBoxItem Content="Solid"/>
+                                        <ComboBoxItem Content="Subtle"/>
                                         <ComboBoxItem Content="Liquid Glass"/>
                                     </ComboBox>
                                 </Grid>

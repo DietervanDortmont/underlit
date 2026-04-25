@@ -297,6 +297,51 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+
+                        <TextBlock Style="{StaticResource CardCaption}" Text="APPEARANCE"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Follow Windows accent color"/>
+                                    <CheckBox Grid.Column="1" x:Name="ChkFollowAccent" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Custom accent color"/>
+                                    <Button Grid.Column="1" x:Name="BtnPickAccent" Margin="0,0,14,0" Padding="6"
+                                            Cursor="Hand" Background="Transparent" BorderThickness="0">
+                                        <Border x:Name="AccentSwatch"
+                                                Width="32" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                    </Button>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Transparency effects"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Acrylic blur behind the OSD. Auto follows your Windows transparency setting."/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" x:Name="CboTransparency"
+                                              Margin="0,0,14,0" MinWidth="100">
+                                        <ComboBoxItem Content="Auto"/>
+                                        <ComboBoxItem Content="On"/>
+                                        <ComboBoxItem Content="Off"/>
+                                    </ComboBox>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- HOTKEYS -->

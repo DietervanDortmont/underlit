@@ -59,10 +59,10 @@ public partial class SettingsWindow : Window
         UpdateAllValueChips();
 
         // Live-apply: push as you change, don't require save/close
-        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled })
+        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled, ChkFollowAccent })
         {
-            cb.Checked   += (_, _) => PushSettings();
-            cb.Unchecked += (_, _) => PushSettings();
+            cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
+            cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
         foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth })
         {
@@ -77,6 +77,62 @@ public partial class SettingsWindow : Window
         LstMonitors.SelectionChanged += OnMonitorSelected;
         SldMonBrOffset.ValueChanged += OnMonitorOffsetChanged;
         SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
+
+        BtnPickAccent.Click += OnPickAccent;
+        CboTransparency.SelectionChanged += (_, _) => PushSettings();
+    }
+
+    private void OnPickAccent(object sender, RoutedEventArgs e)
+    {
+        // System.Windows.Forms.ColorDialog gives us a familiar Windows colour picker
+        // without pulling in a heavyweight WPF dependency.
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+        };
+        // Pre-seed with the current custom accent.
+        if (TryParseHex(_snapshot.OsdAccentColor, out var current))
+        {
+            dlg.Color = System.Drawing.Color.FromArgb(current.A, current.R, current.G, current.B);
+        }
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            var c = dlg.Color;
+            _snapshot.OsdAccentColor = $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+            // If the user is picking a custom colour, switch off "Follow Windows".
+            ChkFollowAccent.IsChecked = false;
+            RefreshAccentSwatch();
+            PushSettings();
+        }
+    }
+
+    private void RefreshAccentSwatch()
+    {
+        Color color;
+        if (ChkFollowAccent.IsChecked == true)
+        {
+            color = AccentColorReader.GetAccentColor();
+        }
+        else if (TryParseHex(_snapshot.OsdAccentColor, out var custom))
+        {
+            color = custom;
+        }
+        else
+        {
+            color = AccentColorReader.GetAccentColor();
+        }
+        AccentSwatch.Background = new SolidColorBrush(color);
+        // Disabled visual cue when we're following Windows.
+        BtnPickAccent.Opacity = (ChkFollowAccent.IsChecked == true) ? 0.55 : 1.0;
+    }
+
+    private static bool TryParseHex(string? hex, out Color c)
+    {
+        c = default;
+        if (string.IsNullOrWhiteSpace(hex)) return false;
+        try { c = (Color)ColorConverter.ConvertFromString(hex); return true; }
+        catch { return false; }
     }
 
     // ---- Sidebar navigation ----
@@ -188,6 +244,9 @@ public partial class SettingsWindow : Window
         ChkDisableNightLight.IsChecked = _snapshot.DisableWindowsNightLight;
         ChkHookNativeKeys.IsChecked    = _snapshot.HookNativeBrightnessKeys;
         ChkScheduleEnabled.IsChecked   = _snapshot.ScheduleEnabled;
+        ChkFollowAccent.IsChecked      = _snapshot.FollowWindowsAccent;
+        CboTransparency.SelectedIndex  = (int)_snapshot.TransparencyEffects;
+        RefreshAccentSwatch();
 
         SldBrightnessStep.Value = _snapshot.BrightnessStep;
         SldWarmthStep.Value     = _snapshot.WarmthStep;
@@ -262,6 +321,8 @@ public partial class SettingsWindow : Window
         _snapshot.DisableWindowsNightLight  = ChkDisableNightLight.IsChecked == true;
         _snapshot.HookNativeBrightnessKeys  = ChkHookNativeKeys.IsChecked == true;
         _snapshot.ScheduleEnabled           = ChkScheduleEnabled.IsChecked == true;
+        _snapshot.FollowWindowsAccent       = ChkFollowAccent.IsChecked == true;
+        _snapshot.TransparencyEffects       = (TransparencyMode)Math.Max(0, CboTransparency.SelectedIndex);
 
         _snapshot.BrightnessStep  = SldBrightnessStep.Value;
         _snapshot.WarmthStep      = (int)SldWarmthStep.Value;

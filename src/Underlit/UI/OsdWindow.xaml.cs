@@ -6,6 +6,7 @@ using System.Windows.Media.Effects;       // DropShadowEffect, RenderingBias
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using Underlit.Display;
+using Underlit.Settings;                   // TransparencyMode
 using Underlit.Sys;
 using Point = System.Windows.Point;       // disambiguate vs System.Drawing.Point
 using Color = System.Windows.Media.Color; // disambiguate vs System.Drawing.Color
@@ -94,17 +95,78 @@ public partial class OsdWindow : Window
     private Palette _palette = Dark;
     private DropShadowEffect? _shadow;
 
+    // ---- Accent + acrylic state, set via UpdateVisualSettings ----
+    private bool _followWindowsAccent = true;
+    private Color? _customAccent;          // null => use Windows accent
+    private bool _useAcrylic = true;       // true => apply legacy acrylic blur to OSD
+
     private readonly Action<bool> _themeHandler;
+    private readonly Action<Color> _accentHandler;
+    private readonly Action<bool> _transparencyHandler;
 
     public OsdWindow()
     {
         InitializeComponent();
         SourceInitialized += OnSourceInitialized;
-        Loaded += (_, _) => ApplyTheme(ThemeInfo.IsDarkMode() ? Dark : Light);
+        Loaded += (_, _) =>
+        {
+            ApplyTheme(ThemeInfo.IsDarkMode() ? Dark : Light);
+            ApplyAcrylic();
+        };
 
-        _themeHandler = isDark => Dispatcher.BeginInvoke(() => ApplyTheme(isDark ? Dark : Light));
+        _themeHandler = isDark => Dispatcher.BeginInvoke(() =>
+        {
+            ApplyTheme(isDark ? Dark : Light);
+            ApplyAcrylic();
+        });
+        _accentHandler = _ => Dispatcher.BeginInvoke(() =>
+        {
+            // Only react if we're set to follow Windows.
+            if (_followWindowsAccent) ApplyTheme(_palette);
+        });
+        _transparencyHandler = _ => Dispatcher.BeginInvoke(ApplyAcrylic);
+
         ThemeInfo.ThemeChanged += _themeHandler;
-        Closed += (_, _) => ThemeInfo.ThemeChanged -= _themeHandler;
+        AccentColorReader.AccentChanged += _accentHandler;
+        TransparencyPreference.Changed += _transparencyHandler;
+        Closed += (_, _) =>
+        {
+            ThemeInfo.ThemeChanged -= _themeHandler;
+            AccentColorReader.AccentChanged -= _accentHandler;
+            TransparencyPreference.Changed -= _transparencyHandler;
+        };
+    }
+
+    /// <summary>
+    /// Called by the host whenever visual settings change (accent override, transparency mode).
+    /// </summary>
+    public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent, TransparencyMode mode)
+    {
+        _followWindowsAccent = followWindowsAccent;
+        _customAccent = followWindowsAccent ? null : customAccent;
+
+        _useAcrylic = mode switch
+        {
+            TransparencyMode.On  => true,
+            TransparencyMode.Off => false,
+            _                    => TransparencyPreference.IsEnabled(),
+        };
+
+        if (IsLoaded)
+        {
+            ApplyTheme(_palette);
+            ApplyAcrylic();
+        }
+    }
+
+    /// <summary>The accent color to draw the brightness bar's positive fill in.</summary>
+    private Color CurrentAccent()
+    {
+        Color baseAccent = _customAccent ?? AccentColorReader.GetAccentColor();
+        // In dark mode, lighten the accent slightly toward white (matches how Windows
+        // shows the "Light 2" accent variant in dark surfaces). In light mode, leave it.
+        if (_palette == Dark) return Lerp(baseAccent, Color.FromRgb(255, 255, 255), 0.30);
+        return baseAccent;
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -250,12 +312,20 @@ public partial class OsdWindow : Window
     private void ApplyTheme(Palette p)
     {
         _palette = p;
-        BackgroundBorder.Background  = new SolidColorBrush(p.Background);
+
+        // Background alpha: when acrylic is enabled the OS provides its own blurred backdrop,
+        // so we want our Border tint to be more transparent; when acrylic is off we use the
+        // palette's nominal nearly-opaque value.
+        Color bg = _useAcrylic
+            ? Color.FromArgb(0x80, p.Background.R, p.Background.G, p.Background.B)
+            : p.Background;
+        BackgroundBorder.Background  = new SolidColorBrush(bg);
         BackgroundBorder.BorderBrush = new SolidColorBrush(p.Border);
         TrackLeft.Background   = new SolidColorBrush(p.Track);
         TrackRight.Background  = new SolidColorBrush(p.Track);
         FillLeft.Background    = new SolidColorBrush(p.FillNegative);
-        FillRight.Background   = new SolidColorBrush(p.FillPositive);
+        // Positive-fill uses the live accent (Windows' or user override).
+        FillRight.Background   = new SolidColorBrush(CurrentAccent());
         MidMarker.Background   = new SolidColorBrush(p.MidMarker);
         IconText.Foreground    = new SolidColorBrush(p.Icon);
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
@@ -278,6 +348,24 @@ public partial class OsdWindow : Window
             BackgroundBorder.Effect = _shadow;
         }
         _shadow.Opacity = p.ShadowOpacity;
+    }
+
+    /// <summary>Apply or remove the Win32 acrylic backdrop based on _useAcrylic.</summary>
+    private void ApplyAcrylic()
+    {
+        if (Hwnd == IntPtr.Zero) return;
+        if (_useAcrylic)
+        {
+            // Tint matches the theme. Low alpha keeps the blur visible behind it.
+            Color tint = _palette == Dark
+                ? Color.FromRgb(0x20, 0x20, 0x20)
+                : Color.FromRgb(0xF3, 0xF3, 0xF3);
+            Acrylic.Enable(Hwnd, tint, 0x40);
+        }
+        else
+        {
+            Acrylic.Disable(Hwnd);
+        }
     }
 
     // ---- Animation ----

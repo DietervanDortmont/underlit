@@ -50,6 +50,11 @@ public sealed class UnderlitHost : IDisposable
         _osd = new OsdWindow();
         _osd.Show();   // needed so SourceInitialized fires
         _osd.Hide();
+        // Push initial visual settings (accent, transparency mode) down to the OSD.
+        _osd.UpdateVisualSettings(
+            _settings.FollowWindowsAccent,
+            ParseColor(_settings.OsdAccentColor),
+            _settings.TransparencyEffects);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -122,8 +127,15 @@ public sealed class UnderlitHost : IDisposable
         // Night Light
         if (_settings.DisableWindowsNightLight) NightLightControl.Disable();
 
-        // Auto-start
-        AutoStart.Set(_settings.StartWithWindows);
+        // Auto-start: the registry is the source of truth. If the installer wrote a Run
+        // entry but our freshly-defaulted settings.json said StartWithWindows=false, we'd
+        // otherwise delete the installer's entry on first launch. Sync the other way.
+        bool registryHasAutoStart = AutoStart.IsEnabled();
+        if (registryHasAutoStart != _settings.StartWithWindows)
+        {
+            _settings.StartWithWindows = registryHasAutoStart;
+            _settings.Save();
+        }
 
         // Listen for display changes (add/remove monitor, resolution change)
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
@@ -248,6 +260,19 @@ public sealed class UnderlitHost : IDisposable
         if (next.DisableWindowsNightLight) NightLightControl.Disable();
 
         AutoStart.Set(next.StartWithWindows);
+
+        _osd?.UpdateVisualSettings(
+            next.FollowWindowsAccent,
+            ParseColor(next.OsdAccentColor),
+            next.TransparencyEffects);
+    }
+
+    /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>
+    private static System.Windows.Media.Color? ParseColor(string? hex)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return null;
+        try { return (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex); }
+        catch { return null; }
     }
 
     private void RegisterAllHotkeys()

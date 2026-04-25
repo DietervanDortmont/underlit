@@ -65,6 +65,26 @@ public sealed class AppSettings
     /// </summary>
     public int ExternalSyncPollMs { get; set; } = 2000;
 
+    // ---- Visual: accent color + transparency ----
+
+    /// <summary>
+    /// If true, the OSD's positive-fill (and similar accent surfaces) use Windows'
+    /// current accent color, updating live as the user changes it. If false,
+    /// <see cref="OsdAccentColor"/> overrides.
+    /// </summary>
+    public bool FollowWindowsAccent { get; set; } = true;
+
+    /// <summary>Hex string like "#FF005FB8". Used only when <see cref="FollowWindowsAccent"/> is false.</summary>
+    public string OsdAccentColor { get; set; } = "#FF005FB8";
+
+    /// <summary>
+    /// Whether to apply Win32 acrylic blur to the OSD background.
+    ///   Auto = follow Windows' "Transparency effects" toggle (default).
+    ///   On   = always on regardless of Windows setting.
+    ///   Off  = always off, opaque-tinted background only.
+    /// </summary>
+    public TransparencyMode TransparencyEffects { get; set; } = TransparencyMode.Auto;
+
     // ---- Schedule (optional baseline curve) ----
 
     public bool ScheduleEnabled { get; set; } = false;
@@ -143,4 +163,11 @@ public sealed class PerMonitor
 public readonly record struct TimeOfDay(int Hour, int Minute)
 {
     public double AsHourFractional => Hour + Minute / 60.0;
+}
+
+public enum TransparencyMode
+{
+    Auto = 0,
+    On   = 1,
+    Off  = 2,
 }

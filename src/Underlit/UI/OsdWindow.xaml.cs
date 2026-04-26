@@ -46,7 +46,10 @@ public partial class OsdWindow : Window
     private const int EntryMs = 220;
     private const int ExitMs  = 170;
     private const double SlideDistance = 8;       // small internal bar slide on entry/exit
-    private const double BottomMarginDip = 60;    // distance from taskbar to flyout bottom
+    // Visual pill bottom should sit ~60dip above the working area's bottom. The window
+    // itself includes 10dip of shadow padding under the pill, so the window's OWN bottom
+    // is 50dip above the working area bottom.
+    private const double BottomMarginDip = 50;
 
     // ---- Theme palettes ----
     private sealed record ThemeTints(
@@ -383,16 +386,17 @@ public partial class OsdWindow : Window
         WarmthStartStop.Color  = p.WarmthStart;
     }
 
-    /// <summary>Applies (or removes) the DWM backdrop.</summary>
+    /// <summary>Applies (or removes) the DWM backdrop.
+    ///
+    /// Note: DWM acrylic and AllowsTransparency=true are mutually exclusive — DWM's
+    /// modern backdrop API requires a non-layered window. Since v0.3 the OSD is
+    /// AllowsTransparency=true (so the renderer can draw a true pill shape), we no
+    /// longer apply DWM acrylic at all. Subtle mode still renders via the TintLayer
+    /// (a translucent border), and LiquidGlass via the captured-image path.</summary>
     private void ApplyBackdrop()
     {
         if (Hwnd == IntPtr.Zero) return;
-        // For Solid mode: no backdrop. For Subtle/LiquidGlass with transparency on: acrylic.
-        bool useBackdrop = _useTransparency && _backdrop != BackdropStyle.Solid;
-        var kind = useBackdrop ? Acrylic.Backdrop.Acrylic : Acrylic.Backdrop.None;
-        // For LiquidGlass, dark-immersive isn't really right (glass is theme-neutral),
-        // but DWM treats this attribute as just "dark borders" — pass _darkMode anyway.
-        Acrylic.Apply(Hwnd, kind, _darkMode);
+        Acrylic.Apply(Hwnd, Acrylic.Backdrop.None, _darkMode);
     }
 
     // ---- Liquid Glass capture ----

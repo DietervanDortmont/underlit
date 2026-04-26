@@ -7,34 +7,30 @@ using DPixelFormat = System.Drawing.Imaging.PixelFormat;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Curved-glass renderer. Models the OSD as a hemispherical-pill lens and produces
-/// the look of light passing through it from a fixed 45° top-left key light.
+/// Curved-glass renderer (v0.3). Renders the OSD as a hemispherical-pill lens with
+/// a soft shadow halo. The output is a fullW × fullH bitmap that includes pill,
+/// shadow, and transparent corners — designed for an AllowsTransparency=true
+/// window that has no DWM acrylic and no DWM rounded corners.
 ///
 /// Pipeline (BGRA32, all CPU):
-///   1.  Read captured pixels into buffer A.
-///   2.  Saturation boost — Apple's glass amplifies behind-content colour ~30%.
-///   3.  Subtle white wash — a touch of "frostiness" so the body isn't aggressively
-///       see-through. This matches the user's note that real Apple glass *does*
-///       have a tiny amount of frost.
-///   4.  Box blur ×3 ≈ gaussian (radius 18) — the body frosting.
-///   5.  Per-pixel pass using GlassShape's normal map:
-///        a. Refraction: sample the BLURRED buffer at (x,y) + (nx,ny) * thickness.
-///           This is real curved-lens refraction — pixels in the centre sample at
-///           themselves (zero displacement), rim pixels sample from far inside.
-///        b. Phong specular: pow(N·H, shininess) where H = halfway(L, V) for a
-///           45° top-left key light. Bright crescent on the upper-left curve.
-///        c. Schlick Fresnel rim: F0 + (1-F0) * (1 - N·V)^5. Bright ring at
-///           grazing angles.
-///        d. Vibrancy: behind a very bright backdrop the glass body is too pale
-///           for icons/text to show — pull the body a notch toward neutral grey
-///           when its luminance crosses a threshold so foreground stays legible.
-///        e. Composite: result = body + spec + fresnel * rim_color.
+///   1.  Read captured pixels (cropped to the pill region) into buffer A.
+///       Note: capture is the screen pixels behind the PILL, NOT the whole 300×66
+///       window. The shadow halo is generated synthetically — it doesn't try to
+///       refract behind-content.
+///   2.  Saturation boost — Apple amplifies behind-content colour ~30%.
+///   3.  Subtle white wash — small frostiness so the body isn't aggressively see-through.
+///   4.  Box blur ×3 ≈ gaussian (radius 18) over the pill region.
+///   5.  Per-pixel pass over the FULL bitmap using GlassShape's normal+SDF map:
+///        a. SDF > 0  → inside pill: refract + spec + Fresnel + vibrancy. Alpha = 255
+///                       (with anti-aliased softening at the very rim where |SDF| < 1).
+///        b. SDF < 0  → shadow zone: black with alpha = shadowAlpha(distFromEdge).
+///                       Decays smoothly from ShadowOpacity at the rim to 0 at
+///                       ShadowRadius pixels out.
+///        c. SDF outside shadow → fully transparent.
 ///
-/// Tuning notes — values were eyeballed against the iOS 26 Control Center
-/// reference shots the user shared. The bright pill in the middle of those shots
-/// has clearly more energy on the upper-left rim than anywhere else, the body is
-/// roughly 80% transparent with visible refraction, and the spec is concentrated
-/// in a ~30° crescent — not a soft glow.
+/// Because we only sample the captured pill region (not the full bitmap), the
+/// scratch buffer only needs to be pillW × pillH for the body work; the shadow
+/// pass writes directly into the output buffer using normals+SDF only.
 /// </summary>
 public static class GlassRenderer
 {
@@ -44,124 +40,154 @@ public static class GlassRenderer
     public const int    BlurRadius        = 18;
     public const int    BlurPasses        = 3;
 
-    // ---- Refraction (curved-lens displacement) ----
-    public const float  RefractionStrength = 18f;     // peak displacement in physical pixels at the rim
+    // ---- Refraction ----
+    public const float  RefractionStrength = 18f;
 
-    // ---- Lighting ----
-    // Light direction (from surface toward source). Top-left, slightly forward.
+    // ---- Lighting (top-left key, ~45°) ----
     private static readonly (float x, float y, float z) LightDir = NormalizeVec(-0.55f, -0.70f, 0.45f);
-    // View direction: viewer is straight on (out of the screen toward us).
     private static readonly (float x, float y, float z) ViewDir  = (0f, 0f, 1f);
-    // Half vector for Blinn-Phong.
-    private static readonly (float x, float y, float z) HalfVec  = NormalizeVec(LightDir.x + ViewDir.x,
-                                                                                  LightDir.y + ViewDir.y,
-                                                                                  LightDir.z + ViewDir.z);
-    public const float  SpecShininess  = 50f;          // 30=soft glow, 100=tiny pinpoint. 50 = crisp crescent.
-    public const float  SpecIntensity  = 1.10f;        // additive spec colour multiplier
-    public const float  FresnelF0      = 0.04f;        // base reflectivity of glass
-    public const float  FresnelExp     = 5.0f;         // Schlick exponent
-    public const float  RimIntensity   = 0.85f;        // how much rim brightening to add
+    private static readonly (float x, float y, float z) HalfVec  =
+        NormalizeVec(LightDir.x + ViewDir.x, LightDir.y + ViewDir.y, LightDir.z + ViewDir.z);
+    public const float  SpecShininess = 50f;
+    public const float  SpecIntensity = 1.10f;
+    public const float  FresnelF0     = 0.04f;
+    public const float  FresnelExp    = 5.0f;
+    public const float  RimIntensity  = 0.85f;
 
-    // ---- Vibrancy (contrast restoration over very bright backgrounds) ----
-    public const float  VibrancyStartLum = 0.78f;      // luminance above which we start darkening
-    public const float  VibrancyMaxDark  = 0.18f;      // peak darkening factor (0 = none, 1 = full black)
+    // ---- Vibrancy ----
+    public const float  VibrancyStartLum = 0.78f;
+    public const float  VibrancyMaxDark  = 0.18f;
+
+    // ---- Shadow halo ----
+    public const float  ShadowRadius   = 9.0f;    // pixels of halo extending past the pill edge
+    public const float  ShadowOpacity  = 0.42f;   // peak alpha right at the rim
+
+    // ---- Anti-aliasing at pill edge ----
+    public const float  EdgeAaWidth    = 1.2f;    // SDF range over which alpha goes 0..255 at the rim
 
     public sealed class Scratch
     {
+        // Scratch buffers sized to the PILL region (not the full bitmap).
         public byte[] Buffer1 = Array.Empty<byte>();
         public byte[] Buffer2 = Array.Empty<byte>();
-        public byte[] Output  = Array.Empty<byte>();
-        public int Stride;
-        public int Width;
-        public int Height;
+        public int PillStride;
+        public int PillW;
+        public int PillH;
+
+        // Output buffer is sized to the FULL bitmap.
+        public byte[] Output = Array.Empty<byte>();
+        public int FullStride;
+        public int FullW;
+        public int FullH;
+        public int PadX;
+        public int PadY;
+
         public GlassShape.NormalMap? NormalMap;
 
-        public void EnsureCapacity(int width, int height)
+        public void Configure(int fullW, int fullH, int padX, int padY)
         {
-            int stride = width * 4;
-            int size = stride * height;
-            if (Buffer1.Length < size) Buffer1 = new byte[size];
-            if (Buffer2.Length < size) Buffer2 = new byte[size];
-            if (Output.Length  < size) Output  = new byte[size];
-            Stride = stride;
-            // Recompute the normal map only when dimensions change — it's pure geometry,
-            // independent of the captured content.
-            if (Width != width || Height != height || NormalMap == null)
+            int pillW = fullW - padX * 2;
+            int pillH = fullH - padY * 2;
+            int pillStride = pillW * 4;
+            int fullStride = fullW * 4;
+            int pillSize = pillStride * pillH;
+            int fullSize = fullStride * fullH;
+
+            if (Buffer1.Length < pillSize) Buffer1 = new byte[pillSize];
+            if (Buffer2.Length < pillSize) Buffer2 = new byte[pillSize];
+            if (Output.Length  < fullSize) Output  = new byte[fullSize];
+
+            PillStride = pillStride;
+            PillW = pillW;
+            PillH = pillH;
+            FullStride = fullStride;
+            FullW = fullW;
+            FullH = fullH;
+            PadX = padX;
+            PadY = padY;
+
+            if (NormalMap == null
+                || NormalMap.Width != fullW
+                || NormalMap.Height != fullH
+                || NormalMap.PadX != padX
+                || NormalMap.PadY != padY
+                || NormalMap.PillW != pillW
+                || NormalMap.PillH != pillH)
             {
-                Width = width;
-                Height = height;
-                NormalMap = GlassShape.ComputePill(width, height);
+                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH);
             }
         }
     }
 
-    public static bool Render(Bitmap input, Scratch scratch)
+    /// <summary>
+    /// Render `pillCapture` (a captured pillW×pillH bitmap of what's behind the pill)
+    /// into scratch.Output (the full window bitmap). Caller must have called
+    /// scratch.Configure(...) with the right dimensions first.
+    /// </summary>
+    public static bool Render(Bitmap pillCapture, Scratch scratch)
     {
-        int w = input.Width;
-        int h = input.Height;
-        if (w <= 0 || h <= 0) return false;
+        int pillW = pillCapture.Width;
+        int pillH = pillCapture.Height;
+        if (pillW <= 0 || pillH <= 0) return false;
+        if (pillW != scratch.PillW || pillH != scratch.PillH) return false;
 
-        scratch.EnsureCapacity(w, h);
-        int stride = scratch.Stride;
+        int pillStride = scratch.PillStride;
         byte[] a = scratch.Buffer1;
         byte[] b = scratch.Buffer2;
-        byte[] outBuf = scratch.Output;
         var nmap = scratch.NormalMap!;
 
-        // 1. Read pixels into A.
-        var rect = new Rectangle(0, 0, w, h);
-        var data = input.LockBits(rect, ImageLockMode.ReadOnly, DPixelFormat.Format32bppArgb);
+        // 1. Read captured pixels into A.
+        var rect = new Rectangle(0, 0, pillW, pillH);
+        var data = pillCapture.LockBits(rect, ImageLockMode.ReadOnly, DPixelFormat.Format32bppArgb);
         try
         {
-            if (data.Stride == stride)
+            if (data.Stride == pillStride)
             {
-                Marshal.Copy(data.Scan0, a, 0, stride * h);
+                Marshal.Copy(data.Scan0, a, 0, pillStride * pillH);
             }
             else
             {
-                for (int y = 0; y < h; y++)
-                    Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), a, y * stride, stride);
+                for (int y = 0; y < pillH; y++)
+                    Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), a, y * pillStride, pillStride);
             }
         }
-        finally { input.UnlockBits(data); }
+        finally { pillCapture.UnlockBits(data); }
 
-        // 2 + 3. Saturation boost + light white wash.
-        ApplyGlassWashAndSaturation(a, w, h, stride, GlassWashStrength, SaturationBoost);
+        // 2 + 3. Saturation + light wash.
+        ApplyGlassWashAndSaturation(a, pillW, pillH, pillStride, GlassWashStrength, SaturationBoost);
 
-        // 4. Box blur ×3 ≈ gaussian. After loop the blurred result is in A.
+        // 4. Box blur ×3 → A.
         for (int pass = 0; pass < BlurPasses; pass++)
         {
-            BoxBlurHorizontal(a, b, w, h, stride, BlurRadius);
-            BoxBlurVertical  (b, a, w, h, stride, BlurRadius);
+            BoxBlurHorizontal(a, b, pillW, pillH, pillStride, BlurRadius);
+            BoxBlurVertical  (b, a, pillW, pillH, pillStride, BlurRadius);
         }
 
-        // 5. Per-pixel curved-glass shading: refraction + spec + Fresnel + vibrancy.
-        ShadeAndComposite(a, outBuf, w, h, stride, nmap);
+        // 5. Final composite over the full bitmap (pill + shadow + transparent).
+        ShadeAndComposite(a, scratch.Output, scratch.FullW, scratch.FullH, scratch.FullStride,
+                           scratch.PadX, scratch.PadY, pillW, pillH, pillStride, nmap);
 
         return true;
     }
 
-    /// <summary>
-    /// Per-pixel curved-glass shader. Reads the blurred body from `body`, samples it
-    /// with refraction-driven offsets, adds Phong specular and Schlick Fresnel from
-    /// the precomputed normal map, and writes into `dst`.
-    /// </summary>
-    private static void ShadeAndComposite(byte[] body, byte[] dst, int w, int h, int stride,
-                                          GlassShape.NormalMap nmap)
+    private static void ShadeAndComposite(byte[] body, byte[] dst, int fullW, int fullH, int fullStride,
+                                           int padX, int padY, int pillW, int pillH, int pillStride,
+                                           GlassShape.NormalMap nmap)
     {
         float[] normals = nmap.Normals;
-        bool[] inside = nmap.Inside;
+        float[] sdf = nmap.Sdf;
 
-        for (int y = 0; y < h; y++)
+        for (int y = 0; y < fullH; y++)
         {
-            for (int x = 0; x < w; x++)
+            for (int x = 0; x < fullW; x++)
             {
-                int pi = y * w + x;
-                int dstIdx = y * stride + x * 4;
+                int pi = y * fullW + x;
+                int dstIdx = y * fullStride + x * 4;
+                float pixSdf = sdf[pi];
 
-                if (!inside[pi])
+                if (pixSdf <= -ShadowRadius)
                 {
-                    // Outside the pill — fully transparent. (DWM corner clipping will hide this anyway.)
+                    // Way outside — fully transparent.
                     dst[dstIdx + 0] = 0;
                     dst[dstIdx + 1] = 0;
                     dst[dstIdx + 2] = 0;
@@ -169,26 +195,39 @@ public static class GlassRenderer
                     continue;
                 }
 
+                if (pixSdf <= 0)
+                {
+                    // Shadow halo. Smooth quadratic falloff from rim outward.
+                    float t = -pixSdf / ShadowRadius;       // 0 at rim, 1 at outer shadow edge
+                    if (t > 1f) t = 1f;
+                    float falloff = 1f - t;
+                    float a = falloff * falloff * ShadowOpacity;     // ease-out quadratic
+                    byte alpha = (byte)(a * 255f);
+                    // Premultiplied black shadow
+                    dst[dstIdx + 0] = 0;
+                    dst[dstIdx + 1] = 0;
+                    dst[dstIdx + 2] = 0;
+                    dst[dstIdx + 3] = alpha;
+                    continue;
+                }
+
+                // Inside the pill. Sample the blurred body with refraction-driven offset.
                 float nx = normals[pi * 3 + 0];
                 float ny = normals[pi * 3 + 1];
                 float nz = normals[pi * 3 + 2];
 
-                // ---- (a) Refraction sampling ----
-                // For a glass surface viewed straight-on, the apparent shift of pixels
-                // behind the surface is roughly proportional to the normal's xy component
-                // (Snell's law linearised at small angles). RefractionStrength scales it.
-                int sx = x + (int)MathF.Round(nx * RefractionStrength);
-                int sy = y + (int)MathF.Round(ny * RefractionStrength);
-                if (sx < 0) sx = 0; else if (sx >= w) sx = w - 1;
-                if (sy < 0) sy = 0; else if (sy >= h) sy = h - 1;
-                int srcIdx = sy * stride + sx * 4;
+                int pillX = x - padX;
+                int pillY = y - padY;
+                int sx = pillX + (int)MathF.Round(nx * RefractionStrength);
+                int sy = pillY + (int)MathF.Round(ny * RefractionStrength);
+                if (sx < 0) sx = 0; else if (sx >= pillW) sx = pillW - 1;
+                if (sy < 0) sy = 0; else if (sy >= pillH) sy = pillH - 1;
+                int srcIdx = sy * pillStride + sx * 4;
                 int B = body[srcIdx + 0];
                 int G = body[srcIdx + 1];
                 int R = body[srcIdx + 2];
 
-                // ---- (d) Vibrancy: if backdrop is very bright, darken slightly so
-                // overlay icons/text remain legible. Apple does this on a per-element
-                // basis ("vibrancy" effect). We approximate with a luminance-aware tint.
+                // Vibrancy: darken on bright backdrops so foreground stays legible.
                 float lum = (R * 0.299f + G * 0.587f + B * 0.114f) / 255f;
                 if (lum > VibrancyStartLum)
                 {
@@ -200,35 +239,39 @@ public static class GlassRenderer
                     B = (int)(B * darken);
                 }
 
-                // ---- (b) Phong specular ----
+                // Phong specular.
                 float NdotH = nx * HalfVec.x + ny * HalfVec.y + nz * HalfVec.z;
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity;
 
-                // ---- (c) Schlick Fresnel ----
-                float NdotV = nz; // ViewDir = (0,0,1)
+                // Schlick Fresnel rim.
+                float NdotV = nz;
                 if (NdotV < 0f) NdotV = 0f;
                 float oneMinus = 1f - NdotV;
                 float fresnel = FresnelF0 + (1f - FresnelF0) * MathF.Pow(oneMinus, FresnelExp);
                 fresnel *= RimIntensity;
 
-                // ---- (e) Composite: body + additive spec + additive rim ----
-                // Rim adds a cool-white wash; spec adds a warm-white pinpoint highlight.
                 int specAdd = (int)(spec * 255f);
                 int rimAdd  = (int)(fresnel * 255f);
 
                 int rOut = R + specAdd + rimAdd;
                 int gOut = G + specAdd + rimAdd;
-                int bOut = B + specAdd + (int)(rimAdd * 1.04f); // tiny blue bias on rim
+                int bOut = B + specAdd + (int)(rimAdd * 1.04f);
                 if (rOut > 255) rOut = 255;
                 if (gOut > 255) gOut = 255;
                 if (bOut > 255) bOut = 255;
 
-                // Alpha is full inside — the captured-image-on-DWM hybrid is for v0.3.
+                // Anti-aliased rim alpha. WPF Bgra32 is STRAIGHT alpha — we leave the
+                // RGB values as-is and let WPF blend with the backdrop based on alpha.
+                float aaAlpha = pixSdf / EdgeAaWidth;
+                if (aaAlpha > 1f) aaAlpha = 1f;
+                if (aaAlpha < 0f) aaAlpha = 0f;
+                byte pillAlpha = (byte)(aaAlpha * 255f);
+
                 dst[dstIdx + 0] = (byte)bOut;
                 dst[dstIdx + 1] = (byte)gOut;
                 dst[dstIdx + 2] = (byte)rOut;
-                dst[dstIdx + 3] = 255;
+                dst[dstIdx + 3] = pillAlpha;
             }
         }
     }

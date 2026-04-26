@@ -3,22 +3,35 @@ using System;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Geometry of the Liquid Glass surface. The image is now larger than the visible
-/// pill — there's a `padding`-pixel margin around it for the soft shadow halo.
+/// Geometry of the Liquid Glass surface.
 ///
-/// Per pixel we store:
-///   • SDF — signed distance to the pill's edge (positive INSIDE the pill,
-///           negative outside, 0 at the rim). Outside SDF is the negative
-///           Euclidean distance from the rim, which lets the renderer fade a
-///           soft shadow that decays smoothly into the transparent corners.
-///   • Normal — surface normal of the curved-glass dome at this pixel. Only
-///           valid (non-zero-xy) inside the pill. Used for Phong / Fresnel /
-///           refraction sampling.
+/// IMPORTANT (v0.3.1): the shape is a FLAT PUCK with a small bevel where the top
+/// face rolls over to the side, NOT a hemispherical dome. This is the actual
+/// shape Apple uses (verifiable from their lab footage and any side-on render
+/// of a Liquid Glass element):
 ///
-/// Geometry: hemispherical-pill lens. The flat top has normal (0,0,1); the rim
-/// has normals tilted strongly outward. Light bends through this shape exactly
-/// the way it bends through a polished river-stone, which is what Apple's
-/// Liquid Glass is modeling.
+///                     ┌─────────────────────────────────┐
+///                    ╱                                   ╲     ← bevel (rounded edge)
+///   ╭─────────────────────────────────────────────────────╮
+///   │                  flat top face                      │   ← top of puck
+///   ╰─────────────────────────────────────────────────────╯
+///                    ╲                                   ╱     ← bevel (rounded edge)
+///                     └─────────────────────────────────┘
+///
+/// Implications for shading:
+///   • The flat top has normal (0,0,1) everywhere → no refraction across the body
+///     and no Phong/Fresnel response. The body just shows through.
+///   • The bevel is a thin ring (a few pixels wide) where the normal rolls from
+///     vertical to horizontal. This is where Phong specular and Fresnel rim
+///     happen, and where light gets bent.
+///   • Because the bevel is a ring, the highlight is automatically LOCALIZED —
+///     it appears wherever the bevel's outward direction aligns with the light's
+///     half-vector, and nowhere else. The opposite corner gets nothing. This
+///     matches every Apple reference perfectly.
+///
+/// Bevel profile: quarter-circle (cosine slope). At the very rim (sdf=0) the
+/// surface is steepest (normal nearly horizontal). At sdf = bevelWidth it
+/// smoothly meets the flat top (normal vertical).
 /// </summary>
 public static class GlassShape
 {
@@ -26,37 +39,37 @@ public static class GlassShape
     {
         public int Width;
         public int Height;
-        public int PadX;     // shadow padding on the left/right
-        public int PadY;     // shadow padding on the top/bottom
-        public int PillW;    // visible pill width
-        public int PillH;    // visible pill height
+        public int PadX;
+        public int PadY;
+        public int PillW;
+        public int PillH;
+        public int BevelPx;
 
-        /// <summary>Packed normals as [pixel][nx,ny,nz] floats; length = w*h*3.</summary>
         public float[] Normals = Array.Empty<float>();
-        /// <summary>Signed distance to pill rim. Positive inside, negative outside, 0 at rim.</summary>
-        public float[] Sdf    = Array.Empty<float>();
+        public float[] Sdf     = Array.Empty<float>();
     }
 
-    /// <summary>
-    /// Compute the normal+SDF map for a fullW × fullH bitmap whose pill occupies
-    /// the central pillW × pillH region with the given padding.
-    /// </summary>
-    public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY, int pillW, int pillH)
+    /// <summary>How horizontal the bevel normal becomes at the very rim.
+    /// 1.0 = 45° bevel (gentle). 4.0 = nearly vertical (sharp). 2.5 ≈ Apple-ish.</summary>
+    public const double BevelMaxSlope = 2.5;
+
+    public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY,
+                                         int pillW, int pillH, int bevelPx)
     {
         var map = new NormalMap
         {
-            Width = fullW,
-            Height = fullH,
+            Width = fullW, Height = fullH,
             PadX = padX, PadY = padY,
             PillW = pillW, PillH = pillH,
+            BevelPx = bevelPx,
         };
         int total = fullW * fullH;
         map.Normals = new float[total * 3];
         map.Sdf     = new float[total];
 
         if (fullW <= 0 || fullH <= 0) return map;
+        if (bevelPx < 1) bevelPx = 1;
 
-        // Pill geometry, centred in the bitmap.
         double r = pillH / 2.0;
         double pillLeft  = padX;
         double pillRight = padX + pillW;
@@ -74,48 +87,51 @@ public static class GlassShape
             double dx = (x + 0.5) - xc;
             double dy = (y + 0.5) - yc;
             double dist = Math.Sqrt(dx * dx + dy * dy);
-            double sdf = r - dist;            // + inside, − outside
+            double sdf = r - dist;
 
             map.Sdf[i] = (float)sdf;
 
             if (sdf <= 0)
             {
-                // Outside the pill — surface normal is meaningless. We still set z=1
-                // so any accidental sampling doesn't NaN.
+                // Outside the pill.
                 map.Normals[i * 3 + 0] = 0f;
                 map.Normals[i * 3 + 1] = 0f;
                 map.Normals[i * 3 + 2] = 1f;
                 continue;
             }
 
+            // Bevel profile.
             double nx, ny, nz;
-            if (sdf >= r - 1e-6)
+            if (sdf >= bevelPx)
             {
+                // Flat top — perfectly horizontal surface, normal points straight up.
                 nx = 0; ny = 0; nz = 1;
             }
             else
             {
-                double h = Math.Sqrt(r * r - (r - sdf) * (r - sdf));
-                if (h < 1e-3 || dist < 1e-6)
+                // In the bevel ring. Slope decays from BevelMaxSlope at the rim to 0
+                // at the top of the bevel (cosine profile = quarter circle).
+                double t = sdf / bevelPx;                 // 0 at rim, 1 at top of bevel
+                double horizSlope = BevelMaxSlope * Math.Cos(t * Math.PI / 2);
+
+                // Outward direction in xy plane = unit vector from pill axis toward
+                // this pixel. (For straight sides of pill: (0, ±1). For rounded ends:
+                // (dx, dy)/dist.)
+                double outwardX, outwardY;
+                if (dist > 1e-6)
                 {
-                    if (dist > 1e-6)
-                    {
-                        nx = dx / dist;
-                        ny = dy / dist;
-                    }
-                    else
-                    {
-                        nx = 0; ny = 0;
-                    }
-                    nz = 0.10;
+                    outwardX = dx / dist;
+                    outwardY = dy / dist;
                 }
                 else
                 {
-                    double slope = (r - sdf) / h;
-                    nx = slope * dx / dist;
-                    ny = slope * dy / dist;
-                    nz = 1.0;
+                    outwardX = 0;
+                    outwardY = 0;
                 }
+
+                nx = horizSlope * outwardX;
+                ny = horizSlope * outwardY;
+                nz = 1.0;
 
                 double mag = Math.Sqrt(nx * nx + ny * ny + nz * nz);
                 if (mag > 1e-9) { nx /= mag; ny /= mag; nz /= mag; }

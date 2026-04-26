@@ -78,18 +78,29 @@ public static class Acrylic
     }
 
     /// <summary>
-    /// Disable Windows' automatic 8-px rounded corners + the soft window shadow that
-    /// goes with them. Required for AllowsTransparency=true windows where the visible
-    /// shape comes from our own bitmap's alpha channel — otherwise DWM paints a faint
-    /// 300×66 rounded-rect outline behind whatever we draw, which the user rightly
-    /// flagged as "the rectangle that remains".
+    /// Strip ALL of Windows 11's automatic window decoration: rounded corners, border
+    /// color, and the soft drop shadow. Required for AllowsTransparency=true windows
+    /// where the visible shape comes from our own bitmap's alpha channel — without
+    /// this Win11 22H2+ paints a 300×66 rounded-rect outline + soft shadow behind
+    /// whatever we draw.
     /// </summary>
     public static void DisableSystemRounding(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !IsModernSupported) return;
+
         int corner = (int)DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DONOTROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+
+        // DWMWA_BORDER_COLOR with DWMWA_COLOR_NONE disables the 1-px border Win11 paints
+        // around top-level windows by default.
+        unchecked
+        {
+            int colorNone = (int)0xFFFFFFFE;
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, ref colorNone, sizeof(int));
+        }
     }
+
+    private const int DWMWA_BORDER_COLOR = 34;
 
     // ---------------- Modern DWM API ----------------
 

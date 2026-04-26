@@ -193,11 +193,50 @@ public partial class OsdWindow : Window
             | NativeMethods.WS_EX_TOPMOST;
         NativeMethods.SetWindowLong(Hwnd, NativeMethods.GWL_EXSTYLE, ex);
 
-        // CRITICAL: kill DWM's automatic rounded-corner + window-shadow treatment.
-        // Otherwise we get a 300×66 rounded-rect halo behind the actual pill (the
-        // "rectangle that remains" the user flagged in v0.3.1 testing). Our renderer's
-        // alpha channel is the source of truth for shape — DWM should not add anything.
+        // CRITICAL: kill DWM's automatic rounded-corner + window-shadow + border
+        // treatment. Win11 22H2+ paints these even on layered AllowsTransparency=true
+        // windows by default; we don't want any of it.
         Acrylic.DisableSystemRounding(Hwnd);
+
+        // Belt-and-suspenders: explicitly clip the window's drawn region to the pill
+        // shape. The OS literally cannot draw outside this region — no shadow, no
+        // outline, no DWM compositor leakage. This addresses the "shadow + outline
+        // around the pill" bug the user kept hitting in v0.3.x.
+        ApplyPillRegion();
+    }
+
+    /// <summary>
+    /// Apply a SetWindowRgn pill region to the OSD's HWND so the OS clips ALL output
+    /// to the visible pill shape. Without this, layered windows still get DWM's
+    /// soft shadow + thin border drawn outside the pill.
+    /// </summary>
+    private void ApplyPillRegion()
+    {
+        if (Hwnd == IntPtr.Zero) return;
+
+        var src = PresentationSource.FromVisual(this);
+        double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+
+        int physPadX  = (int)Math.Round(LiveGlassController.PaddingDip   * scale);
+        int physPadY  = (int)Math.Round(LiveGlassController.PaddingDip   * scale);
+        int physPillW = (int)Math.Round(LiveGlassController.PillWidthDip * scale);
+        int physPillH = (int)Math.Round(LiveGlassController.PillHeightDip * scale);
+
+        // CreateRoundRectRgn(x1, y1, x2, y2, ellW, ellH). x2/y2 are exclusive.
+        // For a true pill, ellW = ellH = pillH (full-circle corners).
+        IntPtr rgn = NativeMethods.CreateRoundRectRgn(
+            physPadX,
+            physPadY,
+            physPadX + physPillW,
+            physPadY + physPillH,
+            physPillH,
+            physPillH);
+
+        if (rgn != IntPtr.Zero)
+        {
+            // SetWindowRgn takes ownership of the region — do NOT DeleteObject.
+            NativeMethods.SetWindowRgn(Hwnd, rgn, true);
+        }
     }
 
     private void PositionAboveTaskbar()

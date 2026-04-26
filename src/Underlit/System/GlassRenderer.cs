@@ -2,8 +2,6 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using DPixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace Underlit.Sys;
@@ -15,91 +13,133 @@ namespace Underlit.Sys;
 ///
 /// Pipeline (all on CPU, BGRA32):
 ///   1. Pre-tint    — pull the colour towards white slightly for a glass body wash.
-///   2. Box blur    — 3 passes of separable running-sum box blur. With three boxes
+///   2. Saturation  — boost saturation ~1.15x. Apple's glass amplifies behind-content
+///                    colour for the "wet" living feel.
+///   3. Box blur    — 3 passes of separable running-sum box blur. With three boxes
 ///                    of the right radii this approximates a true Gaussian to ~3% error
 ///                    (Wells-style), which is plenty for our look.
-///   3. Refraction  — for every pixel within `edgeWidth` of the window border, sample
+///   4. Refraction  — for every pixel within `edgeWidth` of the window border, sample
 ///                    the *blurred* image at an offset toward the centre. Magnitude
 ///                    falls off smoothly from `maxOffset` at the edge to 0. This is
 ///                    the visual signature of a curved glass rim — light bends inward.
-///   4. Edge sheen  — add a faint white wash on the very outermost ring to suggest
+///   5. Edge sheen  — add a faint white wash on the very outermost ring to suggest
 ///                    the bright crown of refraction Apple's glass shows.
 ///
-/// 280×48 = ~13.5k pixels — even with 3 blur passes per channel and the displacement
-/// pass it runs in well under a frame on any modern CPU.
+/// Designed for live use at 30fps on a 280×46 region (~13k pixels) so allocations
+/// happen ONCE — caller passes in scratch byte[] buffers and we use them in place.
 /// </summary>
 public static class GlassRenderer
 {
-    private const double GlassWashStrength = 0.18;   // 0..1 — how much we pull pixels towards white
-    private const int    BlurRadius        = 14;     // total blur radius in physical pixels
-    private const int    BlurPasses        = 3;      // 3 box passes ≈ gaussian
-    private const int    EdgeWidth         = 16;     // displacement zone in physical pixels
-    private const int    MaxOffset         = 10;     // peak refraction displacement in physical pixels
-    private const double EdgeSheenStrength = 0.35;   // 0..1 white-wash strength right on the rim
+    public const double GlassWashStrength = 0.16;   // 0..1 — pull pixels toward white
+    public const double SaturationBoost   = 1.18;   // 1.0 = identity. Apple glass amplifies colour.
+    public const int    BlurRadius        = 14;     // total blur radius in physical pixels
+    public const int    BlurPasses        = 3;      // 3 box passes ≈ gaussian
+    public const int    EdgeWidth         = 16;     // displacement zone in physical pixels
+    public const int    MaxOffset         = 10;     // peak refraction displacement in physical pixels
+    public const double EdgeSheenStrength = 0.32;   // 0..1 white-wash strength right on the rim
+    public const int    EdgeSheenPx       = 2;      // outer ring thickness for the sheen
 
     /// <summary>
-    /// Render `input` (a captured screen region) as Liquid Glass. Caller owns `input`
-    /// and must Dispose it. Returns a frozen, UI-thread-safe BitmapSource.
+    /// Buffers owned by the caller — let us avoid GC churn at 30fps.
+    /// All four arrays must be at least `stride * height` bytes long.
     /// </summary>
-    public static BitmapSource Render(Bitmap input)
+    public sealed class Scratch
+    {
+        public byte[] Buffer1 = Array.Empty<byte>();
+        public byte[] Buffer2 = Array.Empty<byte>();
+        public byte[] Output  = Array.Empty<byte>();
+        public int Stride;
+        public int Width;
+        public int Height;
+
+        public void EnsureCapacity(int width, int height)
+        {
+            int stride = width * 4;
+            int size = stride * height;
+            if (Buffer1.Length < size) Buffer1 = new byte[size];
+            if (Buffer2.Length < size) Buffer2 = new byte[size];
+            if (Output.Length  < size) Output  = new byte[size];
+            Stride = stride;
+            Width  = width;
+            Height = height;
+        }
+    }
+
+    /// <summary>
+    /// Render `input` (a captured screen region) as Liquid Glass into the scratch.Output buffer.
+    /// Caller can wrap scratch.Output as a WriteableBitmap and assign it as a brush.
+    ///
+    /// Returns true on success. False means input had bad dimensions; output buffer is unchanged.
+    /// </summary>
+    public static bool Render(Bitmap input, Scratch scratch)
     {
         int w = input.Width;
         int h = input.Height;
-        if (w <= 0 || h <= 0)
-            return CreateBlank(1, 1);
+        if (w <= 0 || h <= 0) return false;
 
-        // -------- 1. Read pixels into a managed BGRA byte buffer --------
-        var rect  = new Rectangle(0, 0, w, h);
-        var data  = input.LockBits(rect, ImageLockMode.ReadOnly, DPixelFormat.Format32bppArgb);
-        int stride = data.Stride;
-        byte[] src = new byte[stride * h];
-        Marshal.Copy(data.Scan0, src, 0, src.Length);
-        input.UnlockBits(data);
+        scratch.EnsureCapacity(w, h);
+        int stride = scratch.Stride;
+        byte[] a = scratch.Buffer1;
+        byte[] b = scratch.Buffer2;
+        byte[] outBuf = scratch.Output;
 
-        // -------- 2. Pre-tint (push everything towards white for the "glass wash") --------
-        ApplyGlassWash(src, w, h, stride, GlassWashStrength);
-
-        // -------- 3. Box blur, 3 passes ≈ gaussian --------
-        byte[] tmp = new byte[src.Length];
-        for (int pass = 0; pass < BlurPasses; pass++)
+        // -------- 1. Read pixels into the working buffer A --------
+        var rect = new Rectangle(0, 0, w, h);
+        // We need stride to match LockBits's stride; LockBits uses rowsize = w*4 padded
+        // to 4-byte alignment, which for 32bpp is exactly w*4. So scratch.Stride matches.
+        var data = input.LockBits(rect, ImageLockMode.ReadOnly, DPixelFormat.Format32bppArgb);
+        try
         {
-            BoxBlurHorizontal(src, tmp, w, h, stride, BlurRadius);
-            BoxBlurVertical  (tmp, src, w, h, stride, BlurRadius);
+            // Copy each row in case the source bitmap stride differs from ours (rare for 32bpp).
+            if (data.Stride == stride)
+            {
+                Marshal.Copy(data.Scan0, a, 0, stride * h);
+            }
+            else
+            {
+                int srcStride = data.Stride;
+                IntPtr scan = data.Scan0;
+                for (int y = 0; y < h; y++)
+                {
+                    Marshal.Copy(IntPtr.Add(scan, y * srcStride), a, y * stride, stride);
+                }
+            }
+        }
+        finally
+        {
+            input.UnlockBits(data);
         }
 
-        // -------- 4. Edge refraction: sample-with-offset near borders --------
-        byte[] refracted = new byte[src.Length];
-        Buffer.BlockCopy(src, 0, refracted, 0, src.Length);
-        ApplyEdgeRefraction(src, refracted, w, h, stride, EdgeWidth, MaxOffset);
+        // -------- 2. Pre-tint and saturation boost --------
+        ApplyGlassWashAndSaturation(a, w, h, stride, GlassWashStrength, SaturationBoost);
 
-        // -------- 5. Add bright crown on the very outermost rim --------
-        ApplyEdgeSheen(refracted, w, h, stride, edgePx: 2, EdgeSheenStrength);
+        // -------- 3. Box blur, 3 passes ≈ gaussian (a → b → a → b → a → b) --------
+        for (int pass = 0; pass < BlurPasses; pass++)
+        {
+            BoxBlurHorizontal(a, b, w, h, stride, BlurRadius);
+            BoxBlurVertical  (b, a, w, h, stride, BlurRadius);
+        }
+        // After loop, blurred result is in `a`.
 
-        // -------- 6. Hand back as a frozen WPF BitmapSource --------
-        var bs = BitmapSource.Create(
-            w, h,
-            96, 96,
-            PixelFormats.Bgra32,
-            null,
-            refracted,
-            stride);
-        bs.Freeze();
-        return bs;
+        // -------- 4. Edge refraction: write into `outBuf` from blurred `a` --------
+        // Interior pixels copy through; edge pixels sample at displaced positions.
+        Buffer.BlockCopy(a, 0, outBuf, 0, stride * h);
+        ApplyEdgeRefraction(a, outBuf, w, h, stride, EdgeWidth, MaxOffset);
+
+        // -------- 5. Bright crown on the outermost rim --------
+        ApplyEdgeSheen(outBuf, w, h, stride, EdgeSheenPx, EdgeSheenStrength);
+
+        return true;
     }
 
-    private static BitmapSource CreateBlank(int w, int h)
+    // -------- Glass wash + saturation boost in one pass --------
+    private static void ApplyGlassWashAndSaturation(byte[] buf, int w, int h, int stride,
+                                                     double washT, double saturation)
     {
-        var bs = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgra32, null);
-        bs.Freeze();
-        return bs;
-    }
-
-    // -------- Glass wash: pixel = lerp(pixel, #FFFFFF, t) --------
-    private static void ApplyGlassWash(byte[] buf, int w, int h, int stride, double t)
-    {
-        if (t <= 0) return;
-        int it = (int)(t * 256);
+        int it  = (int)(washT * 256);
         int omt = 256 - it;
+        // saturation as fixed-point ×256
+        int satFixed = (int)(saturation * 256);
 
         for (int y = 0; y < h; y++)
         {
@@ -107,16 +147,34 @@ public static class GlassRenderer
             for (int x = 0; x < w; x++)
             {
                 int i = row + x * 4;
-                buf[i + 0] = (byte)((buf[i + 0] * omt + 255 * it) >> 8); // B
-                buf[i + 1] = (byte)((buf[i + 1] * omt + 255 * it) >> 8); // G
-                buf[i + 2] = (byte)((buf[i + 2] * omt + 255 * it) >> 8); // R
-                buf[i + 3] = 255;                                          // A
+                int B = buf[i + 0];
+                int G = buf[i + 1];
+                int R = buf[i + 2];
+
+                // 1) Saturation: lerp from grey towards full colour by `saturation`.
+                // grey = luminance approximation (Rec.709-ish via simple .299/.587/.114).
+                int grey = (R * 77 + G * 150 + B * 29) >> 8; // /256
+                R = grey + (((R - grey) * satFixed) >> 8);
+                G = grey + (((G - grey) * satFixed) >> 8);
+                B = grey + (((B - grey) * satFixed) >> 8);
+                if (R < 0) R = 0; else if (R > 255) R = 255;
+                if (G < 0) G = 0; else if (G > 255) G = 255;
+                if (B < 0) B = 0; else if (B > 255) B = 255;
+
+                // 2) Glass wash toward white.
+                B = (B * omt + 255 * it) >> 8;
+                G = (G * omt + 255 * it) >> 8;
+                R = (R * omt + 255 * it) >> 8;
+
+                buf[i + 0] = (byte)B;
+                buf[i + 1] = (byte)G;
+                buf[i + 2] = (byte)R;
+                buf[i + 3] = 255;
             }
         }
     }
 
     // -------- Box blur, separable, running-sum O(N) per row --------
-    // Reads from `src`, writes to `dst`. Horizontal pass only.
     private static void BoxBlurHorizontal(byte[] src, byte[] dst, int w, int h, int stride, int r)
     {
         int span = r * 2 + 1;
@@ -125,10 +183,9 @@ public static class GlassRenderer
             int row = y * stride;
             int sumB = 0, sumG = 0, sumR = 0;
 
-            // prime the window with the first 'r+1' pixels (clamping at left edge by repeating x=0)
             for (int x = -r; x <= r; x++)
             {
-                int sx = Math.Clamp(x, 0, w - 1);
+                int sx = x < 0 ? 0 : (x >= w ? w - 1 : x);
                 int i = row + sx * 4;
                 sumB += src[i + 0];
                 sumG += src[i + 1];
@@ -143,11 +200,10 @@ public static class GlassRenderer
                 dst[oi + 2] = (byte)(sumR / span);
                 dst[oi + 3] = 255;
 
-                // slide window
                 int xOut = x - r;
                 int xIn  = x + r + 1;
-                int sxOut = Math.Clamp(xOut, 0, w - 1);
-                int sxIn  = Math.Clamp(xIn,  0, w - 1);
+                int sxOut = xOut < 0 ? 0 : (xOut >= w ? w - 1 : xOut);
+                int sxIn  = xIn  < 0 ? 0 : (xIn  >= w ? w - 1 : xIn);
                 int io = row + sxOut * 4;
                 int ii = row + sxIn  * 4;
                 sumB += src[ii + 0] - src[io + 0];
@@ -157,7 +213,6 @@ public static class GlassRenderer
         }
     }
 
-    // -------- Box blur vertical pass --------
     private static void BoxBlurVertical(byte[] src, byte[] dst, int w, int h, int stride, int r)
     {
         int span = r * 2 + 1;
@@ -168,7 +223,7 @@ public static class GlassRenderer
 
             for (int y = -r; y <= r; y++)
             {
-                int sy = Math.Clamp(y, 0, h - 1);
+                int sy = y < 0 ? 0 : (y >= h ? h - 1 : y);
                 int i = sy * stride + colOff;
                 sumB += src[i + 0];
                 sumG += src[i + 1];
@@ -185,8 +240,8 @@ public static class GlassRenderer
 
                 int yOut = y - r;
                 int yIn  = y + r + 1;
-                int syOut = Math.Clamp(yOut, 0, h - 1);
-                int syIn  = Math.Clamp(yIn,  0, h - 1);
+                int syOut = yOut < 0 ? 0 : (yOut >= h ? h - 1 : yOut);
+                int syIn  = yIn  < 0 ? 0 : (yIn  >= h ? h - 1 : yIn);
                 int io = syOut * stride + colOff;
                 int ii = syIn  * stride + colOff;
                 sumB += src[ii + 0] - src[io + 0];
@@ -197,46 +252,40 @@ public static class GlassRenderer
     }
 
     /// <summary>
-    /// Edge refraction. For each pixel within `edgeWidth` of any border, we sample
-    /// the blurred source at a point displaced inward by an amount that peaks at the
-    /// border (`maxOffset`) and falls off smoothly to zero at `edgeWidth` deep.
-    ///
-    /// The displacement vector points from the nearest edge toward the window's
-    /// interior — exactly what a curved glass rim does to light passing through it.
+    /// Edge refraction. Pixels within `edgeWidth` of any border are replaced by samples
+    /// from the blurred buffer at an offset toward the window's interior. The displacement
+    /// peaks at `maxOffset` right at the rim and decays quadratically — the optical
+    /// signature of a curved glass edge bending light inward.
     /// </summary>
     private static void ApplyEdgeRefraction(byte[] src, byte[] dst, int w, int h, int stride,
                                              int edgeWidth, int maxOffset)
     {
-        // We read from `src` (the blurred buffer) and write into `dst`. Interior pixels
-        // are already copied through. We only modify pixels with minDist < edgeWidth.
         for (int y = 0; y < h; y++)
         {
-            int dxLeft  = y; // unused — placeholder so I remember y is row
+            int distTop    = y;
+            int distBottom = h - 1 - y;
             for (int x = 0; x < w; x++)
             {
-                int distLeft   = x;
-                int distRight  = w - 1 - x;
-                int distTop    = y;
-                int distBottom = h - 1 - y;
+                int distLeft  = x;
+                int distRight = w - 1 - x;
 
-                // distance to each edge separately so we can compute the displacement vector
-                // pointing away from edges proportional to nearness.
-                double horizFactor = 0;   // negative = sample further right; positive = further left? we'll interpret as "toward centre"
+                double horizFactor = 0;
                 double vertFactor  = 0;
 
-                if (distLeft   < edgeWidth) horizFactor += Falloff(distLeft,   edgeWidth);   // need to sample further INTO image -> +x
-                if (distRight  < edgeWidth) horizFactor -= Falloff(distRight,  edgeWidth);   // sample toward centre -> -x
-                if (distTop    < edgeWidth) vertFactor  += Falloff(distTop,    edgeWidth);   // sample further down -> +y
-                if (distBottom < edgeWidth) vertFactor  -= Falloff(distBottom, edgeWidth);   // sample further up -> -y
+                if (distLeft   < edgeWidth) horizFactor += Falloff(distLeft,   edgeWidth);
+                if (distRight  < edgeWidth) horizFactor -= Falloff(distRight,  edgeWidth);
+                if (distTop    < edgeWidth) vertFactor  += Falloff(distTop,    edgeWidth);
+                if (distBottom < edgeWidth) vertFactor  -= Falloff(distBottom, edgeWidth);
 
-                if (horizFactor == 0 && vertFactor == 0) continue;  // interior — leave as-is
+                if (horizFactor == 0 && vertFactor == 0) continue;
 
-                int sx = Math.Clamp((int)Math.Round(x + horizFactor * maxOffset), 0, w - 1);
-                int sy = Math.Clamp((int)Math.Round(y + vertFactor  * maxOffset), 0, h - 1);
+                int sx = x + (int)Math.Round(horizFactor * maxOffset);
+                int sy = y + (int)Math.Round(vertFactor  * maxOffset);
+                if (sx < 0) sx = 0; else if (sx >= w) sx = w - 1;
+                if (sy < 0) sy = 0; else if (sy >= h) sy = h - 1;
 
                 int srcIdx = sy * stride + sx * 4;
                 int dstIdx = y  * stride + x  * 4;
-
                 dst[dstIdx + 0] = src[srcIdx + 0];
                 dst[dstIdx + 1] = src[srcIdx + 1];
                 dst[dstIdx + 2] = src[srcIdx + 2];
@@ -245,9 +294,6 @@ public static class GlassRenderer
         }
     }
 
-    /// <summary>
-    /// Quadratic falloff: 1 right at the edge, 0 at edgeWidth deep into the image.
-    /// </summary>
     private static double Falloff(int dist, int edgeWidth)
     {
         if (dist >= edgeWidth) return 0;
@@ -255,10 +301,6 @@ public static class GlassRenderer
         return t * t;
     }
 
-    /// <summary>
-    /// Adds a bright white sheen to the outermost `edgePx` ring — simulates the bright
-    /// halo a glass edge produces when light catches it.
-    /// </summary>
     private static void ApplyEdgeSheen(byte[] buf, int w, int h, int stride, int edgePx, double strength)
     {
         if (strength <= 0 || edgePx <= 0) return;

@@ -1,16 +1,13 @@
 using System;
-using System.Drawing;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Underlit.Display;
 using Underlit.Settings;
 using Underlit.Sys;
-using Color  = System.Windows.Media.Color;     // disambiguate vs System.Drawing.Color
-using DBitmap = System.Drawing.Bitmap;          // disambiguate vs System.Windows.Media.Bitmap*
+using Color = System.Windows.Media.Color;
 
 namespace Underlit.UI;
 
@@ -113,6 +110,11 @@ public partial class OsdWindow : Window
     private bool _useTransparency = true;
     private BackdropStyle _backdrop = BackdropStyle.Subtle;
 
+    // ---- Liquid Glass live engine ----
+    // Created lazily after the window is first shown (we need an HWND to set
+    // exclude-from-capture). Active only while OSD is visible in LiquidGlass mode.
+    private LiveGlassController? _liveGlass;
+
     private double _restTop;
 
     private readonly Action<bool> _themeHandler;
@@ -148,6 +150,8 @@ public partial class OsdWindow : Window
             ThemeInfo.ThemeChanged -= _themeHandler;
             AccentColorReader.AccentChanged -= _accentHandler;
             TransparencyPreference.Changed -= _transparencyHandler;
+            _liveGlass?.Dispose();
+            _liveGlass = null;
         };
     }
 
@@ -353,13 +357,20 @@ public partial class OsdWindow : Window
         GlassSideRefraction.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
         GlassBottomSheen.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
 
-        // Captured-and-blurred backdrop is only used in Liquid Glass mode and only if
-        // we have a captured image (set just before each Show() — see CaptureGlassBackdrop).
-        // We keep it Collapsed until a capture has populated GlassBackdropBrush.ImageSource.
+        // Captured-and-blurred backdrop is only used in Liquid Glass mode. The live
+        // engine writes into GlassBackdropBrush in place; here we just gate visibility
+        // and start/stop it on mode changes so we can't accidentally leave a CPU loop
+        // running after the user switches modes.
         if (!isGlass)
         {
+            StopLiveGlass();
             GlassBackdrop.Visibility = Visibility.Collapsed;
             GlassBackdropBrush.ImageSource = null;
+        }
+        else if (IsVisible && useBlur)
+        {
+            // Mid-session mode flip into LiquidGlass while OSD is on screen — start now.
+            StartLiveGlass();
         }
 
         // Bar elements
@@ -386,50 +397,25 @@ public partial class OsdWindow : Window
         Acrylic.Apply(Hwnd, kind, _darkMode);
     }
 
-    // ---- Liquid Glass backdrop capture ----
+    // ---- Liquid Glass live engine ----
 
     /// <summary>
-    /// Grab the screen pixels currently behind where this window will appear, run them
-    /// through GlassRenderer (blur + edge refraction + sheen), and assign the result
-    /// to GlassBackdropBrush so the rest of the OSD's layers composite over real,
-    /// locally-refracted glass instead of a flat tint.
-    ///
-    /// Must be called BEFORE Show() so the OSD window itself isn't the thing we capture.
+    /// Start (or keep running) the per-frame capture+blur+displacement loop. The loop
+    /// updates GlassBackdropBrush in-place so the OSD shows true live refraction of
+    /// whatever is currently behind it.
     /// </summary>
-    private void CaptureGlassBackdrop()
+    private void StartLiveGlass()
     {
-        try
-        {
-            var src = PresentationSource.FromVisual(this);
-            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        if (_liveGlass == null)
+            _liveGlass = new LiveGlassController(this, GlassBackdropBrush, targetFps: 30);
+        GlassBackdrop.Visibility = Visibility.Visible;
+        _liveGlass.Start();
+    }
 
-            // Some launches will have no presentation source yet (window hasn't been
-            // shown once). Fall back to the primary screen's DPI in that case.
-            if (src == null)
-            {
-                using var g = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
-                scale = g.DpiX / 96.0;
-            }
-
-            int physX = (int)Math.Round(Left * scale);
-            int physY = (int)Math.Round(Top  * scale);
-            int physW = (int)Math.Round(Width  * scale);
-            int physH = (int)Math.Round(Height * scale);
-
-            using DBitmap captured = ScreenCapture.CaptureRegion(physX, physY, physW, physH);
-            BitmapSource glass = GlassRenderer.Render(captured);
-
-            GlassBackdropBrush.ImageSource = glass;
-            GlassBackdrop.Visibility = Visibility.Visible;
-        }
-        catch (Exception ex)
-        {
-            // Capture is best-effort — if it fails, fall back to the existing layered
-            // glass overlays (specular + sheen + DWM acrylic underneath).
-            Logger.Warn("LiquidGlass capture failed", ex);
-            GlassBackdrop.Visibility = Visibility.Collapsed;
-            GlassBackdropBrush.ImageSource = null;
-        }
+    /// <summary>Stop the live loop. Brush keeps its last frame so the fade-out doesn't flash.</summary>
+    private void StopLiveGlass()
+    {
+        _liveGlass?.Stop();
     }
 
     // ---- Animation ----
@@ -441,16 +427,17 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
-            // Capture screen pixels behind us BEFORE Show() so the OSD window isn't in
-            // the way of the BitBlt. Only used in Liquid Glass mode; cheap no-op otherwise.
-            if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
-                CaptureGlassBackdrop();
-
             // Initial states for the in-animation
             Opacity = 0;
             BarSlideTransform.Y = SlideDistance;
             Show();
         }
+
+        // Start (or keep) the live glass engine running while we're shown. It captures
+        // every frame, so we always see what's behind us right now. WDA_EXCLUDEFROMCAPTURE
+        // (set by the controller) keeps us out of our own captures.
+        if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
+            StartLiveGlass();
 
         // Fade in. Slight bar slide for a touch of motion. Window itself stays put —
         // moving Window.Top causes DWM to re-render acrylic each frame, which the user
@@ -495,7 +482,13 @@ public partial class OsdWindow : Window
         };
         fadeOut.Completed += (_, _) =>
         {
-            if (Opacity <= 0.01) Hide();
+            if (Opacity <= 0.01)
+            {
+                Hide();
+                // Stop the live capture loop the moment we're no longer on screen — no
+                // sense burning CPU on per-frame BitBlts when nobody can see them.
+                StopLiveGlass();
+            }
         };
         BeginAnimation(OpacityProperty, fadeOut);
         BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);

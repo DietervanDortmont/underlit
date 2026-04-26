@@ -77,6 +77,20 @@ public static class Acrylic
         }
     }
 
+    /// <summary>
+    /// Disable Windows' automatic 8-px rounded corners + the soft window shadow that
+    /// goes with them. Required for AllowsTransparency=true windows where the visible
+    /// shape comes from our own bitmap's alpha channel — otherwise DWM paints a faint
+    /// 300×66 rounded-rect outline behind whatever we draw, which the user rightly
+    /// flagged as "the rectangle that remains".
+    /// </summary>
+    public static void DisableSystemRounding(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsModernSupported) return;
+        int corner = (int)DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_DONOTROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
+    }
+
     // ---------------- Modern DWM API ----------------
 
     [StructLayout(LayoutKind.Sequential)]

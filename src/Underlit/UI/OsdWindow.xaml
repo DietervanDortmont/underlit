@@ -112,18 +112,11 @@
                 BorderThickness="1"
                 IsHitTestVisible="False"/>
 
-        <!-- Content: icon + bar.
-             Margin compensates for the 10px shadow padding around the pill. The
-             tiny drop shadow on the foreground stays — it gives icons/text a soft
-             halo so they read on the brightest backdrops without going so heavy
-             they look stamped on. -->
+        <!-- Content: icon + bar. No DropShadowEffect — it was casting a faint
+             rectangular halo around the bar/icon shapes that read as "weird shadow
+             behind the pill". Renderer's vibrancy step keeps icons readable on
+             bright backgrounds without an explicit shadow. -->
         <Grid Margin="22,0,24,0" x:Name="ContentRoot">
-            <Grid.Effect>
-                <DropShadowEffect Color="#000000"
-                                  BlurRadius="4"
-                                  ShadowDepth="0"
-                                  Opacity="0.35"/>
-            </Grid.Effect>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="22"/>
                 <ColumnDefinition Width="*"/>

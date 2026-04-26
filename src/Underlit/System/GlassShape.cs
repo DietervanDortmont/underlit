@@ -44,17 +44,17 @@ public static class GlassShape
         public int PillW;
         public int PillH;
         public int BevelPx;
+        public double BevelMaxSlope;
 
         public float[] Normals = Array.Empty<float>();
         public float[] Sdf     = Array.Empty<float>();
     }
 
-    /// <summary>How horizontal the bevel normal becomes at the very rim.
-    /// 1.0 = 45° bevel (gentle). 4.0 = nearly vertical (sharp). 2.5 ≈ Apple-ish.</summary>
-    public const double BevelMaxSlope = 2.5;
+    /// <summary>Default rim slope (overridden by GlassParams.Depth at runtime).</summary>
+    public const double DefaultBevelMaxSlope = 2.5;
 
     public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY,
-                                         int pillW, int pillH, int bevelPx)
+                                         int pillW, int pillH, int bevelPx, double bevelMaxSlope)
     {
         var map = new NormalMap
         {
@@ -62,6 +62,7 @@ public static class GlassShape
             PadX = padX, PadY = padY,
             PillW = pillW, PillH = pillH,
             BevelPx = bevelPx,
+            BevelMaxSlope = bevelMaxSlope,
         };
         int total = fullW * fullH;
         map.Normals = new float[total * 3];
@@ -112,7 +113,7 @@ public static class GlassShape
                 // In the bevel ring. Slope decays from BevelMaxSlope at the rim to 0
                 // at the top of the bevel (cosine profile = quarter circle).
                 double t = sdf / bevelPx;                 // 0 at rim, 1 at top of bevel
-                double horizSlope = BevelMaxSlope * Math.Cos(t * Math.PI / 2);
+                double horizSlope = bevelMaxSlope * Math.Cos(t * Math.PI / 2);
 
                 // Outward direction in xy plane = unit vector from pill axis toward
                 // this pixel. (For straight sides of pill: (0, ±1). For rounded ends:

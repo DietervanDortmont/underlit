@@ -66,7 +66,9 @@ public partial class SettingsWindow : Window
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
-        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth })
+        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth,
+                                     SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
+                                     SldGlassDepth, SldGlassDispersion, SldGlassFrost })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
@@ -314,6 +316,13 @@ public partial class SettingsWindow : Window
         SldRampDuration.Value   = _snapshot.RampDurationMs;
         SldNightWarmth.Value    = _snapshot.NightWarmthKelvin;
 
+        SldGlassLightAngle.Value     = _snapshot.GlassLightAngleDeg;
+        SldGlassLightIntensity.Value = _snapshot.GlassLightIntensity;
+        SldGlassRefraction.Value     = _snapshot.GlassRefraction;
+        SldGlassDepth.Value          = _snapshot.GlassDepth;
+        SldGlassDispersion.Value     = _snapshot.GlassDispersion;
+        SldGlassFrost.Value          = _snapshot.GlassFrost;
+
         TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
         TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;
         TxtHkWrDown.Text = _snapshot.HotkeyWarmthDown;
@@ -391,6 +400,13 @@ public partial class SettingsWindow : Window
         _snapshot.RampDurationMs  = (int)SldRampDuration.Value;
         _snapshot.SmoothRamping   = _snapshot.RampDurationMs > 10;
         _snapshot.NightWarmthKelvin = (int)SldNightWarmth.Value;
+
+        _snapshot.GlassLightAngleDeg  = SldGlassLightAngle.Value;
+        _snapshot.GlassLightIntensity = SldGlassLightIntensity.Value;
+        _snapshot.GlassRefraction     = SldGlassRefraction.Value;
+        _snapshot.GlassDepth          = SldGlassDepth.Value;
+        _snapshot.GlassDispersion     = SldGlassDispersion.Value;
+        _snapshot.GlassFrost          = SldGlassFrost.Value;
 
         _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();
         _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Text.Trim();

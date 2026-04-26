@@ -7,19 +7,15 @@ using System.Windows.Media.Imaging;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Drives the Liquid Glass backdrop for a WPF window (v0.3.1).
+/// Drives the Liquid Glass backdrop for a WPF window (v0.3.2).
 ///
 /// Pipeline:
-///   1. BitBlt the FULL window region behind the OSD (300×66 physical). We capture
-///      MORE than just the pill so refraction at the bevel can sample pixels
-///      slightly outside the pill's shape — that's optically correct, since the
-///      bevel acts as a lens pulling light from beyond its edge.
-///   2. GlassRenderer outputs a 300×66 BGRA bitmap with the pill rendered in
-///      the centre and fully-transparent corners (no shadow halo in v0.3.1).
-///   3. Assign to GlassBackdropBrush — the AllowsTransparency=true window then
-///      shows just the pill, no rectangular outline.
+///   1. BitBlt the FULL window region behind the OSD.
+///   2. GlassRenderer with current GlassParams (light angle, intensity, refraction,
+///      depth, dispersion, frost) outputs a 300×66 BGRA bitmap.
+///   3. Update the persistent WriteableBitmap.
 ///
-/// Live capture is still v0.4 work. This remains a per-show snapshot.
+/// Live capture is still v0.4 work.
 /// </summary>
 public sealed class LiveGlassController : IDisposable
 {
@@ -42,7 +38,10 @@ public sealed class LiveGlassController : IDisposable
         _targetBrush = targetBrush ?? throw new ArgumentNullException(nameof(targetBrush));
     }
 
-    public void RefreshNow()
+    /// <summary>
+    /// Capture and render with the given parameters.
+    /// </summary>
+    public void RefreshNow(GlassParams parameters)
     {
         if (_disposed) return;
         try
@@ -60,12 +59,11 @@ public sealed class LiveGlassController : IDisposable
 
             if (physFullW <= 0 || physFullH <= 0) return;
 
-            _scratch.Configure(physFullW, physFullH, physPadX, physPadY, bevelPx);
+            _scratch.Configure(physFullW, physFullH, physPadX, physPadY, bevelPx, parameters.BevelMaxSlope());
 
-            // Capture the full window region (so refraction at the bevel has headroom).
             using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
 
-            if (!GlassRenderer.Render(capture, _scratch)) return;
+            if (!GlassRenderer.Render(capture, _scratch, parameters)) return;
 
             if (_bitmap == null || _bitmap.PixelWidth != physFullW || _bitmap.PixelHeight != physFullH)
             {

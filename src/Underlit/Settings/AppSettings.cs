@@ -89,6 +89,16 @@ public sealed class AppSettings
     /// <summary>The visual style of the OSD background.</summary>
     public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Subtle;
 
+    // ---- Liquid Glass tunable parameters (v0.3.2) ----
+    // Slider conventions match the Figma "Glass" plugin so the user can hit values
+    // they've already tuned visually elsewhere.
+    public double GlassLightAngleDeg  { get; set; } = -45;
+    public double GlassLightIntensity { get; set; } = 100;
+    public double GlassRefraction     { get; set; } = 8;
+    public double GlassDepth          { get; set; } = 50;
+    public double GlassDispersion     { get; set; } = 0;
+    public double GlassFrost          { get; set; } = 10;
+
     // ---- Schedule (optional baseline curve) ----
 
     public bool ScheduleEnabled { get; set; } = false;

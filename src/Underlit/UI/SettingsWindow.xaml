@@ -360,6 +360,76 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+
+                        <!-- LIQUID GLASS TUNING (active when Backdrop = Liquid Glass) -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="LIQUID GLASS"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                           Text="Six knobs to dial in the look. Press a hotkey while sliding to preview."/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Light angle"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassLightAngle"
+                                            Minimum="-180" Maximum="180"
+                                            VerticalAlignment="Center"
+                                            TickFrequency="15" IsSnapToTickEnabled="False"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassLightAngle, Path=Value, StringFormat={}{0:F0}°}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Light intensity"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassLightIntensity"
+                                            Minimum="0" Maximum="200" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassLightIntensity, Path=Value, StringFormat={}{0:F0}%}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Refraction"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassRefraction"
+                                            Minimum="0" Maximum="30" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassRefraction, Path=Value, StringFormat={}{0:F0}}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Depth"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassDepth"
+                                            Minimum="0" Maximum="100" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassDepth, Path=Value, StringFormat={}{0:F0}}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Dispersion"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassDispersion"
+                                            Minimum="0" Maximum="10" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassDispersion, Path=Value, StringFormat={}{0:F1}}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Frost"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassFrost"
+                                            Minimum="0" Maximum="30" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassFrost, Path=Value, StringFormat={}{0:F0}}"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- HOTKEYS -->

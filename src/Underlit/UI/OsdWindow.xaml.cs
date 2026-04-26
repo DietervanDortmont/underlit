@@ -112,6 +112,7 @@ public partial class OsdWindow : Window
     private Color? _customAccent;
     private bool _useTransparency = true;
     private BackdropStyle _backdrop = BackdropStyle.Subtle;
+    private GlassParams _glass = new();
 
     // ---- Liquid Glass live engine ----
     // Created lazily after the window is first shown (we need an HWND to set
@@ -159,7 +160,8 @@ public partial class OsdWindow : Window
     }
 
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
-                                     TransparencyMode transparencyMode, BackdropStyle backdrop)
+                                     TransparencyMode transparencyMode, BackdropStyle backdrop,
+                                     GlassParams glass)
     {
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
@@ -172,6 +174,7 @@ public partial class OsdWindow : Window
         };
 
         _backdrop = backdrop;
+        _glass = glass.Clone();
 
         if (IsLoaded) ApplyAll();
     }
@@ -189,6 +192,12 @@ public partial class OsdWindow : Window
             | NativeMethods.WS_EX_NOACTIVATE
             | NativeMethods.WS_EX_TOPMOST;
         NativeMethods.SetWindowLong(Hwnd, NativeMethods.GWL_EXSTYLE, ex);
+
+        // CRITICAL: kill DWM's automatic rounded-corner + window-shadow treatment.
+        // Otherwise we get a 300×66 rounded-rect halo behind the actual pill (the
+        // "rectangle that remains" the user flagged in v0.3.1 testing). Our renderer's
+        // alpha channel is the source of truth for shape — DWM should not add anything.
+        Acrylic.DisableSystemRounding(Hwnd);
     }
 
     private void PositionAboveTaskbar()
@@ -412,7 +421,7 @@ public partial class OsdWindow : Window
         if (_liveGlass == null)
             _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
         GlassBackdrop.Visibility = Visibility.Visible;
-        _liveGlass.RefreshNow();
+        _liveGlass.RefreshNow(_glass);
     }
 
     // ---- Animation ----

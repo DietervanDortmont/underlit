@@ -29,38 +29,21 @@ namespace Underlit.Sys;
 /// </summary>
 public static class GlassRenderer
 {
-    // ---- Body / blur ----
-    public const double SaturationBoost   = 1.10;   // Apple's pucks barely amplify colour
-    public const double GlassWashStrength = 0.06;   // tiny frostiness
-    public const int    BlurRadius        = 10;     // mild body blur
+    // ---- Constants (not user-tunable) ----
+    public const double SaturationBoost   = 1.10;
+    public const double GlassWashStrength = 0.06;
     public const int    BlurPasses        = 3;
+    public const int    BevelWidthDip     = 4;
 
-    // ---- Bevel ----
-    public const int    BevelWidthDip     = 4;      // visible-pixel bevel width at 100% scale
-
-    // ---- Refraction strength: peak displacement at the very rim, in physical pixels ----
-    public const float  RefractionStrength = 8f;
-
-    // ---- Lighting ----
-    // Top edge, slight left bias, moderate elevation. The exact values were tuned
-    // so that the brightest spec spot sits on the upper area of the pill — matches
-    // every Apple reference shot the user has shared.
-    private static readonly (float x, float y, float z) LightDir = NormalizeVec(-0.30f, -0.85f, 0.43f);
-    private static readonly (float x, float y, float z) ViewDir  = (0f, 0f, 1f);
-    private static readonly (float x, float y, float z) HalfVec  =
-        NormalizeVec(LightDir.x + ViewDir.x, LightDir.y + ViewDir.y, LightDir.z + ViewDir.z);
-
-    public const float  SpecShininess = 25f;        // soft crescent
-    public const float  SpecIntensity = 1.6f;       // boost since highlight area is small
+    public const float  SpecShininess = 25f;
+    public const float  SpecIntensity = 1.6f;
     public const float  FresnelF0     = 0.04f;
     public const float  FresnelExp    = 5.0f;
     public const float  RimIntensity  = 0.55f;
 
-    // ---- Vibrancy ----
     public const float  VibrancyStartLum = 0.78f;
     public const float  VibrancyMaxDark  = 0.15f;
 
-    // ---- Anti-aliasing at pill edge ----
     public const float  EdgeAaWidth    = 1.2f;
 
     public sealed class Scratch
@@ -81,7 +64,7 @@ public static class GlassRenderer
 
         public GlassShape.NormalMap? NormalMap;
 
-        public void Configure(int fullW, int fullH, int padX, int padY, int bevelPx)
+        public void Configure(int fullW, int fullH, int padX, int padY, int bevelPx, double bevelMaxSlope)
         {
             int pillW = fullW - padX * 2;
             int pillH = fullH - padY * 2;
@@ -108,14 +91,15 @@ public static class GlassRenderer
                 || NormalMap.PadY != padY
                 || NormalMap.PillW != pillW
                 || NormalMap.PillH != pillH
-                || NormalMap.BevelPx != bevelPx)
+                || NormalMap.BevelPx != bevelPx
+                || Math.Abs(NormalMap.BevelMaxSlope - bevelMaxSlope) > 1e-6)
             {
-                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH, bevelPx);
+                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH, bevelPx, bevelMaxSlope);
             }
         }
     }
 
-    public static bool Render(Bitmap fullCapture, Scratch scratch)
+    public static bool Render(Bitmap fullCapture, Scratch scratch, GlassParams p)
     {
         int fullW = fullCapture.Width;
         int fullH = fullCapture.Height;
@@ -147,21 +131,33 @@ public static class GlassRenderer
         // 2 + 3. Saturation + light wash.
         ApplyGlassWashAndSaturation(a, fullW, fullH, fullStride, GlassWashStrength, SaturationBoost);
 
-        // 4. Box blur ×3 → A.
-        for (int pass = 0; pass < BlurPasses; pass++)
+        // 4. Box blur ×3 → A. Frost is the user-tunable blur radius.
+        int blurRadius = Math.Max(0, (int)Math.Round(p.Frost));
+        if (blurRadius > 0)
         {
-            BoxBlurHorizontal(a, b, fullW, fullH, fullStride, BlurRadius);
-            BoxBlurVertical  (b, a, fullW, fullH, fullStride, BlurRadius);
+            for (int pass = 0; pass < BlurPasses; pass++)
+            {
+                BoxBlurHorizontal(a, b, fullW, fullH, fullStride, blurRadius);
+                BoxBlurVertical  (b, a, fullW, fullH, fullStride, blurRadius);
+            }
         }
 
-        // 5. Composite.
-        ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, nmap);
+        // 5. Composite — needs runtime-derived light direction etc.
+        var light = p.LightDirection();
+        var halfVec = NormalizeVec(light.x + 0f, light.y + 0f, light.z + 1f);
+        float intensityMul = (float)p.IntensityMul();
+        float refraction = (float)p.Refraction;
+        float dispersion = (float)p.Dispersion;
+        ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, nmap,
+                           halfVec, intensityMul, refraction, dispersion);
 
         return true;
     }
 
     private static void ShadeAndComposite(byte[] body, byte[] dst, int fullW, int fullH, int fullStride,
-                                           GlassShape.NormalMap nmap)
+                                           GlassShape.NormalMap nmap,
+                                           (float x, float y, float z) halfVec,
+                                           float intensityMul, float refraction, float dispersion)
     {
         float[] normals = nmap.Normals;
         float[] sdf = nmap.Sdf;
@@ -189,14 +185,42 @@ public static class GlassRenderer
                 float nz = normals[pi * 3 + 2];
 
                 // Refraction sample — body buffer has full window coords.
-                int sx = x + (int)MathF.Round(nx * RefractionStrength);
-                int sy = y + (int)MathF.Round(ny * RefractionStrength);
-                if (sx < 0) sx = 0; else if (sx >= fullW) sx = fullW - 1;
-                if (sy < 0) sy = 0; else if (sy >= fullH) sy = fullH - 1;
-                int srcIdx = sy * fullStride + sx * 4;
-                int B = body[srcIdx + 0];
-                int G = body[srcIdx + 1];
-                int R = body[srcIdx + 2];
+                // With dispersion, R/G/B sample at slightly different offsets, mimicking
+                // chromatic aberration of real glass: red bends least, blue bends most.
+                int B, G, R;
+                if (dispersion > 0.01f && (nx != 0 || ny != 0))
+                {
+                    // Per-channel offset scale: R = refraction - dispersion/2, B = refraction + dispersion/2
+                    float refrR = refraction - dispersion * 0.5f;
+                    float refrG = refraction;
+                    float refrB = refraction + dispersion * 0.5f;
+                    int rxR = x + (int)MathF.Round(nx * refrR);
+                    int ryR = y + (int)MathF.Round(ny * refrR);
+                    int rxG = x + (int)MathF.Round(nx * refrG);
+                    int ryG = y + (int)MathF.Round(ny * refrG);
+                    int rxB = x + (int)MathF.Round(nx * refrB);
+                    int ryB = y + (int)MathF.Round(ny * refrB);
+                    if (rxR < 0) rxR = 0; else if (rxR >= fullW) rxR = fullW - 1;
+                    if (ryR < 0) ryR = 0; else if (ryR >= fullH) ryR = fullH - 1;
+                    if (rxG < 0) rxG = 0; else if (rxG >= fullW) rxG = fullW - 1;
+                    if (ryG < 0) ryG = 0; else if (ryG >= fullH) ryG = fullH - 1;
+                    if (rxB < 0) rxB = 0; else if (rxB >= fullW) rxB = fullW - 1;
+                    if (ryB < 0) ryB = 0; else if (ryB >= fullH) ryB = fullH - 1;
+                    R = body[ryR * fullStride + rxR * 4 + 2];
+                    G = body[ryG * fullStride + rxG * 4 + 1];
+                    B = body[ryB * fullStride + rxB * 4 + 0];
+                }
+                else
+                {
+                    int sx = x + (int)MathF.Round(nx * refraction);
+                    int sy = y + (int)MathF.Round(ny * refraction);
+                    if (sx < 0) sx = 0; else if (sx >= fullW) sx = fullW - 1;
+                    if (sy < 0) sy = 0; else if (sy >= fullH) sy = fullH - 1;
+                    int srcIdx = sy * fullStride + sx * 4;
+                    B = body[srcIdx + 0];
+                    G = body[srcIdx + 1];
+                    R = body[srcIdx + 2];
+                }
 
                 // Vibrancy
                 float lum = (R * 0.299f + G * 0.587f + B * 0.114f) / 255f;
@@ -210,13 +234,11 @@ public static class GlassRenderer
                     B = (int)(B * darken);
                 }
 
-                // Phong specular — peaks where bevel normal aligns with H. Flat top has
-                // N=(0,0,1) so N·H = HalfVec.z ~0.85, but pow(0.85, 25) ≈ 0.018 — tiny,
-                // produces no visible spec on the body. Bevel normals can match H more
-                // closely → strong localised highlight. Exactly the behaviour we want.
-                float NdotH = nx * HalfVec.x + ny * HalfVec.y + nz * HalfVec.z;
+                // Phong specular — peaks where bevel normal aligns with H. Light angle
+                // (and hence halfVec) is runtime-tunable.
+                float NdotH = nx * halfVec.x + ny * halfVec.y + nz * halfVec.z;
                 if (NdotH < 0f) NdotH = 0f;
-                float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity;
+                float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
                 // Schlick Fresnel rim — flat top has N·V = 1 → Fresnel = F0 (essentially 0).
                 // Bevel ring has N·V < 1 → Fresnel rises rapidly. Auto-thin rim.
@@ -224,7 +246,7 @@ public static class GlassRenderer
                 if (NdotV < 0f) NdotV = 0f;
                 float oneMinus = 1f - NdotV;
                 float fresnel = FresnelF0 + (1f - FresnelF0) * MathF.Pow(oneMinus, FresnelExp);
-                fresnel *= RimIntensity;
+                fresnel *= RimIntensity * intensityMul;
 
                 int specAdd = (int)(spec * 255f);
                 int rimAdd  = (int)(fresnel * 255f);

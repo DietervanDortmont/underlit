@@ -55,7 +55,8 @@ public sealed class UnderlitHost : IDisposable
             _settings.FollowWindowsAccent,
             ParseColor(_settings.OsdAccentColor),
             _settings.TransparencyEffects,
-            _settings.OsdBackdrop);
+            _settings.OsdBackdrop,
+            GlassParamsFromSettings(_settings));
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -266,8 +267,19 @@ public sealed class UnderlitHost : IDisposable
             next.FollowWindowsAccent,
             ParseColor(next.OsdAccentColor),
             next.TransparencyEffects,
-            next.OsdBackdrop);
+            next.OsdBackdrop,
+            GlassParamsFromSettings(next));
     }
+
+    private static Underlit.Sys.GlassParams GlassParamsFromSettings(AppSettings s) => new()
+    {
+        LightAngleDeg  = s.GlassLightAngleDeg,
+        LightIntensity = s.GlassLightIntensity,
+        Refraction     = s.GlassRefraction,
+        Depth          = s.GlassDepth,
+        Dispersion     = s.GlassDispersion,
+        Frost          = s.GlassFrost,
+    };
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>
     private static System.Windows.Media.Color? ParseColor(string? hex)

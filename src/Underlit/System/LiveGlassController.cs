@@ -8,106 +8,58 @@ using System.Windows.Media.Imaging;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Drives a live Liquid Glass backdrop for a WPF window.
+/// Drives the Liquid Glass backdrop for a WPF window.
 ///
-/// Each tick (throttled to ~30 fps so we don't burn CPU at 240Hz monitor refresh):
-///   1. BitBlt the screen pixels behind the window's current Left/Top/Width/Height.
-///   2. Run them through GlassRenderer (blur + saturation + edge refraction + sheen)
-///      using a per-controller scratch buffer (zero allocation per frame).
-///   3. WritePixels into a persistent WriteableBitmap.
-///   4. Assign the bitmap to the target ImageBrush ONCE — subsequent updates flow
-///      through automatically because WriteableBitmap notifies WPF on AddDirtyRect.
+/// Strategy notes (v0.2.3 — pragmatic fallback after the live-loop attempt):
 ///
-/// Why this works without flicker / feedback:
-///   We mark the host window with WDA_EXCLUDEFROMCAPTURE so the BitBlt of the
-///   desktop region simply does not contain our window's pixels. This lets us
-///   capture continuously while the window is visible — no cloak/uncloak needed.
-///   On Win10 builds older than 2004 the affinity call is a no-op; we still try
-///   to capture but the user might see a feedback ring. The OS minimum is enforced
-///   by the project's TargetFramework so this rarely matters.
+///   The "real" Apple Liquid Glass needs *true* live blur of the desktop behind
+///   the window. On Windows, BitBlt of the desktop DC is the cheap option — but
+///   to exclude OUR window from those captures (so we don't get a feedback loop)
+///   the only flag that exists is WDA_EXCLUDEFROMCAPTURE, which is an anti-screen-
+///   capture (DRM) feature: it makes the window appear as a *black rectangle* in
+///   any capture, not "see-through". So a per-frame BitBlt loop captures black,
+///   blurs black, and the OSD stays dark. It's a dead end.
+///
+///   The proper fix is Windows.Graphics.Capture or DXGI Output Duplication, both
+///   of which can return the desktop minus our window via the DWM compositor.
+///   That's a real interop project and is deferred.
+///
+///   For now we capture ONCE per Show() — when the OSD goes from hidden to
+///   visible. The window isn't on screen yet so we don't need to exclude it.
+///   This freezes the glass during the 1.3s display, but every press starts
+///   fresh and the look is right. Switching modes back-and-forth no longer
+///   leaves stale state because Start() re-asserts the brush.ImageSource.
 /// </summary>
 public sealed class LiveGlassController : IDisposable
 {
     private readonly Window _window;
     private readonly ImageBrush _targetBrush;
     private readonly GlassRenderer.Scratch _scratch = new();
-    private readonly TimeSpan _frameInterval;
 
     private WriteableBitmap? _bitmap;
-    private long _lastTickTicks;
-    private bool _running;
-    private bool _affinitySet;
     private bool _disposed;
 
     public LiveGlassController(Window window, ImageBrush targetBrush, int targetFps = 30)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _targetBrush = targetBrush ?? throw new ArgumentNullException(nameof(targetBrush));
-        if (targetFps < 1) targetFps = 30;
-        _frameInterval = TimeSpan.FromMilliseconds(1000.0 / targetFps);
+        // targetFps reserved for the future Windows.Graphics.Capture path.
     }
 
-    public bool IsRunning => _running;
-
-    /// <summary>Begin per-frame capture/render. Idempotent.</summary>
-    public void Start()
-    {
-        if (_disposed || _running) return;
-        EnsureExcludeFromCapture();
-        CompositionTarget.Rendering += OnRendering;
-        _running = true;
-
-        // First frame inline — guarantees the OSD doesn't show a black or stale backdrop
-        // on its initial fade-in. CompositionTarget.Rendering doesn't fire until the next
-        // frame, which would be ~16ms after Show().
-        TryRender();
-    }
-
-    /// <summary>Stop per-frame capture. Idempotent.</summary>
-    public void Stop()
-    {
-        if (!_running) return;
-        CompositionTarget.Rendering -= OnRendering;
-        _running = false;
-    }
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        Stop();
-        _bitmap = null;
-    }
-
-    private void EnsureExcludeFromCapture()
-    {
-        if (_affinitySet) return;
-        var helper = new WindowInteropHelper(_window);
-        IntPtr hwnd = helper.Handle;
-        if (hwnd != IntPtr.Zero)
-        {
-            WindowDisplayAffinity.ExcludeFromCapture(hwnd);
-            _affinitySet = true;
-        }
-        // If hwnd is still Zero (window not Show()n yet), we'll retry next tick.
-    }
-
-    private void OnRendering(object? sender, EventArgs e)
-    {
-        long now = DateTime.UtcNow.Ticks;
-        if (now - _lastTickTicks < _frameInterval.Ticks) return;
-        _lastTickTicks = now;
-        TryRender();
-    }
-
-    private void TryRender()
+    /// <summary>
+    /// Capture the screen pixels currently behind the window's location and paint them
+    /// through GlassRenderer (blur + saturation + edge refraction + sheen) into the
+    /// target ImageBrush.
+    ///
+    /// Call this BEFORE the window's Show() so the OSD itself isn't part of the BitBlt.
+    /// Each call always re-asserts brush.ImageSource — important after a mode-flip
+    /// nulled it out.
+    /// </summary>
+    public void RefreshNow()
     {
         if (_disposed) return;
         try
         {
-            EnsureExcludeFromCapture();
-
-            // Compute physical-pixel rect from the window's current logical position.
             var src = PresentationSource.FromVisual(_window);
             double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
             int physW = Math.Max(1, (int)Math.Round(_window.Width  * scale));
@@ -116,21 +68,17 @@ public sealed class LiveGlassController : IDisposable
             int physY = (int)Math.Round(_window.Top  * scale);
 
             using var captured = ScreenCapture.CaptureRegion(physX, physY, physW, physH);
-            if (!GlassRenderer.Render(captured, _scratch))
-                return;
+            if (!GlassRenderer.Render(captured, _scratch)) return;
 
-            // Lazily (re)create the WriteableBitmap when size changes — usually just once per session.
             if (_bitmap == null || _bitmap.PixelWidth != physW || _bitmap.PixelHeight != physH)
             {
                 _bitmap = new WriteableBitmap(physW, physH, 96, 96, PixelFormats.Bgra32, null);
-                _targetBrush.ImageSource = _bitmap;
             }
 
             _bitmap.Lock();
             try
             {
-                int rowBytes = _scratch.Stride;
-                int totalBytes = rowBytes * _scratch.Height;
+                int totalBytes = _scratch.Stride * _scratch.Height;
                 Marshal.Copy(_scratch.Output, 0, _bitmap.BackBuffer, totalBytes);
                 _bitmap.AddDirtyRect(new Int32Rect(0, 0, physW, physH));
             }
@@ -138,11 +86,22 @@ public sealed class LiveGlassController : IDisposable
             {
                 _bitmap.Unlock();
             }
+
+            // Always re-assert — ApplyVisuals nulls this out on mode flips. If we don't
+            // re-assert here, the OSD shows the bare TintLayer (which looks dark) no
+            // matter how many times we re-capture.
+            _targetBrush.ImageSource = _bitmap;
         }
         catch (Exception ex)
         {
-            // Best-effort. Log once, don't spam.
-            Logger.Warn("LiveGlassController tick failed", ex);
+            Logger.Warn("Glass capture failed", ex);
         }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _bitmap = null;
     }
 }

@@ -357,20 +357,13 @@ public partial class OsdWindow : Window
         GlassSideRefraction.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
         GlassBottomSheen.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
 
-        // Captured-and-blurred backdrop is only used in Liquid Glass mode. The live
-        // engine writes into GlassBackdropBrush in place; here we just gate visibility
-        // and start/stop it on mode changes so we can't accidentally leave a CPU loop
-        // running after the user switches modes.
+        // Captured-and-blurred backdrop is only used in Liquid Glass mode. RefreshNow()
+        // re-asserts brush.ImageSource on every call, so it's safe to null it here on a
+        // mode flip — the next Flash() will repaint cleanly.
         if (!isGlass)
         {
-            StopLiveGlass();
             GlassBackdrop.Visibility = Visibility.Collapsed;
             GlassBackdropBrush.ImageSource = null;
-        }
-        else if (IsVisible && useBlur)
-        {
-            // Mid-session mode flip into LiquidGlass while OSD is on screen — start now.
-            StartLiveGlass();
         }
 
         // Bar elements
@@ -397,25 +390,20 @@ public partial class OsdWindow : Window
         Acrylic.Apply(Hwnd, kind, _darkMode);
     }
 
-    // ---- Liquid Glass live engine ----
+    // ---- Liquid Glass capture ----
 
     /// <summary>
-    /// Start (or keep running) the per-frame capture+blur+displacement loop. The loop
-    /// updates GlassBackdropBrush in-place so the OSD shows true live refraction of
-    /// whatever is currently behind it.
+    /// Capture the screen pixels behind us NOW, run them through GlassRenderer, and
+    /// paint into GlassBackdropBrush. Call before Show() so the OSD window isn't in
+    /// the capture (we don't have a flicker-free "exclude from capture" mechanism on
+    /// Windows yet — see LiveGlassController docstring).
     /// </summary>
-    private void StartLiveGlass()
+    private void RefreshGlass()
     {
         if (_liveGlass == null)
-            _liveGlass = new LiveGlassController(this, GlassBackdropBrush, targetFps: 30);
+            _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
         GlassBackdrop.Visibility = Visibility.Visible;
-        _liveGlass.Start();
-    }
-
-    /// <summary>Stop the live loop. Brush keeps its last frame so the fade-out doesn't flash.</summary>
-    private void StopLiveGlass()
-    {
-        _liveGlass?.Stop();
+        _liveGlass.RefreshNow();
     }
 
     // ---- Animation ----
@@ -427,17 +415,18 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
+            // Capture the screen pixels behind our about-to-show position BEFORE Show()
+            // so we don't include ourselves in the BitBlt. The capture is frozen during
+            // the 1.3s display, but each new press starts fresh — same model Apple uses
+            // for transient flyouts on iOS lock-screen Control Center.
+            if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
+                RefreshGlass();
+
             // Initial states for the in-animation
             Opacity = 0;
             BarSlideTransform.Y = SlideDistance;
             Show();
         }
-
-        // Start (or keep) the live glass engine running while we're shown. It captures
-        // every frame, so we always see what's behind us right now. WDA_EXCLUDEFROMCAPTURE
-        // (set by the controller) keeps us out of our own captures.
-        if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
-            StartLiveGlass();
 
         // Fade in. Slight bar slide for a touch of motion. Window itself stays put —
         // moving Window.Top causes DWM to re-render acrylic each frame, which the user
@@ -482,13 +471,7 @@ public partial class OsdWindow : Window
         };
         fadeOut.Completed += (_, _) =>
         {
-            if (Opacity <= 0.01)
-            {
-                Hide();
-                // Stop the live capture loop the moment we're no longer on screen — no
-                // sense burning CPU on per-frame BitBlts when nobody can see them.
-                StopLiveGlass();
-            }
+            if (Opacity <= 0.01) Hide();
         };
         BeginAnimation(OpacityProperty, fadeOut);
         BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);

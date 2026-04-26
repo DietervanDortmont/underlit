@@ -30,14 +30,25 @@ namespace Underlit.Sys;
 /// </summary>
 public static class GlassRenderer
 {
-    public const double GlassWashStrength = 0.16;   // 0..1 — pull pixels toward white
-    public const double SaturationBoost   = 1.18;   // 1.0 = identity. Apple glass amplifies colour.
-    public const int    BlurRadius        = 14;     // total blur radius in physical pixels
+    // ---- Visual constants tuned to match iOS Control Center / macOS Tahoe Liquid Glass ----
+    //
+    // I reverse-engineered these from the iOS 26 Control Center reference shots:
+    //   - The blur is HEAVY — clearly more than 20 px gaussian on a 4× retina capture, so
+    //     ~22 px on our 1× capture works out roughly the same perceptually.
+    //   - The behind-content colour is amplified by ~30% — saturation > 1.
+    //   - There is almost no white wash on the body. The blur itself plus the rim sheen
+    //     do the "glassy" work; pulling the body toward white kills the see-through feel.
+    //   - The rim has a clear bright crown, brighter at the top, that's about 3 px wide.
+    //   - Edge refraction (light bending inward at the curved rim) is visible roughly
+    //     20 px deep with a peak displacement of ~12 px — that's the "lensed pill" look.
+    public const double GlassWashStrength = 0.06;   // very subtle white wash
+    public const double SaturationBoost   = 1.32;   // pop the colour underneath
+    public const int    BlurRadius        = 22;     // heavier gaussian — frostier
     public const int    BlurPasses        = 3;      // 3 box passes ≈ gaussian
-    public const int    EdgeWidth         = 16;     // displacement zone in physical pixels
-    public const int    MaxOffset         = 10;     // peak refraction displacement in physical pixels
-    public const double EdgeSheenStrength = 0.32;   // 0..1 white-wash strength right on the rim
-    public const int    EdgeSheenPx       = 2;      // outer ring thickness for the sheen
+    public const int    EdgeWidth         = 20;     // deeper rim refraction zone
+    public const int    MaxOffset         = 12;     // peak refraction displacement
+    public const double EdgeSheenStrength = 0.55;   // bright crown on the rim
+    public const int    EdgeSheenPx       = 3;      // outer ring thickness for the sheen
 
     /// <summary>
     /// Buffers owned by the caller — let us avoid GC churn at 30fps.

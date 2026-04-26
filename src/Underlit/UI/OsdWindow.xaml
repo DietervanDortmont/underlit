@@ -111,8 +111,17 @@
                 BorderThickness="1"
                 IsHitTestVisible="False"/>
 
-        <!-- Content: icon + bar -->
-        <Grid Margin="12,0,14,0">
+        <!-- Content: icon + bar.
+             ContentRoot has a soft drop shadow so foreground elements (icon, bar)
+             stay legible regardless of how light or dark the captured backdrop is —
+             the analogue of Apple's "vibrancy" effect on glass overlays. -->
+        <Grid Margin="12,0,14,0" x:Name="ContentRoot">
+            <Grid.Effect>
+                <DropShadowEffect Color="#000000"
+                                  BlurRadius="6"
+                                  ShadowDepth="0"
+                                  Opacity="0.55"/>
+            </Grid.Effect>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="22"/>
                 <ColumnDefinition Width="*"/>

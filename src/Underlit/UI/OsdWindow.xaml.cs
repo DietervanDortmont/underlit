@@ -330,21 +330,23 @@ public partial class OsdWindow : Window
         bool isGlass = _backdrop == BackdropStyle.LiquidGlass;
 
         // Tint layer colour:
+        // In LiquidGlass mode the captured image is the body — we don't tint over it,
+        // the renderer already handled everything (vibrancy, saturation, frost).
         Color tint = _backdrop switch
         {
             BackdropStyle.Solid       => p.SolidBg,
             BackdropStyle.Subtle      => useBlur ? p.AcrylicTint : p.SolidBg,
-            BackdropStyle.LiquidGlass => p.AcrylicTint,    // already glass-light
+            BackdropStyle.LiquidGlass => Color.FromArgb(0, 0, 0, 0),    // transparent
             _                         => p.SolidBg,
         };
         TintLayer.Background = new SolidColorBrush(tint);
 
-        // Edge ring: thin and theme-coloured in Solid/Subtle; thicker/brighter
-        // in Liquid Glass to give a defined "rim of light" like a real glass edge.
+        // Edge ring: in Solid/Subtle modes only — gives a thin theme-coloured outline.
+        // In Liquid Glass mode the renderer's Fresnel does the rim properly so we
+        // suppress this one to avoid stacking two rim treatments.
         if (isGlass)
         {
-            EdgeRing.BorderBrush = new SolidColorBrush(Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF));
-            EdgeRing.BorderThickness = new Thickness(1);
+            EdgeRing.BorderThickness = new Thickness(0);
         }
         else
         {
@@ -352,10 +354,13 @@ public partial class OsdWindow : Window
             EdgeRing.BorderThickness = new Thickness(1);
         }
 
-        // Glass overlays show only in LiquidGlass mode.
-        GlassSpecular.Visibility       = isGlass ? Visibility.Visible : Visibility.Collapsed;
-        GlassSideRefraction.Visibility = isGlass ? Visibility.Visible : Visibility.Collapsed;
-        GlassBottomSheen.Visibility    = isGlass ? Visibility.Visible : Visibility.Collapsed;
+        // Old gradient overlays — DEPRECATED in v0.2.4. The renderer now bakes the
+        // specular highlight, side refraction, and bottom sheen into the captured
+        // image using a proper normal map and directional Phong+Fresnel lighting.
+        // We keep the elements so existing layout stays put, but always Collapsed.
+        GlassSpecular.Visibility       = Visibility.Collapsed;
+        GlassSideRefraction.Visibility = Visibility.Collapsed;
+        GlassBottomSheen.Visibility    = Visibility.Collapsed;
 
         // Captured-and-blurred backdrop is only used in Liquid Glass mode. RefreshNow()
         // re-asserts brush.ImageSource on every call, so it's safe to null it here on a

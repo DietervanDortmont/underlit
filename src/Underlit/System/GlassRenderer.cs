@@ -2,9 +2,9 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using DPixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace Underlit.Sys;
 
@@ -50,7 +50,7 @@ public static class GlassRenderer
 
         // -------- 1. Read pixels into a managed BGRA byte buffer --------
         var rect  = new Rectangle(0, 0, w, h);
-        var data  = input.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var data  = input.LockBits(rect, ImageLockMode.ReadOnly, DPixelFormat.Format32bppArgb);
         int stride = data.Stride;
         byte[] src = new byte[stride * h];
         Marshal.Copy(data.Scan0, src, 0, src.Length);

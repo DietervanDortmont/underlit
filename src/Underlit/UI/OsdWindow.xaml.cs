@@ -395,17 +395,18 @@ public partial class OsdWindow : Window
         WarmthStartStop.Color  = p.WarmthStart;
     }
 
-    /// <summary>Applies (or removes) the DWM backdrop.
-    ///
-    /// Note: DWM acrylic and AllowsTransparency=true are mutually exclusive — DWM's
-    /// modern backdrop API requires a non-layered window. Since v0.3 the OSD is
-    /// AllowsTransparency=true (so the renderer can draw a true pill shape), we no
-    /// longer apply DWM acrylic at all. Subtle mode still renders via the TintLayer
-    /// (a translucent border), and LiquidGlass via the captured-image path.</summary>
+    /// <summary>
+    /// Intentionally a no-op in v0.3.3+. The OSD window is AllowsTransparency=true,
+    /// which means DWM's modern backdrop API doesn't apply anyway. Calling
+    /// Acrylic.Apply here was actively harmful — it called DwmExtendFrameIntoClientArea
+    /// and reset DWMWA_WINDOW_CORNER_PREFERENCE to ROUND, painting a 300×66 rounded
+    /// rectangle outline behind the pill (the "weird frame" the user kept flagging).
+    /// We disable system rounding once in OnSourceInitialized and never touch DWM
+    /// attributes for this window again.
+    /// </summary>
     private void ApplyBackdrop()
     {
-        if (Hwnd == IntPtr.Zero) return;
-        Acrylic.Apply(Hwnd, Acrylic.Backdrop.None, _darkMode);
+        // No DWM calls. The renderer is the entire visual.
     }
 
     // ---- Liquid Glass capture ----
@@ -422,6 +423,40 @@ public partial class OsdWindow : Window
             _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
         GlassBackdrop.Visibility = Visibility.Visible;
         _liveGlass.RefreshNow(_glass);
+        ApplyAdaptiveIconColor(_liveGlass.LastPillLuminance);
+    }
+
+    /// <summary>
+    /// "Vibrancy"-style icon contrast. When the captured area behind the icon is
+    /// bright (white wallpaper, light webpage) the icon flips to a near-black tone
+    /// so it reads cleanly. When the backdrop is dark, it stays bright white.
+    ///
+    /// We use a soft transition around 0.50 luminance so the icon doesn't pop
+    /// between black and white at every keypress when the user is on a mid-tone
+    /// background.
+    /// </summary>
+    private void ApplyAdaptiveIconColor(float lum)
+    {
+        if (_backdrop != BackdropStyle.LiquidGlass) return;
+
+        // Smooth lerp between dark and light foreground depending on backdrop luminance.
+        // Below 0.45 = pure light; above 0.65 = pure dark; in between = a smooth blend.
+        double t;
+        if (lum <= 0.45f) t = 0.0;
+        else if (lum >= 0.65f) t = 1.0;
+        else t = (lum - 0.45f) / 0.20f;
+
+        // Light side: bright white (icon glows on dark backdrops).
+        // Dark side: near-black so it reads on white wallpapers.
+        byte channel = (byte)Math.Round(255 * (1.0 - t * 0.88));   // 255 → 30
+        var color = Color.FromRgb(channel, channel, channel);
+
+        IconText.Foreground = new SolidColorBrush(color);
+        CandleIcon.Fill = new SolidColorBrush(color);
+
+        // Same adaptive logic for the bar's mid-marker so it tracks contrast.
+        MidMarker.Background = new SolidColorBrush(
+            Color.FromArgb(0xCC, channel, channel, channel));
     }
 
     // ---- Animation ----

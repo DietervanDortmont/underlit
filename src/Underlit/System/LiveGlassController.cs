@@ -32,6 +32,13 @@ public sealed class LiveGlassController : IDisposable
     private WriteableBitmap? _bitmap;
     private bool _disposed;
 
+    /// <summary>
+    /// Average luminance (0..1) of the captured pixels behind the icon zone of the
+    /// pill, populated by RefreshNow(). Used by the OSD to set adaptive icon colour
+    /// — dark icons on bright backdrops, light icons on dark backdrops.
+    /// </summary>
+    public float LastPillLuminance { get; private set; } = 0.5f;
+
     public LiveGlassController(Window window, ImageBrush targetBrush)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
@@ -64,6 +71,7 @@ public sealed class LiveGlassController : IDisposable
             using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
 
             if (!GlassRenderer.Render(capture, _scratch, parameters)) return;
+            LastPillLuminance = GlassRenderer.LastPillLuminance;
 
             if (_bitmap == null || _bitmap.PixelWidth != physFullW || _bitmap.PixelHeight != physFullH)
             {

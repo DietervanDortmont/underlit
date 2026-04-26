@@ -33,7 +33,9 @@ public static class GlassRenderer
     public const double SaturationBoost   = 1.10;
     public const double GlassWashStrength = 0.06;
     public const int    BlurPasses        = 3;
-    public const int    BevelWidthDip     = 4;
+    // Wider bevel = refraction visible deeper into the body (Apple's pucks have
+    // visible lens warping for ~⅓ the inset, not just the rim).
+    public const int    BevelWidthDip     = 10;
 
     public const float  SpecShininess = 25f;
     public const float  SpecIntensity = 1.6f;
@@ -99,6 +101,14 @@ public static class GlassRenderer
         }
     }
 
+    /// <summary>
+    /// Average linear-ish luminance of the captured pill region BEFORE we apply blur,
+    /// expressed as 0..1. Computed as a side-effect of Render() so the caller can use
+    /// it for adaptive icon contrast (light backdrop → dark icon, vice versa). Apple
+    /// calls this "vibrancy" — the foreground inverts to stay legible.
+    /// </summary>
+    public static float LastPillLuminance { get; private set; } = 0.5f;
+
     public static bool Render(Bitmap fullCapture, Scratch scratch, GlassParams p)
     {
         int fullW = fullCapture.Width;
@@ -127,6 +137,10 @@ public static class GlassRenderer
             }
         }
         finally { fullCapture.UnlockBits(data); }
+
+        // Compute average luminance of the captured pixels behind the pill (before
+        // any saturation / blur / shading). Used for adaptive icon contrast.
+        LastPillLuminance = ComputePillLuminance(a, fullW, fullH, fullStride, nmap);
 
         // 2 + 3. Saturation + light wash.
         ApplyGlassWashAndSaturation(a, fullW, fullH, fullStride, GlassWashStrength, SaturationBoost);
@@ -397,5 +411,36 @@ public static class GlassRenderer
         float mag = MathF.Sqrt(x * x + y * y + z * z);
         if (mag < 1e-9f) return (0, 0, 1);
         return (x / mag, y / mag, z / mag);
+    }
+
+    /// <summary>
+    /// Average luminance across just the LEFT THIRD of the pill region (where the
+    /// status icon sits). Returns 0..1. We average only the icon zone so a busy
+    /// rainbow of content over the slider doesn't pull the icon's adaptive colour
+    /// off — the icon adapts to what's under the icon.
+    /// </summary>
+    private static float ComputePillLuminance(byte[] body, int fullW, int fullH, int fullStride,
+                                                GlassShape.NormalMap nmap)
+    {
+        float[] sdf = nmap.Sdf;
+        int leftThirdEnd = nmap.PadX + nmap.PillW / 3;
+
+        long sumLum = 0;
+        int count = 0;
+        for (int y = 0; y < fullH; y++)
+        {
+            for (int x = 0; x < leftThirdEnd; x++)
+            {
+                int pi = y * fullW + x;
+                if (sdf[pi] <= 0) continue;
+                int idx = y * fullStride + x * 4;
+                int B = body[idx + 0];
+                int G = body[idx + 1];
+                int R = body[idx + 2];
+                sumLum += (R * 77 + G * 150 + B * 29) >> 8;
+                count++;
+            }
+        }
+        return count > 0 ? (sumLum / (float)count) / 255f : 0.5f;
     }
 }

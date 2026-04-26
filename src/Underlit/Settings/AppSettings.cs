@@ -94,7 +94,7 @@ public sealed class AppSettings
     // they've already tuned visually elsewhere.
     public double GlassLightAngleDeg  { get; set; } = -45;
     public double GlassLightIntensity { get; set; } = 100;
-    public double GlassRefraction     { get; set; } = 8;
+    public double GlassRefraction     { get; set; } = 16;
     public double GlassDepth          { get; set; } = 50;
     public double GlassDispersion     { get; set; } = 0;
     public double GlassFrost          { get; set; } = 10;

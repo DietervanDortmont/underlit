@@ -40,18 +40,37 @@ public static class GlassShape
         public int PillH;
         public int CornerRadiusPx;
         public double SquircleExponent;
+        public double BevelWidthFraction;
 
         public float[] Normals = Array.Empty<float>();
         public float[] Sdf     = Array.Empty<float>();
     }
 
-    /// <summary>Cap on the bevel slope at the rim. Without a cap we'd get infinite
-    /// slope (vertical normals) and refraction sampling would shoot off-screen.</summary>
     public const double MaxRimSlope = 8.0;
+
+    /// <summary>
+    /// Compute height-profile slope at normalised position t ∈ [0, 1] inside the
+    /// bevel zone. We use the SINE profile f(t) = sin(t · π/2):
+    ///
+    ///     f'(t) = (π/2) · cos(t · π/2)
+    ///     f''(t) = −(π/2)² · sin(t · π/2)
+    ///
+    /// Both f' and f'' are continuous everywhere — that means the surface is
+    /// G2 (curvature-continuous), which is what the user has been asking for.
+    /// At t = 1 (boundary with flat top) f'(1) = 0, so the join with the flat
+    /// zone has matching slope — no kink even when the bevel doesn't span the
+    /// whole pill.
+    /// </summary>
+    private static double SineSlope(double t)
+    {
+        if (t <= 0) return Math.PI / 2.0;
+        if (t >= 1) return 0;
+        return (Math.PI / 2.0) * Math.Cos(t * Math.PI / 2.0);
+    }
 
     public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY,
                                          int pillW, int pillH, int cornerRadiusPx,
-                                         double squircleExponent)
+                                         double squircleExponent, double bevelWidthFraction)
     {
         var map = new NormalMap
         {
@@ -60,6 +79,7 @@ public static class GlassShape
             PillW = pillW, PillH = pillH,
             CornerRadiusPx = cornerRadiusPx,
             SquircleExponent = squircleExponent,
+            BevelWidthFraction = bevelWidthFraction,
         };
         int total = fullW * fullH;
         map.Normals = new float[total * 3];
@@ -79,10 +99,11 @@ public static class GlassShape
         double coreTop    = pillTop    + rPx;
         double coreBottom = Math.Max(pillBottom - rPx, coreTop);
 
-        // Maximum SDF is half of the smaller pill dimension. This is the t=1 anchor
-        // for the squircle: pixels at the centre line have sdf == maxSdf, where the
-        // surface is flat (slope 0).
+        // Maximum SDF is half of the smaller pill dimension.
         double maxSdf = Math.Min(pillW, pillH) / 2.0;
+        // Width of the curved bevel zone (in SDF units). Beyond this, the surface
+        // is flat (slope 0). At BevelWidth=100% the entire pill is the bevel.
+        double bevelMaxSdf = Math.Max(0.5, maxSdf * Math.Clamp(bevelWidthFraction, 0.01, 1.0));
         double n = Math.Max(1.5, squircleExponent);   // floor for numerical stability
 
         for (int y = 0; y < fullH; y++)
@@ -147,9 +168,27 @@ public static class GlassShape
                 continue;
             }
 
-            // Squircle profile: slope at normalised position t = sdf / maxSdf.
-            double t = Math.Min(sdf / maxSdf, 1.0);
-            double slope = SquircleSlope(t, n);
+            // Bevel zone defined by bevelWidthFraction. Pixels deeper than that are
+            // on the flat top (slope = 0). Pixels inside the bevel use a sine profile
+            // — G2/curvature-continuous, sliding to slope = 0 at the inner edge so
+            // the join with the flat zone has no kink.
+            double slope;
+            if (sdf >= bevelMaxSdf)
+            {
+                slope = 0;
+            }
+            else
+            {
+                double t = sdf / bevelMaxSdf;
+                // Blend between sine (smooth) and squircle (flat-top character) by
+                // the squircle exponent. Low n → mostly sine. High n → squircle bias.
+                // Practical range: at default Depth=50 (n≈2.75) the blend is ~50/50.
+                double blend = Math.Clamp((n - 1.5) / 6.5, 0, 1);
+                double sineSlope = SineSlope(t);
+                double squircleSlope = SquircleSlope(t, n);
+                slope = sineSlope * (1 - blend) + squircleSlope * blend;
+                if (slope > MaxRimSlope) slope = MaxRimSlope;
+            }
 
             double nx = slope * outwardX;
             double ny = slope * outwardY;

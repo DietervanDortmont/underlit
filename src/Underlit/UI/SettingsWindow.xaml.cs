@@ -69,7 +69,7 @@ public partial class SettingsWindow : Window
         foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth,
                                      SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
                                      SldGlassDepth, SldGlassDispersion, SldGlassFrost,
-                                     SldGlassCornerRadius })
+                                     SldGlassCornerRadius, SldGlassBevelWidth })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
@@ -324,6 +324,7 @@ public partial class SettingsWindow : Window
         SldGlassDispersion.Value     = _snapshot.GlassDispersion;
         SldGlassFrost.Value          = _snapshot.GlassFrost;
         SldGlassCornerRadius.Value   = _snapshot.GlassCornerRadius;
+        SldGlassBevelWidth.Value     = _snapshot.GlassBevelWidth;
 
         TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
         TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;
@@ -410,6 +411,7 @@ public partial class SettingsWindow : Window
         _snapshot.GlassDispersion     = SldGlassDispersion.Value;
         _snapshot.GlassFrost          = SldGlassFrost.Value;
         _snapshot.GlassCornerRadius   = SldGlassCornerRadius.Value;
+        _snapshot.GlassBevelWidth     = SldGlassBevelWidth.Value;
 
         _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();
         _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Text.Trim();

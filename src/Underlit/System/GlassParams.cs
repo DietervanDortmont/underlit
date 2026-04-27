@@ -26,6 +26,10 @@ public sealed class GlassParams
     public double Depth          { get; set; } = 50;
     public double Dispersion     { get; set; } = 0;
     public double Frost          { get; set; } = 10;
+    /// <summary>0..100. Width of the curved (bevel) zone as a percentage of pillH/2.
+    /// 100 = entire pill is the dome (smoothest, no flat top). 50 = outer half curves,
+    /// inner half is flat. 0 = no curve at all.</summary>
+    public double BevelWidth     { get; set; } = 100;
     /// <summary>0..100 — percentage of the maximum corner radius (which is pillHeight/2).
     /// 100 = full pill. 0 = sharp rectangle. Drives both the renderer's SDF AND the
     /// SetWindowRgn region, so the visible shape and the OS clip are guaranteed to match.</summary>
@@ -40,7 +44,11 @@ public sealed class GlassParams
         Dispersion     = Dispersion,
         Frost          = Frost,
         CornerRadius   = CornerRadius,
+        BevelWidth     = BevelWidth,
     };
+
+    /// <summary>0..1 — the fraction of pillH/2 that the curved bevel zone occupies.</summary>
+    public double BevelWidthFraction() => Math.Clamp(BevelWidth, 0, 100) / 100.0;
 
     /// <summary>Resolve the slider's percentage to an actual radius in physical pixels.</summary>
     public int CornerRadiusPx(int pillHeightPx)

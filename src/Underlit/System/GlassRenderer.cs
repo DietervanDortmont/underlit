@@ -63,7 +63,8 @@ public static class GlassRenderer
         public GlassShape.NormalMap? NormalMap;
 
         public void Configure(int fullW, int fullH, int padX, int padY,
-                              int cornerRadiusPx, double squircleExponent)
+                              int cornerRadiusPx, double squircleExponent,
+                              double bevelWidthFraction)
         {
             int pillW = fullW - padX * 2;
             int pillH = fullH - padY * 2;
@@ -90,10 +91,12 @@ public static class GlassRenderer
                 || NormalMap.PillW != pillW
                 || NormalMap.PillH != pillH
                 || NormalMap.CornerRadiusPx != cornerRadiusPx
-                || Math.Abs(NormalMap.SquircleExponent - squircleExponent) > 1e-6)
+                || Math.Abs(NormalMap.SquircleExponent - squircleExponent) > 1e-6
+                || Math.Abs(NormalMap.BevelWidthFraction - bevelWidthFraction) > 1e-6)
             {
                 NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH,
-                                                     cornerRadiusPx, squircleExponent);
+                                                     cornerRadiusPx, squircleExponent,
+                                                     bevelWidthFraction);
             }
         }
     }

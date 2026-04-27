@@ -68,7 +68,8 @@ public sealed class LiveGlassController : IDisposable
             int physPillH = physFullH - physPadY * 2;
             int cornerRadiusPx = parameters.CornerRadiusPx(physPillH);
             _scratch.Configure(physFullW, physFullH, physPadX, physPadY,
-                                cornerRadiusPx, parameters.SquircleExponent());
+                                cornerRadiusPx, parameters.SquircleExponent(),
+                                parameters.BevelWidthFraction());
 
             using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
 

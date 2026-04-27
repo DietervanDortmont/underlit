@@ -65,8 +65,15 @@ public sealed class GlassParams
         return (lx, ly, lz);
     }
 
-    /// <summary>Maps Depth slider (0..100) to BevelMaxSlope (0.5..6.0).</summary>
-    public double BevelMaxSlope() => 0.5 + (Depth / 100.0) * 5.5;
+    /// <summary>
+    /// Maps the Depth slider (0..100) to the convex-squircle exponent used by the
+    /// height function f(t) = (1 − (1−t)^n)^(1/n).
+    ///
+    ///   Depth = 0   → n = 8   (very flat top, sharp rim — the "pill with bevel" look)
+    ///   Depth = 50  → n = 5   (Apple-ish — close to their preferred squircle of n=4)
+    ///   Depth = 100 → n = 2   (sphere-dome — strong lens warping across the whole body)
+    /// </summary>
+    public double SquircleExponent() => 8.0 - (Math.Clamp(Depth, 0, 100) / 100.0) * 6.0;
 
     /// <summary>Maps LightIntensity slider (0..200) to a multiplier (0..2).</summary>
     public double IntensityMul() => LightIntensity / 100.0;

@@ -33,9 +33,6 @@ public static class GlassRenderer
     public const double SaturationBoost   = 1.10;
     public const double GlassWashStrength = 0.06;
     public const int    BlurPasses        = 3;
-    // Wider bevel = refraction visible deeper into the body (Apple's pucks have
-    // visible lens warping for ~⅓ the inset, not just the rim).
-    public const int    BevelWidthDip     = 10;
 
     public const float  SpecShininess = 25f;
     public const float  SpecIntensity = 1.6f;
@@ -62,12 +59,11 @@ public static class GlassRenderer
         public int PadY;
         public int PillW;
         public int PillH;
-        public int BevelPx;
 
         public GlassShape.NormalMap? NormalMap;
 
-        public void Configure(int fullW, int fullH, int padX, int padY, int bevelPx,
-                              double bevelMaxSlope, int cornerRadiusPx)
+        public void Configure(int fullW, int fullH, int padX, int padY,
+                              int cornerRadiusPx, double squircleExponent)
         {
             int pillW = fullW - padX * 2;
             int pillH = fullH - padY * 2;
@@ -85,7 +81,6 @@ public static class GlassRenderer
             PadY = padY;
             PillW = pillW;
             PillH = pillH;
-            BevelPx = bevelPx;
 
             if (NormalMap == null
                 || NormalMap.Width != fullW
@@ -94,12 +89,11 @@ public static class GlassRenderer
                 || NormalMap.PadY != padY
                 || NormalMap.PillW != pillW
                 || NormalMap.PillH != pillH
-                || NormalMap.BevelPx != bevelPx
                 || NormalMap.CornerRadiusPx != cornerRadiusPx
-                || Math.Abs(NormalMap.BevelMaxSlope - bevelMaxSlope) > 1e-6)
+                || Math.Abs(NormalMap.SquircleExponent - squircleExponent) > 1e-6)
             {
                 NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH,
-                                                     bevelPx, bevelMaxSlope, cornerRadiusPx);
+                                                     cornerRadiusPx, squircleExponent);
             }
         }
     }

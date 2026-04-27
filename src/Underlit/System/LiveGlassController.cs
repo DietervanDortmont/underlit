@@ -78,7 +78,13 @@ public sealed class LiveGlassController : IDisposable
 
             if (_bitmap == null || _bitmap.PixelWidth != physFullW || _bitmap.PixelHeight != physFullH)
             {
-                _bitmap = new WriteableBitmap(physFullW, physFullH, 96, 96, PixelFormats.Bgra32, null);
+                // CRITICAL: bitmap DPI must match the screen DPI so that natural-DIP-size
+                // of the bitmap equals the Grid's DIP size — eliminates the bilinear
+                // resample that was blurring the pill rim and creating a 2-px shadow
+                // halo (the "layer 2" the user kept flagging at fractional DPI).
+                double bitmapDpi = 96.0 * scale;
+                _bitmap = new WriteableBitmap(physFullW, physFullH, bitmapDpi, bitmapDpi,
+                                                PixelFormats.Bgra32, null);
             }
 
             _bitmap.Lock();

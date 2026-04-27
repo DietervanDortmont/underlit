@@ -226,10 +226,15 @@ public partial class OsdWindow : Window
         double scale = dpi.DpiScaleX;
         if (scale <= 0) scale = 1.0;
 
+        // Use the EXACT same math the renderer uses to compute its pill — otherwise
+        // at fractional DPI we get 1-pixel mismatches between OS clip and rendered
+        // content. Renderer does: pillW = fullW − 2·padX. Match that here.
+        int physFullW = (int)Math.Round(LiveGlassController.FullWidthDip  * scale);
+        int physFullH = (int)Math.Round(LiveGlassController.FullHeightDip * scale);
         int physPadX  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
         int physPadY  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
-        int physPillW = (int)Math.Round(LiveGlassController.PillWidthDip  * scale);
-        int physPillH = (int)Math.Round(LiveGlassController.PillHeightDip * scale);
+        int physPillW = physFullW - 2 * physPadX;
+        int physPillH = physFullH - 2 * physPadY;
         int rPx = _glass.CornerRadiusPx(physPillH);
 
         // CreateRoundRectRgn corners are an ellipse of width=cx, height=cy. For corner

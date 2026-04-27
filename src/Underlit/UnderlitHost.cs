@@ -282,6 +282,7 @@ public sealed class UnderlitHost : IDisposable
         CornerRadius   = s.GlassCornerRadius,
         BevelWidth     = s.GlassBevelWidth,
         BodyCurvature  = s.GlassBodyCurvature,
+        BevelDepthSliderValue = s.GlassBevelDepth,
     };
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>

@@ -99,8 +99,9 @@ public sealed class AppSettings
     public double GlassDispersion     { get; set; } = 0;
     public double GlassFrost          { get; set; } = 10;
     public double GlassCornerRadius   { get; set; } = 100;   // 0..100 (% of pillH/2)
-    public double GlassBevelWidth     { get; set; } = 100;   // 0..100 (% of pillH/2 — sharp bezel zone)
-    public double GlassBodyCurvature  { get; set; } = 50;    // 0..100 (% of pillH/2 — gentle inner-dome zone)
+    public double GlassBevelWidth     { get; set; } = 25;    // 0..100 (% of pillH/2 — bevel zone width)
+    public double GlassBodyCurvature  { get; set; } = 50;    // legacy, unused in v0.5+
+    public double GlassBevelDepth     { get; set; } = 35;    // 0..100 px (rim spike depth)
 
     // ---- Schedule (optional baseline curve) ----
 

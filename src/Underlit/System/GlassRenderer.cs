@@ -7,29 +7,30 @@ using DPixelFormat = System.Drawing.Imaging.PixelFormat;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Curved-glass renderer for a flat-puck-with-bevel shape (v0.3.1).
+/// Liquid-Glass renderer (v0.5). Translation of the liquidGL.js (NaughtyDuk) WebGL
+/// shader to a CPU rasteriser. The core formula is a single line:
 ///
-/// Geometric model is in GlassShape: pill SDF + per-pixel surface normal where
-/// the body is flat-top and only a small bevel ring at the rim has curvature.
+///     offsetAmt = edge × refraction + edge¹⁰ × bevelDepth
 ///
-/// Per-pixel pipeline:
-///   1. Sample the (blurred) backdrop with refraction offset (zero in the body,
-///      proportional to normal.xy in the bevel).
-///   2. Add Phong specular — bright wherever the bevel normal aligns with the
-///      light's half-vector. On a flat top this is always 0, on the bevel it
-///      peaks in a localised crescent. Opposite corner = dark. ✓ matches Apple.
-///   3. Add Schlick Fresnel rim — only the bevel has non-vertical normals so
-///      Fresnel is automatically a thin sharp band right at the rim, dying
-///      off as you move into the flat top.
-///   4. Vibrancy: darken on bright backdrops so foreground icons stay legible.
-///   5. Anti-aliased alpha at the rim.
+/// where:
+///     edge       = 1 − smoothstep(0, bevelWidthPx, sdfFromRim)
+///     refraction = base body warping (pixels at the rim)
+///     bevelDepth = peak edge spike on top of the body warping (pixels at rim)
 ///
-/// NO SHADOW HALO in v0.3.1 — the user asked for the OSD to "float" without
-/// shadow under it. Pixels outside the pill are fully transparent.
+/// The two terms overlap: at the rim both contribute, in the body only the linear
+/// term, in the centre neither. Sample is at the displaced position, with the
+/// outward direction taken from GlassShape's per-pixel perpendicular-to-rim vector.
+///
+/// Per-channel chromatic aberration: scale offsetAmt slightly differently per
+/// R/G/B (red bends least, blue bends most).
+///
+/// Specular highlights (Phong + Fresnel from a fixed top-left light) and vibrancy
+/// (luminance-aware darkening) are kept from earlier versions; they're additive
+/// and don't interfere with the displacement math.
 /// </summary>
 public static class GlassRenderer
 {
-    // ---- Constants (not user-tunable) ----
+    // ---- Constants ----
     public const double SaturationBoost   = 1.10;
     public const double GlassWashStrength = 0.06;
     public const int    BlurPasses        = 3;
@@ -43,12 +44,11 @@ public static class GlassRenderer
     public const float  VibrancyStartLum = 0.78f;
     public const float  VibrancyMaxDark  = 0.15f;
 
-    public const float  EdgeAaWidth    = 1.2f;
+    public const float  EdgeAaWidth   = 1.2f;
+    public const float  MaxOffsetPx   = 80f;
 
     public sealed class Scratch
     {
-        // All buffers are full-window-sized (300×66 typical) — refraction at the bevel
-        // can sample pixels in the padding zone (just outside the visible pill).
         public byte[] Buffer1 = Array.Empty<byte>();
         public byte[] Buffer2 = Array.Empty<byte>();
         public byte[] Output  = Array.Empty<byte>();
@@ -60,11 +60,9 @@ public static class GlassRenderer
         public int PillW;
         public int PillH;
 
-        public GlassShape.NormalMap? NormalMap;
+        public GlassShape.DispMap? DispMap;
 
-        public void Configure(int fullW, int fullH, int padX, int padY,
-                              int cornerRadiusPx, double squircleExponent,
-                              double bevelWidthFraction, double bodyCurvatureFraction)
+        public void Configure(int fullW, int fullH, int padX, int padY, int cornerRadiusPx)
         {
             int pillW = fullW - padX * 2;
             int pillH = fullH - padY * 2;
@@ -83,31 +81,20 @@ public static class GlassRenderer
             PillW = pillW;
             PillH = pillH;
 
-            if (NormalMap == null
-                || NormalMap.Width != fullW
-                || NormalMap.Height != fullH
-                || NormalMap.PadX != padX
-                || NormalMap.PadY != padY
-                || NormalMap.PillW != pillW
-                || NormalMap.PillH != pillH
-                || NormalMap.CornerRadiusPx != cornerRadiusPx
-                || Math.Abs(NormalMap.SquircleExponent - squircleExponent) > 1e-6
-                || Math.Abs(NormalMap.BevelWidthFraction - bevelWidthFraction) > 1e-6
-                || Math.Abs(NormalMap.BodyCurvatureFraction - bodyCurvatureFraction) > 1e-6)
+            if (DispMap == null
+                || DispMap.Width != fullW
+                || DispMap.Height != fullH
+                || DispMap.PadX != padX
+                || DispMap.PadY != padY
+                || DispMap.PillW != pillW
+                || DispMap.PillH != pillH
+                || DispMap.CornerRadiusPx != cornerRadiusPx)
             {
-                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH,
-                                                     cornerRadiusPx, squircleExponent,
-                                                     bevelWidthFraction, bodyCurvatureFraction);
+                DispMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH, cornerRadiusPx);
             }
         }
     }
 
-    /// <summary>
-    /// Average linear-ish luminance of the captured pill region BEFORE we apply blur,
-    /// expressed as 0..1. Computed as a side-effect of Render() so the caller can use
-    /// it for adaptive icon contrast (light backdrop → dark icon, vice versa). Apple
-    /// calls this "vibrancy" — the foreground inverts to stay legible.
-    /// </summary>
     public static float LastPillLuminance { get; private set; } = 0.5f;
 
     public static bool Render(Bitmap fullCapture, Scratch scratch, GlassParams p)
@@ -120,7 +107,7 @@ public static class GlassRenderer
         int fullStride = scratch.FullStride;
         byte[] a = scratch.Buffer1;
         byte[] b = scratch.Buffer2;
-        var nmap = scratch.NormalMap!;
+        var dmap = scratch.DispMap!;
 
         // 1. Read full-window capture into A.
         var rect = new Rectangle(0, 0, fullW, fullH);
@@ -128,25 +115,20 @@ public static class GlassRenderer
         try
         {
             if (data.Stride == fullStride)
-            {
                 Marshal.Copy(data.Scan0, a, 0, fullStride * fullH);
-            }
             else
-            {
                 for (int y = 0; y < fullH; y++)
                     Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), a, y * fullStride, fullStride);
-            }
         }
         finally { fullCapture.UnlockBits(data); }
 
-        // Compute average luminance of the captured pixels behind the pill (before
-        // any saturation / blur / shading). Used for adaptive icon contrast.
-        LastPillLuminance = ComputePillLuminance(a, fullW, fullH, fullStride, nmap);
+        // 2. Average pre-blur luminance of the icon zone for adaptive icon colour.
+        LastPillLuminance = ComputePillLuminance(a, fullW, fullH, fullStride, dmap);
 
-        // 2 + 3. Saturation + light wash.
+        // 3. Saturation + light wash.
         ApplyGlassWashAndSaturation(a, fullW, fullH, fullStride, GlassWashStrength, SaturationBoost);
 
-        // 4. Box blur ×3 → A. Frost is the user-tunable blur radius.
+        // 4. Box blur (frost).
         int blurRadius = Math.Max(0, (int)Math.Round(p.Frost));
         if (blurRadius > 0)
         {
@@ -157,25 +139,29 @@ public static class GlassRenderer
             }
         }
 
-        // 5. Composite — needs runtime-derived light direction etc.
+        // 5. Composite — uses the liquidGL two-term displacement formula.
         var light = p.LightDirection();
-        var halfVec = NormalizeVec(light.x + 0f, light.y + 0f, light.z + 1f);
-        float intensityMul = (float)p.IntensityMul();
-        float refraction = (float)p.Refraction;
-        float dispersion = (float)p.Dispersion;
-        ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, nmap,
-                           halfVec, intensityMul, refraction, dispersion);
+        var halfVec = NormalizeVec(light.x, light.y, light.z + 1f);
+        ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, dmap,
+                           halfVec, (float)p.IntensityMul(),
+                           (float)p.Refraction, (float)p.BevelDepth(), (float)p.BevelWidthPx(dmap.PillH),
+                           (float)p.Dispersion);
 
         return true;
     }
 
     private static void ShadeAndComposite(byte[] body, byte[] dst, int fullW, int fullH, int fullStride,
-                                           GlassShape.NormalMap nmap,
+                                           GlassShape.DispMap dmap,
                                            (float x, float y, float z) halfVec,
-                                           float intensityMul, float refraction, float dispersion)
+                                           float intensityMul,
+                                           float refraction, float bevelDepth, float bevelWidthPx,
+                                           float dispersion)
     {
-        float[] normals = nmap.Normals;
-        float[] sdf = nmap.Sdf;
+        float[] sdf = dmap.Sdf;
+        float[] outX = dmap.OutwardX;
+        float[] outY = dmap.OutwardY;
+
+        if (bevelWidthPx < 1f) bevelWidthPx = 1f;
 
         for (int y = 0; y < fullH; y++)
         {
@@ -187,7 +173,6 @@ public static class GlassRenderer
 
                 if (pixSdf <= 0)
                 {
-                    // Outside the pill — fully transparent. No shadow.
                     dst[dstIdx + 0] = 0;
                     dst[dstIdx + 1] = 0;
                     dst[dstIdx + 2] = 0;
@@ -195,60 +180,36 @@ public static class GlassRenderer
                     continue;
                 }
 
-                float nx = normals[pi * 3 + 0];
-                float ny = normals[pi * 3 + 1];
-                float nz = normals[pi * 3 + 2];
+                float ox = outX[pi];
+                float oy = outY[pi];
 
-                // Snell's lateral-shift refraction. For a glass slab of effective
-                // thickness h with IOR n2 = 1.5 entered by light at angle θ_i:
-                //
-                //     lateral_shift = h × (tan θ_i − tan θ_t)
-                //
-                // This is the formula the kube.io / iOS-26 recreations use. It blows
-                // up faster than the linear sin-approximation at steep angles, which
-                // is exactly the dramatic edge-bending Apple's pucks show even with a
-                // thin bevel zone. Refraction slider is interpreted as h (in pixels).
-                float xyMag = MathF.Sqrt(nx * nx + ny * ny);
-                int B, G, R;
-                if (xyMag > 1e-4f)
-                {
-                    // sin θ_i = mag of normal's xy component (for unit normal).
-                    float sinI = xyMag; if (sinI > 1f) sinI = 1f;
-                    float cosI = nz < 0.04f ? 0.04f : nz;   // clamp to avoid div-by-zero at near-vertical rim
-                    float tanI = sinI / cosI;
+                // ---- The liquidGL displacement formula ----
+                // edge: 1 at rim, smoothly down to 0 at bevelWidthPx into the body.
+                float edge = 1f - Smoothstep(0f, bevelWidthPx, pixSdf);
+                // Two-term offset: linear body + sharp rim spike (pow 10).
+                float edge10 = edge * edge; edge10 *= edge10; edge10 *= edge10 * edge * edge;
+                float offsetAmt = edge * refraction + edge10 * bevelDepth;
+                if (offsetAmt > MaxOffsetPx) offsetAmt = MaxOffsetPx;
 
-                    float dirX = nx / xyMag;
-                    float dirY = ny / xyMag;
+                // Per-channel aberration: scale the offset slightly differently per R/G/B.
+                // Red bends least → smaller offset; blue bends most → larger.
+                float dispScale = dispersion * 0.04f;
+                float offR = offsetAmt * (1f - dispScale);
+                float offG = offsetAmt;
+                float offB = offsetAmt * (1f + dispScale);
 
-                    // Per-channel IOR for chromatic aberration. In real glass red
-                    // (longer wavelength) has lower IOR and bends LESS than blue —
-                    // so the visible "rainbow tint" at glass edges has red on the
-                    // outside, blue on the inside.
-                    const float IOR_BASE = 1.5f;
-                    float disp = dispersion * 0.05f;
-                    float iorR = IOR_BASE - disp;     // red bends less
-                    float iorG = IOR_BASE;
-                    float iorB = IOR_BASE + disp;     // blue bends more
-                    if (iorR < 1.05f) iorR = 1.05f;
+                int sxR = SampleX(x, ox, offR, fullW);
+                int syR = SampleY(y, oy, offR, fullH);
+                int sxG = SampleX(x, ox, offG, fullW);
+                int syG = SampleY(y, oy, offG, fullH);
+                int sxB = SampleX(x, ox, offB, fullW);
+                int syB = SampleY(y, oy, offB, fullH);
 
-                    int sxR, syR, sxG, syG, sxB, syB;
-                    SnellOffset(dirX, dirY, sinI, tanI, iorR, refraction, fullW, fullH, x, y, out sxR, out syR);
-                    SnellOffset(dirX, dirY, sinI, tanI, iorG, refraction, fullW, fullH, x, y, out sxG, out syG);
-                    SnellOffset(dirX, dirY, sinI, tanI, iorB, refraction, fullW, fullH, x, y, out sxB, out syB);
-                    R = body[syR * fullStride + sxR * 4 + 2];
-                    G = body[syG * fullStride + sxG * 4 + 1];
-                    B = body[syB * fullStride + sxB * 4 + 0];
-                }
-                else
-                {
-                    // Flat zone — no refraction.
-                    int srcIdx = y * fullStride + x * 4;
-                    B = body[srcIdx + 0];
-                    G = body[srcIdx + 1];
-                    R = body[srcIdx + 2];
-                }
+                int R = body[syR * fullStride + sxR * 4 + 2];
+                int G = body[syG * fullStride + sxG * 4 + 1];
+                int B = body[syB * fullStride + sxB * 4 + 0];
 
-                // Vibrancy
+                // Vibrancy: darken on bright backdrops so foreground icons stay legible.
                 float lum = (R * 0.299f + G * 0.587f + B * 0.114f) / 255f;
                 if (lum > VibrancyStartLum)
                 {
@@ -260,18 +221,21 @@ public static class GlassRenderer
                     B = (int)(B * darken);
                 }
 
-                // Phong specular — peaks where bevel normal aligns with H. Light angle
-                // (and hence halfVec) is runtime-tunable.
+                // Specular + Fresnel rim (additive). We synthesize a normal from the
+                // outward direction and edge factor: nx,ny tilt outward proportional
+                // to edge (rim is steep, body is flat-ish), nz = sqrt(1 − xy²).
+                float nxyMag = edge * 0.95f; // tilt magnitude
+                float nx = ox * nxyMag;
+                float ny = oy * nxyMag;
+                float nzSq = 1f - (nx * nx + ny * ny);
+                float nz = nzSq > 0 ? MathF.Sqrt(nzSq) : 0.05f;
+
                 float NdotH = nx * halfVec.x + ny * halfVec.y + nz * halfVec.z;
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Schlick Fresnel rim — flat top has N·V = 1 → Fresnel = F0 (essentially 0).
-                // Bevel ring has N·V < 1 → Fresnel rises rapidly. Auto-thin rim.
-                float NdotV = nz;
-                if (NdotV < 0f) NdotV = 0f;
-                float oneMinus = 1f - NdotV;
-                float fresnel = FresnelF0 + (1f - FresnelF0) * MathF.Pow(oneMinus, FresnelExp);
+                float NdotV = nz; if (NdotV < 0f) NdotV = 0f;
+                float fresnel = FresnelF0 + (1f - FresnelF0) * MathF.Pow(1f - NdotV, FresnelExp);
                 fresnel *= RimIntensity * intensityMul;
 
                 int specAdd = (int)(spec * 255f);
@@ -284,14 +248,7 @@ public static class GlassRenderer
                 if (gOut > 255) gOut = 255;
                 if (bOut > 255) bOut = 255;
 
-                // Subtract the body Phong leak — we don't want the flat top to glow.
-                // (Already small due to high shininess, but make it strictly zero.)
-                if (nz > 0.999f)
-                {
-                    rOut = R; gOut = G; bOut = B;
-                }
-
-                // Anti-aliased rim alpha.
+                // AA at pill rim.
                 float aaAlpha = pixSdf / EdgeAaWidth;
                 if (aaAlpha > 1f) aaAlpha = 1f;
                 if (aaAlpha < 0f) aaAlpha = 0f;
@@ -303,6 +260,29 @@ public static class GlassRenderer
                 dst[dstIdx + 3] = pillAlpha;
             }
         }
+    }
+
+    private static int SampleX(int x, float ox, float off, int w)
+    {
+        int sx = x + (int)MathF.Round(ox * off);
+        if (sx < 0) sx = 0; else if (sx >= w) sx = w - 1;
+        return sx;
+    }
+
+    private static int SampleY(int y, float oy, float off, int h)
+    {
+        int sy = y + (int)MathF.Round(oy * off);
+        if (sy < 0) sy = 0; else if (sy >= h) sy = h - 1;
+        return sy;
+    }
+
+    /// <summary>GLSL-style smoothstep, 0 at edge0, 1 at edge1, cubic in between.</summary>
+    private static float Smoothstep(float edge0, float edge1, float v)
+    {
+        if (edge1 <= edge0) return v < edge0 ? 0 : 1;
+        float t = (v - edge0) / (edge1 - edge0);
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        return t * t * (3f - 2f * t);
     }
 
     private static void ApplyGlassWashAndSaturation(byte[] buf, int w, int h, int stride,
@@ -349,16 +329,12 @@ public static class GlassRenderer
         {
             int row = y * stride;
             int sumB = 0, sumG = 0, sumR = 0;
-
             for (int x = -r; x <= r; x++)
             {
                 int sx = x < 0 ? 0 : (x >= w ? w - 1 : x);
                 int i = row + sx * 4;
-                sumB += src[i + 0];
-                sumG += src[i + 1];
-                sumR += src[i + 2];
+                sumB += src[i + 0]; sumG += src[i + 1]; sumR += src[i + 2];
             }
-
             for (int x = 0; x < w; x++)
             {
                 int oi = row + x * 4;
@@ -366,9 +342,7 @@ public static class GlassRenderer
                 dst[oi + 1] = (byte)(sumG / span);
                 dst[oi + 2] = (byte)(sumR / span);
                 dst[oi + 3] = 255;
-
-                int xOut = x - r;
-                int xIn  = x + r + 1;
+                int xOut = x - r, xIn = x + r + 1;
                 int sxOut = xOut < 0 ? 0 : (xOut >= w ? w - 1 : xOut);
                 int sxIn  = xIn  < 0 ? 0 : (xIn  >= w ? w - 1 : xIn);
                 int io = row + sxOut * 4;
@@ -387,16 +361,12 @@ public static class GlassRenderer
         {
             int colOff = x * 4;
             int sumB = 0, sumG = 0, sumR = 0;
-
             for (int y = -r; y <= r; y++)
             {
                 int sy = y < 0 ? 0 : (y >= h ? h - 1 : y);
                 int i = sy * stride + colOff;
-                sumB += src[i + 0];
-                sumG += src[i + 1];
-                sumR += src[i + 2];
+                sumB += src[i + 0]; sumG += src[i + 1]; sumR += src[i + 2];
             }
-
             for (int y = 0; y < h; y++)
             {
                 int oi = y * stride + colOff;
@@ -404,9 +374,7 @@ public static class GlassRenderer
                 dst[oi + 1] = (byte)(sumG / span);
                 dst[oi + 2] = (byte)(sumR / span);
                 dst[oi + 3] = 255;
-
-                int yOut = y - r;
-                int yIn  = y + r + 1;
+                int yOut = y - r, yIn = y + r + 1;
                 int syOut = yOut < 0 ? 0 : (yOut >= h ? h - 1 : yOut);
                 int syIn  = yIn  < 0 ? 0 : (yIn  >= h ? h - 1 : yIn);
                 int io = syOut * stride + colOff;
@@ -425,75 +393,24 @@ public static class GlassRenderer
         return (x / mag, y / mag, z / mag);
     }
 
-    /// <summary>
-    /// Snell's lateral shift for a glass slab. Given the incident direction (unit
-    /// xy vector dirX/dirY), pre-computed sin θ_i and tan θ_i, refractive index n,
-    /// and effective glass thickness `h` (in pixels), returns a clamped sample
-    /// coordinate (sx, sy) that reads the displaced backdrop.
-    ///
-    ///   tan θ_i  →  given.
-    ///   sin θ_t  =  sin θ_i / n.
-    ///   tan θ_t  =  sin θ_t / cos θ_t.
-    ///   shift    =  h × (tan θ_i − tan θ_t).
-    ///
-    /// Capped at 64 px so very horizontal rim normals don't sample wildly off-screen.
-    /// </summary>
-    private static void SnellOffset(float dirX, float dirY, float sinI, float tanI,
-                                     float ior, float thicknessPx,
-                                     int fullW, int fullH, int srcX, int srcY,
-                                     out int sx, out int sy)
-    {
-        float sinT = sinI / ior;
-        if (sinT > 0.9999f) sinT = 0.9999f;
-        float cosT = MathF.Sqrt(MathF.Max(1e-4f, 1f - sinT * sinT));
-        float tanT = sinT / cosT;
-        float shift = (tanI - tanT) * thicknessPx;
-
-        float dx = dirX * shift;
-        float dy = dirY * shift;
-        // Magnitude cap — keeps the very rim from sampling 200 px away on a tiny pill.
-        float mag = MathF.Sqrt(dx * dx + dy * dy);
-        const float MaxShift = 64f;
-        if (mag > MaxShift)
-        {
-            float k = MaxShift / mag;
-            dx *= k;
-            dy *= k;
-        }
-
-        sx = srcX + (int)MathF.Round(dx);
-        sy = srcY + (int)MathF.Round(dy);
-        if (sx < 0) sx = 0; else if (sx >= fullW) sx = fullW - 1;
-        if (sy < 0) sy = 0; else if (sy >= fullH) sy = fullH - 1;
-    }
-
-    /// <summary>
-    /// Average luminance across just the LEFT THIRD of the pill region (where the
-    /// status icon sits). Returns 0..1. We average only the icon zone so a busy
-    /// rainbow of content over the slider doesn't pull the icon's adaptive colour
-    /// off — the icon adapts to what's under the icon.
-    /// </summary>
     private static float ComputePillLuminance(byte[] body, int fullW, int fullH, int fullStride,
-                                                GlassShape.NormalMap nmap)
+                                                GlassShape.DispMap dmap)
     {
-        float[] sdf = nmap.Sdf;
-        int leftThirdEnd = nmap.PadX + nmap.PillW / 3;
-
+        float[] sdf = dmap.Sdf;
+        int leftThirdEnd = dmap.PadX + dmap.PillW / 3;
         long sumLum = 0;
         int count = 0;
         for (int y = 0; y < fullH; y++)
+        for (int x = 0; x < leftThirdEnd; x++)
         {
-            for (int x = 0; x < leftThirdEnd; x++)
-            {
-                int pi = y * fullW + x;
-                if (sdf[pi] <= 0) continue;
-                int idx = y * fullStride + x * 4;
-                int B = body[idx + 0];
-                int G = body[idx + 1];
-                int R = body[idx + 2];
-                sumLum += (R * 77 + G * 150 + B * 29) >> 8;
-                count++;
-            }
+            int pi = y * fullW + x;
+            if (sdf[pi] <= 0) continue;
+            int idx = y * fullStride + x * 4;
+            int B = body[idx + 0];
+            int G = body[idx + 1];
+            int R = body[idx + 2];
+            sumLum += (R * 77 + G * 150 + B * 29) >> 8;
+            count++;
         }
         return count > 0 ? (sumLum / (float)count) / 255f : 0.5f;
     }

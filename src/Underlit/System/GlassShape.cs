@@ -3,34 +3,22 @@ using System;
 namespace Underlit.Sys;
 
 /// <summary>
-/// Geometry of the Liquid Glass surface — a rounded rectangle whose top surface is
-/// a CONVEX SQUIRCLE dome (NOT a flat top with a bevel ring, as in v0.3.x).
+/// Geometry of the Liquid Glass surface. v0.5 simplified to match the liquidGL.js
+/// (NaughtyDuk) shader approach: per-pixel signed distance to the rim plus an
+/// outward direction (perpendicular to the nearest rim point). The actual
+/// displacement formula lives in GlassRenderer using:
 ///
-/// The video / Kube.io article on real Liquid Glass shows that Apple's effect uses
-/// the squircle height function:
+///     edge      = 1 − smoothstep(0, bevelPx, sdf)              // 1 at rim, 0 in body
+///     offsetAmt = edge × refraction + edge¹⁰ × bevelDepth      // body + rim spike
+///     uv_offset = (outwardX, outwardY) × offsetAmt
 ///
-///     f(t) = (1 − (1 − t)^n)^(1/n)
-///
-/// where t is the normalised distance from the rim (0 at rim, 1 at the centre line)
-/// and n is an exponent that controls the shape:
-///   n = 2  → spherical dome — strong lens warping across the entire body
-///   n = 4  → Apple's preferred squircle — gentle curvature with sharp rim
-///   n = 8  → very flat top with sharp rim drop (close to the v0.3.x look)
-///
-/// Slope (∂f/∂t) is the magnitude of the surface tilt. It's infinite at the rim
-/// (t = 0) and zero at the centre (t = 1). We cap at 8.0 to avoid singularities.
-///
-/// Critically, EVERY pixel inside the pill has a non-flat surface normal — so
-/// refraction happens across the entire body, not just at a 10-px bevel ring.
-/// That's the lens effect the user has been asking for.
-///
-/// SDF computation handles arbitrary corner radius (full pill, squircle, sharp
-/// rectangle). Outward direction at corners is radial; along straight edges it
-/// is perpendicular to that edge.
+/// Two-term form is what makes this look like a real lens: a smooth body ramp PLUS
+/// a sharp rim spike that overlap seamlessly. No more normal maps, sine curves,
+/// squircles, or Snell math.
 /// </summary>
 public static class GlassShape
 {
-    public sealed class NormalMap
+    public sealed class DispMap
     {
         public int Width;
         public int Height;
@@ -39,54 +27,29 @@ public static class GlassShape
         public int PillW;
         public int PillH;
         public int CornerRadiusPx;
-        public double SquircleExponent;
-        public double BevelWidthFraction;
-        public double BodyCurvatureFraction;
 
-        public float[] Normals = Array.Empty<float>();
-        public float[] Sdf     = Array.Empty<float>();
+        /// <summary>Signed distance to pill rim (positive inside, 0 at rim, negative outside).</summary>
+        public float[] Sdf = Array.Empty<float>();
+        /// <summary>Unit outward direction (perpendicular to nearest rim point), x component.</summary>
+        public float[] OutwardX = Array.Empty<float>();
+        /// <summary>Unit outward direction, y component.</summary>
+        public float[] OutwardY = Array.Empty<float>();
     }
 
-    public const double MaxRimSlope = 8.0;
-
-    /// <summary>
-    /// Compute height-profile slope at normalised position t ∈ [0, 1] inside the
-    /// bevel zone. We use the SINE profile f(t) = sin(t · π/2):
-    ///
-    ///     f'(t) = (π/2) · cos(t · π/2)
-    ///     f''(t) = −(π/2)² · sin(t · π/2)
-    ///
-    /// Both f' and f'' are continuous everywhere — that means the surface is
-    /// G2 (curvature-continuous), which is what the user has been asking for.
-    /// At t = 1 (boundary with flat top) f'(1) = 0, so the join with the flat
-    /// zone has matching slope — no kink even when the bevel doesn't span the
-    /// whole pill.
-    /// </summary>
-    private static double SineSlope(double t)
+    public static DispMap ComputePill(int fullW, int fullH, int padX, int padY,
+                                       int pillW, int pillH, int cornerRadiusPx)
     {
-        if (t <= 0) return Math.PI / 2.0;
-        if (t >= 1) return 0;
-        return (Math.PI / 2.0) * Math.Cos(t * Math.PI / 2.0);
-    }
-
-    public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY,
-                                         int pillW, int pillH, int cornerRadiusPx,
-                                         double squircleExponent, double bevelWidthFraction,
-                                         double bodyCurvatureFraction)
-    {
-        var map = new NormalMap
+        var map = new DispMap
         {
             Width = fullW, Height = fullH,
             PadX = padX, PadY = padY,
             PillW = pillW, PillH = pillH,
             CornerRadiusPx = cornerRadiusPx,
-            SquircleExponent = squircleExponent,
-            BevelWidthFraction = bevelWidthFraction,
-            BodyCurvatureFraction = bodyCurvatureFraction,
         };
         int total = fullW * fullH;
-        map.Normals = new float[total * 3];
-        map.Sdf     = new float[total];
+        map.Sdf      = new float[total];
+        map.OutwardX = new float[total];
+        map.OutwardY = new float[total];
 
         if (fullW <= 0 || fullH <= 0) return map;
 
@@ -101,19 +64,6 @@ public static class GlassShape
         double coreRight  = Math.Max(pillRight  - rPx, coreLeft);
         double coreTop    = pillTop    + rPx;
         double coreBottom = Math.Max(pillBottom - rPx, coreTop);
-
-        // Maximum SDF is half of the smaller pill dimension.
-        double maxSdf = Math.Min(pillW, pillH) / 2.0;
-        // Sharp outer-bezel zone — small width, dramatic rim slope.
-        double bevelMaxSdf = Math.Max(0.5, maxSdf * Math.Clamp(bevelWidthFraction, 0.01, 1.0));
-        // Gentle inner-dome zone — typically wider than bevel, contributes a small extra
-        // slope across the body so refraction smoothly carries over from the bezel into
-        // the centre. domeStrength scales with bodyCurvatureFraction so 0% kills the dome
-        // entirely and 100% gives a meaningful but still subtle inner slope.
-        double bodyCurv = Math.Clamp(bodyCurvatureFraction, 0, 1);
-        double domeMaxSdf = Math.Max(0.5, maxSdf * bodyCurv);
-        double domeStrength = bodyCurv * 0.45;
-        double n = Math.Max(1.5, squircleExponent);   // floor for numerical stability
 
         for (int y = 0; y < fullH; y++)
         for (int x = 0; x < fullW; x++)
@@ -134,23 +84,17 @@ public static class GlassShape
 
             if (cornerDist > 0)
             {
-                // Pixel was clamped — it's in a rounded-corner zone OR fully outside.
                 sdf = rPx - cornerDist;
                 if (cornerDist > 1e-9)
                 {
                     outwardX = dxc / cornerDist;
                     outwardY = dyc / cornerDist;
                 }
-                else
-                {
-                    outwardX = 0;
-                    outwardY = 0;
-                }
+                else { outwardX = 0; outwardY = 0; }
             }
             else
             {
-                // Inside the core rectangle. SDF = distance to nearest straight edge;
-                // outward direction is perpendicular to that edge.
+                // Inside core rect — outward is perpendicular to the nearest straight edge.
                 double dLeft   = px - pillLeft;
                 double dRight  = pillRight - px;
                 double dTop    = py - pillTop;
@@ -167,87 +111,11 @@ public static class GlassShape
                 { outwardX = 1; outwardY = 0; }
             }
 
-            map.Sdf[i] = (float)sdf;
-
-            if (sdf <= 0)
-            {
-                map.Normals[i * 3 + 0] = 0f;
-                map.Normals[i * 3 + 1] = 0f;
-                map.Normals[i * 3 + 2] = 1f;
-                continue;
-            }
-
-            // Slope is the SUM of two contributions:
-            //   1. BEZEL — sharp slope concentrated in the outer bevelMaxSdf band.
-            //      Provides the dramatic lens-rim refraction.
-            //   2. DOME  — gentle slope across the wider domeMaxSdf band (the body
-            //      curvature). Adds the soft "blob of glass" warping that leads up
-            //      to the bezel without making the centre flat.
-            //
-            // Both use sine profiles (G2-continuous), which means slope→0 smoothly
-            // at the boundary of each zone. No kinks.
-            double slope = 0;
-
-            // Bezel contribution.
-            if (sdf < bevelMaxSdf)
-            {
-                double t = sdf / bevelMaxSdf;
-                // Blend between sine (smooth) and squircle (flat-top character) by
-                // the squircle exponent. Low n → mostly sine. High n → squircle bias.
-                double blend = Math.Clamp((n - 1.5) / 6.5, 0, 1);
-                double bezelSine = SineSlope(t);
-                double bezelSquircle = SquircleSlope(t, n);
-                double bezelContribution = bezelSine * (1 - blend) + bezelSquircle * blend;
-                slope += bezelContribution;
-            }
-
-            // Dome contribution — only if the user has enabled it (bodyCurvature > 0).
-            if (bodyCurv > 0.001 && sdf < domeMaxSdf)
-            {
-                double t = sdf / domeMaxSdf;
-                slope += SineSlope(t) * domeStrength;
-            }
-
-            if (slope > MaxRimSlope) slope = MaxRimSlope;
-
-            double nx = slope * outwardX;
-            double ny = slope * outwardY;
-            double nz = 1.0;
-
-            double mag = Math.Sqrt(nx * nx + ny * ny + nz * nz);
-            if (mag > 1e-9) { nx /= mag; ny /= mag; nz /= mag; }
-            else { nx = 0; ny = 0; nz = 1; }
-
-            map.Normals[i * 3 + 0] = (float)nx;
-            map.Normals[i * 3 + 1] = (float)ny;
-            map.Normals[i * 3 + 2] = (float)nz;
+            map.Sdf[i]      = (float)sdf;
+            map.OutwardX[i] = (float)outwardX;
+            map.OutwardY[i] = (float)outwardY;
         }
 
         return map;
-    }
-
-    /// <summary>
-    /// Slope ∂f/∂t for f(t) = (1 − (1−t)^n)^(1/n) at t ∈ [0, 1]. Diverges at t = 0;
-    /// we cap at MaxRimSlope. Returns 0 at t = 1.
-    ///
-    /// Derivation:
-    ///   Let u = 1 − (1−t)^n.  Then f = u^(1/n).
-    ///   df/dt = u^(1/n − 1) × n(1−t)^(n−1) × (1/n) = (1−t)^(n−1) / u^(1 − 1/n).
-    /// </summary>
-    private static double SquircleSlope(double t, double n)
-    {
-        if (t <= 1e-6) return MaxRimSlope;
-        if (t >= 1.0 - 1e-6) return 0.0;
-
-        double oneMinusT = 1.0 - t;
-        double oneMinusTn = Math.Pow(oneMinusT, n);
-        double u = 1.0 - oneMinusTn;
-        if (u < 1e-9) return MaxRimSlope;
-
-        double numerator   = Math.Pow(oneMinusT, n - 1);
-        double denominator = Math.Pow(u, 1.0 - 1.0 / n);
-        double slope = numerator / denominator;
-
-        return Math.Min(slope, MaxRimSlope);
     }
 }

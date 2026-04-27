@@ -198,39 +198,50 @@ public static class GlassRenderer
                 float ny = normals[pi * 3 + 1];
                 float nz = normals[pi * 3 + 2];
 
-                // Refraction sample — body buffer has full window coords.
-                // With dispersion, R/G/B sample at slightly different offsets, mimicking
-                // chromatic aberration of real glass: red bends least, blue bends most.
+                // Snell's lateral-shift refraction. For a glass slab of effective
+                // thickness h with IOR n2 = 1.5 entered by light at angle θ_i:
+                //
+                //     lateral_shift = h × (tan θ_i − tan θ_t)
+                //
+                // This is the formula the kube.io / iOS-26 recreations use. It blows
+                // up faster than the linear sin-approximation at steep angles, which
+                // is exactly the dramatic edge-bending Apple's pucks show even with a
+                // thin bevel zone. Refraction slider is interpreted as h (in pixels).
+                float xyMag = MathF.Sqrt(nx * nx + ny * ny);
                 int B, G, R;
-                if (dispersion > 0.01f && (nx != 0 || ny != 0))
+                if (xyMag > 1e-4f)
                 {
-                    // Per-channel offset scale: R = refraction - dispersion/2, B = refraction + dispersion/2
-                    float refrR = refraction - dispersion * 0.5f;
-                    float refrG = refraction;
-                    float refrB = refraction + dispersion * 0.5f;
-                    int rxR = x + (int)MathF.Round(nx * refrR);
-                    int ryR = y + (int)MathF.Round(ny * refrR);
-                    int rxG = x + (int)MathF.Round(nx * refrG);
-                    int ryG = y + (int)MathF.Round(ny * refrG);
-                    int rxB = x + (int)MathF.Round(nx * refrB);
-                    int ryB = y + (int)MathF.Round(ny * refrB);
-                    if (rxR < 0) rxR = 0; else if (rxR >= fullW) rxR = fullW - 1;
-                    if (ryR < 0) ryR = 0; else if (ryR >= fullH) ryR = fullH - 1;
-                    if (rxG < 0) rxG = 0; else if (rxG >= fullW) rxG = fullW - 1;
-                    if (ryG < 0) ryG = 0; else if (ryG >= fullH) ryG = fullH - 1;
-                    if (rxB < 0) rxB = 0; else if (rxB >= fullW) rxB = fullW - 1;
-                    if (ryB < 0) ryB = 0; else if (ryB >= fullH) ryB = fullH - 1;
-                    R = body[ryR * fullStride + rxR * 4 + 2];
-                    G = body[ryG * fullStride + rxG * 4 + 1];
-                    B = body[ryB * fullStride + rxB * 4 + 0];
+                    // sin θ_i = mag of normal's xy component (for unit normal).
+                    float sinI = xyMag; if (sinI > 1f) sinI = 1f;
+                    float cosI = nz < 0.04f ? 0.04f : nz;   // clamp to avoid div-by-zero at near-vertical rim
+                    float tanI = sinI / cosI;
+
+                    float dirX = nx / xyMag;
+                    float dirY = ny / xyMag;
+
+                    // Per-channel IOR for chromatic aberration. In real glass red
+                    // (longer wavelength) has lower IOR and bends LESS than blue —
+                    // so the visible "rainbow tint" at glass edges has red on the
+                    // outside, blue on the inside.
+                    const float IOR_BASE = 1.5f;
+                    float disp = dispersion * 0.05f;
+                    float iorR = IOR_BASE - disp;     // red bends less
+                    float iorG = IOR_BASE;
+                    float iorB = IOR_BASE + disp;     // blue bends more
+                    if (iorR < 1.05f) iorR = 1.05f;
+
+                    int sxR, syR, sxG, syG, sxB, syB;
+                    SnellOffset(dirX, dirY, sinI, tanI, iorR, refraction, fullW, fullH, x, y, out sxR, out syR);
+                    SnellOffset(dirX, dirY, sinI, tanI, iorG, refraction, fullW, fullH, x, y, out sxG, out syG);
+                    SnellOffset(dirX, dirY, sinI, tanI, iorB, refraction, fullW, fullH, x, y, out sxB, out syB);
+                    R = body[syR * fullStride + sxR * 4 + 2];
+                    G = body[syG * fullStride + sxG * 4 + 1];
+                    B = body[syB * fullStride + sxB * 4 + 0];
                 }
                 else
                 {
-                    int sx = x + (int)MathF.Round(nx * refraction);
-                    int sy = y + (int)MathF.Round(ny * refraction);
-                    if (sx < 0) sx = 0; else if (sx >= fullW) sx = fullW - 1;
-                    if (sy < 0) sy = 0; else if (sy >= fullH) sy = fullH - 1;
-                    int srcIdx = sy * fullStride + sx * 4;
+                    // Flat zone — no refraction.
+                    int srcIdx = y * fullStride + x * 4;
                     B = body[srcIdx + 0];
                     G = body[srcIdx + 1];
                     R = body[srcIdx + 2];
@@ -411,6 +422,48 @@ public static class GlassRenderer
         float mag = MathF.Sqrt(x * x + y * y + z * z);
         if (mag < 1e-9f) return (0, 0, 1);
         return (x / mag, y / mag, z / mag);
+    }
+
+    /// <summary>
+    /// Snell's lateral shift for a glass slab. Given the incident direction (unit
+    /// xy vector dirX/dirY), pre-computed sin θ_i and tan θ_i, refractive index n,
+    /// and effective glass thickness `h` (in pixels), returns a clamped sample
+    /// coordinate (sx, sy) that reads the displaced backdrop.
+    ///
+    ///   tan θ_i  →  given.
+    ///   sin θ_t  =  sin θ_i / n.
+    ///   tan θ_t  =  sin θ_t / cos θ_t.
+    ///   shift    =  h × (tan θ_i − tan θ_t).
+    ///
+    /// Capped at 64 px so very horizontal rim normals don't sample wildly off-screen.
+    /// </summary>
+    private static void SnellOffset(float dirX, float dirY, float sinI, float tanI,
+                                     float ior, float thicknessPx,
+                                     int fullW, int fullH, int srcX, int srcY,
+                                     out int sx, out int sy)
+    {
+        float sinT = sinI / ior;
+        if (sinT > 0.9999f) sinT = 0.9999f;
+        float cosT = MathF.Sqrt(MathF.Max(1e-4f, 1f - sinT * sinT));
+        float tanT = sinT / cosT;
+        float shift = (tanI - tanT) * thicknessPx;
+
+        float dx = dirX * shift;
+        float dy = dirY * shift;
+        // Magnitude cap — keeps the very rim from sampling 200 px away on a tiny pill.
+        float mag = MathF.Sqrt(dx * dx + dy * dy);
+        const float MaxShift = 64f;
+        if (mag > MaxShift)
+        {
+            float k = MaxShift / mag;
+            dx *= k;
+            dy *= k;
+        }
+
+        sx = srcX + (int)MathF.Round(dx);
+        sy = srcY + (int)MathF.Round(dy);
+        if (sx < 0) sx = 0; else if (sx >= fullW) sx = fullW - 1;
+        if (sy < 0) sy = 0; else if (sy >= fullH) sy = fullH - 1;
     }
 
     /// <summary>

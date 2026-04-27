@@ -481,36 +481,36 @@ public partial class OsdWindow : Window
     }
 
     /// <summary>
-    /// "Vibrancy"-style icon contrast. When the captured area behind the icon is
-    /// bright (white wallpaper, light webpage) the icon flips to a near-black tone
-    /// so it reads cleanly. When the backdrop is dark, it stays bright white.
+    /// "Frosted-glass icon" treatment for LiquidGlass mode (v0.5.1). Instead of a
+    /// solid white-or-black icon, we use a TRANSLUCENT tint so the refracted glass
+    /// shows through the icon shape — Apple's vibrancy effect. The icon becomes
+    /// "the glass body slightly brighter where the icon shape is", not a flat
+    /// silhouette overlay.
     ///
-    /// We use a soft transition around 0.50 luminance so the icon doesn't pop
-    /// between black and white at every keypress when the user is on a mid-tone
-    /// background.
+    /// We still adapt to backdrop luminance so the icon contrasts on any wallpaper:
+    /// bright bg → translucent dark icon, dark bg → translucent bright icon.
     /// </summary>
     private void ApplyAdaptiveIconColor(float lum)
     {
         if (_backdrop != BackdropStyle.LiquidGlass) return;
 
-        // Smooth lerp between dark and light foreground depending on backdrop luminance.
-        // Below 0.45 = pure light; above 0.65 = pure dark; in between = a smooth blend.
         double t;
         if (lum <= 0.45f) t = 0.0;
         else if (lum >= 0.65f) t = 1.0;
         else t = (lum - 0.45f) / 0.20f;
 
-        // Light side: bright white (icon glows on dark backdrops).
-        // Dark side: near-black so it reads on white wallpapers.
-        byte channel = (byte)Math.Round(255 * (1.0 - t * 0.88));   // 255 → 30
-        var color = Color.FromRgb(channel, channel, channel);
+        // Channel: 255 (white) on dark, ~30 (near-black) on light.
+        byte channel = (byte)Math.Round(255 * (1.0 - t * 0.88));
+        // Alpha: ~0xB0 (~70%) so the underlying refracted glass shows through —
+        // gives the "icon = brighter region of frosted glass" look from the user's
+        // reference shot, instead of a solid silhouette painted on top.
+        const byte iconAlpha = 0xC0;   // 75% — frosted-glass translucency
+        var iconColor = Color.FromArgb(iconAlpha, channel, channel, channel);
 
-        IconText.Foreground = new SolidColorBrush(color);
-        CandleIcon.Fill = new SolidColorBrush(color);
-
-        // Same adaptive logic for the bar's mid-marker so it tracks contrast.
+        IconText.Foreground = new SolidColorBrush(iconColor);
+        CandleIcon.Fill     = new SolidColorBrush(iconColor);
         MidMarker.Background = new SolidColorBrush(
-            Color.FromArgb(0xCC, channel, channel, channel));
+            Color.FromArgb(0xA8, channel, channel, channel));
     }
 
     // ---- Animation ----

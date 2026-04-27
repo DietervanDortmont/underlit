@@ -234,6 +234,16 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
+                // Thin sharp rim highlight — the "tiny bezel on the bezel" effect.
+                // Phong with very high shininess (concentrated to a small bright spot)
+                // multiplied by edge^16 (so it only fires in the very last 1-2 px of
+                // the rim, not across the whole bevel zone). Comes from the SAME light
+                // direction as the broad crescent so they read as one coherent
+                // lighting setup.
+                float rimMask = edge * edge; rimMask *= rimMask; rimMask *= rimMask; rimMask *= rimMask; // edge^16
+                float thinRim = MathF.Pow(NdotH, 80f) * 1.4f * intensityMul * rimMask;
+                spec += thinRim;
+
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;
                 float fresnel = FresnelF0 + (1f - FresnelF0) * MathF.Pow(1f - NdotV, FresnelExp);
                 fresnel *= RimIntensity * intensityMul;

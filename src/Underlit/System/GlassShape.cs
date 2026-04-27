@@ -41,6 +41,7 @@ public static class GlassShape
         public int CornerRadiusPx;
         public double SquircleExponent;
         public double BevelWidthFraction;
+        public double BodyCurvatureFraction;
 
         public float[] Normals = Array.Empty<float>();
         public float[] Sdf     = Array.Empty<float>();
@@ -70,7 +71,8 @@ public static class GlassShape
 
     public static NormalMap ComputePill(int fullW, int fullH, int padX, int padY,
                                          int pillW, int pillH, int cornerRadiusPx,
-                                         double squircleExponent, double bevelWidthFraction)
+                                         double squircleExponent, double bevelWidthFraction,
+                                         double bodyCurvatureFraction)
     {
         var map = new NormalMap
         {
@@ -80,6 +82,7 @@ public static class GlassShape
             CornerRadiusPx = cornerRadiusPx,
             SquircleExponent = squircleExponent,
             BevelWidthFraction = bevelWidthFraction,
+            BodyCurvatureFraction = bodyCurvatureFraction,
         };
         int total = fullW * fullH;
         map.Normals = new float[total * 3];
@@ -101,9 +104,15 @@ public static class GlassShape
 
         // Maximum SDF is half of the smaller pill dimension.
         double maxSdf = Math.Min(pillW, pillH) / 2.0;
-        // Width of the curved bevel zone (in SDF units). Beyond this, the surface
-        // is flat (slope 0). At BevelWidth=100% the entire pill is the bevel.
+        // Sharp outer-bezel zone — small width, dramatic rim slope.
         double bevelMaxSdf = Math.Max(0.5, maxSdf * Math.Clamp(bevelWidthFraction, 0.01, 1.0));
+        // Gentle inner-dome zone — typically wider than bevel, contributes a small extra
+        // slope across the body so refraction smoothly carries over from the bezel into
+        // the centre. domeStrength scales with bodyCurvatureFraction so 0% kills the dome
+        // entirely and 100% gives a meaningful but still subtle inner slope.
+        double bodyCurv = Math.Clamp(bodyCurvatureFraction, 0, 1);
+        double domeMaxSdf = Math.Max(0.5, maxSdf * bodyCurv);
+        double domeStrength = bodyCurv * 0.45;
         double n = Math.Max(1.5, squircleExponent);   // floor for numerical stability
 
         for (int y = 0; y < fullH; y++)
@@ -168,27 +177,38 @@ public static class GlassShape
                 continue;
             }
 
-            // Bevel zone defined by bevelWidthFraction. Pixels deeper than that are
-            // on the flat top (slope = 0). Pixels inside the bevel use a sine profile
-            // — G2/curvature-continuous, sliding to slope = 0 at the inner edge so
-            // the join with the flat zone has no kink.
-            double slope;
-            if (sdf >= bevelMaxSdf)
-            {
-                slope = 0;
-            }
-            else
+            // Slope is the SUM of two contributions:
+            //   1. BEZEL — sharp slope concentrated in the outer bevelMaxSdf band.
+            //      Provides the dramatic lens-rim refraction.
+            //   2. DOME  — gentle slope across the wider domeMaxSdf band (the body
+            //      curvature). Adds the soft "blob of glass" warping that leads up
+            //      to the bezel without making the centre flat.
+            //
+            // Both use sine profiles (G2-continuous), which means slope→0 smoothly
+            // at the boundary of each zone. No kinks.
+            double slope = 0;
+
+            // Bezel contribution.
+            if (sdf < bevelMaxSdf)
             {
                 double t = sdf / bevelMaxSdf;
                 // Blend between sine (smooth) and squircle (flat-top character) by
                 // the squircle exponent. Low n → mostly sine. High n → squircle bias.
-                // Practical range: at default Depth=50 (n≈2.75) the blend is ~50/50.
                 double blend = Math.Clamp((n - 1.5) / 6.5, 0, 1);
-                double sineSlope = SineSlope(t);
-                double squircleSlope = SquircleSlope(t, n);
-                slope = sineSlope * (1 - blend) + squircleSlope * blend;
-                if (slope > MaxRimSlope) slope = MaxRimSlope;
+                double bezelSine = SineSlope(t);
+                double bezelSquircle = SquircleSlope(t, n);
+                double bezelContribution = bezelSine * (1 - blend) + bezelSquircle * blend;
+                slope += bezelContribution;
             }
+
+            // Dome contribution — only if the user has enabled it (bodyCurvature > 0).
+            if (bodyCurv > 0.001 && sdf < domeMaxSdf)
+            {
+                double t = sdf / domeMaxSdf;
+                slope += SineSlope(t) * domeStrength;
+            }
+
+            if (slope > MaxRimSlope) slope = MaxRimSlope;
 
             double nx = slope * outwardX;
             double ny = slope * outwardY;

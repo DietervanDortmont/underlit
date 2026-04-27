@@ -99,7 +99,8 @@ public sealed class AppSettings
     public double GlassDispersion     { get; set; } = 0;
     public double GlassFrost          { get; set; } = 10;
     public double GlassCornerRadius   { get; set; } = 100;   // 0..100 (% of pillH/2)
-    public double GlassBevelWidth     { get; set; } = 100;   // 0..100 (% of pillH/2 — width of curved zone)
+    public double GlassBevelWidth     { get; set; } = 100;   // 0..100 (% of pillH/2 — sharp bezel zone)
+    public double GlassBodyCurvature  { get; set; } = 50;    // 0..100 (% of pillH/2 — gentle inner-dome zone)
 
     // ---- Schedule (optional baseline curve) ----
 

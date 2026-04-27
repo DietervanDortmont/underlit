@@ -26,10 +26,16 @@ public sealed class GlassParams
     public double Depth          { get; set; } = 50;
     public double Dispersion     { get; set; } = 0;
     public double Frost          { get; set; } = 10;
-    /// <summary>0..100. Width of the curved (bevel) zone as a percentage of pillH/2.
-    /// 100 = entire pill is the dome (smoothest, no flat top). 50 = outer half curves,
-    /// inner half is flat. 0 = no curve at all.</summary>
+    /// <summary>0..100. Width of the SHARP outer-bezel (lip) zone as a percentage of pillH/2.
+    /// This is the dramatic-rim refraction band — keep small (~10) for a "lens lip" look.</summary>
     public double BevelWidth     { get; set; } = 100;
+
+    /// <summary>0..100. Width of the GENTLE inner-dome zone as a percentage of pillH/2.
+    /// Adds smooth body curvature INSIDE the bezel — pixels in this zone have a small
+    /// extra slope that gives the glass its "blob"/lens shape leading up to the lip.
+    /// 0 = bezel only, no body warping. 50 = dome covers half the surface (default,
+    /// good with a thin bezel). 100 = dome spans the whole pill.</summary>
+    public double BodyCurvature  { get; set; } = 50;
     /// <summary>0..100 — percentage of the maximum corner radius (which is pillHeight/2).
     /// 100 = full pill. 0 = sharp rectangle. Drives both the renderer's SDF AND the
     /// SetWindowRgn region, so the visible shape and the OS clip are guaranteed to match.</summary>
@@ -45,10 +51,13 @@ public sealed class GlassParams
         Frost          = Frost,
         CornerRadius   = CornerRadius,
         BevelWidth     = BevelWidth,
+        BodyCurvature  = BodyCurvature,
     };
 
-    /// <summary>0..1 — the fraction of pillH/2 that the curved bevel zone occupies.</summary>
+    /// <summary>0..1 — the fraction of pillH/2 that the sharp bezel zone occupies.</summary>
     public double BevelWidthFraction() => Math.Clamp(BevelWidth, 0, 100) / 100.0;
+    /// <summary>0..1 — the fraction of pillH/2 that the gentle inner-dome zone occupies.</summary>
+    public double BodyCurvatureFraction() => Math.Clamp(BodyCurvature, 0, 100) / 100.0;
 
     /// <summary>Resolve the slider's percentage to an actual radius in physical pixels.</summary>
     public int CornerRadiusPx(int pillHeightPx)

@@ -281,6 +281,7 @@ public sealed class UnderlitHost : IDisposable
         Frost          = s.GlassFrost,
         CornerRadius   = s.GlassCornerRadius,
         BevelWidth     = s.GlassBevelWidth,
+        BodyCurvature  = s.GlassBodyCurvature,
     };
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>

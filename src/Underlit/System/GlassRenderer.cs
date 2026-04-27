@@ -66,7 +66,8 @@ public static class GlassRenderer
 
         public GlassShape.NormalMap? NormalMap;
 
-        public void Configure(int fullW, int fullH, int padX, int padY, int bevelPx, double bevelMaxSlope)
+        public void Configure(int fullW, int fullH, int padX, int padY, int bevelPx,
+                              double bevelMaxSlope, int cornerRadiusPx)
         {
             int pillW = fullW - padX * 2;
             int pillH = fullH - padY * 2;
@@ -94,9 +95,11 @@ public static class GlassRenderer
                 || NormalMap.PillW != pillW
                 || NormalMap.PillH != pillH
                 || NormalMap.BevelPx != bevelPx
+                || NormalMap.CornerRadiusPx != cornerRadiusPx
                 || Math.Abs(NormalMap.BevelMaxSlope - bevelMaxSlope) > 1e-6)
             {
-                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH, bevelPx, bevelMaxSlope);
+                NormalMap = GlassShape.ComputePill(fullW, fullH, padX, padY, pillW, pillH,
+                                                     bevelPx, bevelMaxSlope, cornerRadiusPx);
             }
         }
     }

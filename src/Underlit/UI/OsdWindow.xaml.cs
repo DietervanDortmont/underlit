@@ -133,7 +133,13 @@ public partial class OsdWindow : Window
         {
             _darkMode = ThemeInfo.IsDarkMode();
             ApplyAll();
+            // Apply the SetWindowRgn pill region NOW, after the window has been laid out
+            // and DPI is settled. Doing this in OnSourceInitialized was unreliable because
+            // CompositionTarget.TransformToDevice could still report 1.0× before the
+            // window was placed on its actual monitor.
+            ApplyPillRegion();
         };
+        DpiChanged += (_, _) => ApplyPillRegion();
 
         _themeHandler = isDark => Dispatcher.BeginInvoke(() =>
         {
@@ -176,7 +182,11 @@ public partial class OsdWindow : Window
         _backdrop = backdrop;
         _glass = glass.Clone();
 
-        if (IsLoaded) ApplyAll();
+        if (IsLoaded)
+        {
+            ApplyAll();
+            ApplyPillRegion();   // corner radius may have changed
+        }
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -197,40 +207,40 @@ public partial class OsdWindow : Window
         // treatment. Win11 22H2+ paints these even on layered AllowsTransparency=true
         // windows by default; we don't want any of it.
         Acrylic.DisableSystemRounding(Hwnd);
-
-        // Belt-and-suspenders: explicitly clip the window's drawn region to the pill
-        // shape. The OS literally cannot draw outside this region — no shadow, no
-        // outline, no DWM compositor leakage. This addresses the "shadow + outline
-        // around the pill" bug the user kept hitting in v0.3.x.
-        ApplyPillRegion();
     }
 
     /// <summary>
-    /// Apply a SetWindowRgn pill region to the OSD's HWND so the OS clips ALL output
-    /// to the visible pill shape. Without this, layered windows still get DWM's
-    /// soft shadow + thin border drawn outside the pill.
+    /// Apply a SetWindowRgn region matching exactly the renderer's drawn shape, so
+    /// the OS clips any DWM shadow / border to the same outline. The corner radius
+    /// is driven by GlassParams.CornerRadius so the slider in Settings affects both
+    /// the visible bitmap AND the OS clip simultaneously.
     /// </summary>
     private void ApplyPillRegion()
     {
         if (Hwnd == IntPtr.Zero) return;
 
-        var src = PresentationSource.FromVisual(this);
-        double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        // VisualTreeHelper.GetDpi queries the OS for the actual DPI of the window's
+        // current monitor. More reliable than CompositionTarget.TransformToDevice
+        // (which can read 1.0 before the window is placed).
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double scale = dpi.DpiScaleX;
+        if (scale <= 0) scale = 1.0;
 
-        int physPadX  = (int)Math.Round(LiveGlassController.PaddingDip   * scale);
-        int physPadY  = (int)Math.Round(LiveGlassController.PaddingDip   * scale);
-        int physPillW = (int)Math.Round(LiveGlassController.PillWidthDip * scale);
+        int physPadX  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
+        int physPadY  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
+        int physPillW = (int)Math.Round(LiveGlassController.PillWidthDip  * scale);
         int physPillH = (int)Math.Round(LiveGlassController.PillHeightDip * scale);
+        int rPx = _glass.CornerRadiusPx(physPillH);
 
-        // CreateRoundRectRgn(x1, y1, x2, y2, ellW, ellH). x2/y2 are exclusive.
-        // For a true pill, ellW = ellH = pillH (full-circle corners).
+        // CreateRoundRectRgn corners are an ellipse of width=cx, height=cy. For corner
+        // radius rPx we want a circle of diameter 2*rPx.
         IntPtr rgn = NativeMethods.CreateRoundRectRgn(
             physPadX,
             physPadY,
             physPadX + physPillW,
             physPadY + physPillH,
-            physPillH,
-            physPillH);
+            rPx * 2,
+            rPx * 2);
 
         if (rgn != IntPtr.Zero)
         {

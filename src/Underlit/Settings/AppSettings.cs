@@ -98,6 +98,7 @@ public sealed class AppSettings
     public double GlassDepth          { get; set; } = 50;
     public double GlassDispersion     { get; set; } = 0;
     public double GlassFrost          { get; set; } = 10;
+    public double GlassCornerRadius   { get; set; } = 100;   // 0..100 (% of pillH/2)
 
     // ---- Schedule (optional baseline curve) ----
 

@@ -66,7 +66,10 @@ public sealed class LiveGlassController : IDisposable
 
             if (physFullW <= 0 || physFullH <= 0) return;
 
-            _scratch.Configure(physFullW, physFullH, physPadX, physPadY, bevelPx, parameters.BevelMaxSlope());
+            int physPillH = physFullH - physPadY * 2;
+            int cornerRadiusPx = parameters.CornerRadiusPx(physPillH);
+            _scratch.Configure(physFullW, physFullH, physPadX, physPadY, bevelPx,
+                                parameters.BevelMaxSlope(), cornerRadiusPx);
 
             using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
 

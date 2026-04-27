@@ -22,10 +22,14 @@ public sealed class GlassParams
 {
     public double LightAngleDeg  { get; set; } = -45;
     public double LightIntensity { get; set; } = 100;
-    public double Refraction     { get; set; } = 8;
+    public double Refraction     { get; set; } = 16;
     public double Depth          { get; set; } = 50;
     public double Dispersion     { get; set; } = 0;
     public double Frost          { get; set; } = 10;
+    /// <summary>0..100 — percentage of the maximum corner radius (which is pillHeight/2).
+    /// 100 = full pill. 0 = sharp rectangle. Drives both the renderer's SDF AND the
+    /// SetWindowRgn region, so the visible shape and the OS clip are guaranteed to match.</summary>
+    public double CornerRadius   { get; set; } = 100;
 
     public GlassParams Clone() => new()
     {
@@ -35,7 +39,15 @@ public sealed class GlassParams
         Depth          = Depth,
         Dispersion     = Dispersion,
         Frost          = Frost,
+        CornerRadius   = CornerRadius,
     };
+
+    /// <summary>Resolve the slider's percentage to an actual radius in physical pixels.</summary>
+    public int CornerRadiusPx(int pillHeightPx)
+    {
+        double pct = Math.Clamp(CornerRadius, 0, 100) / 100.0;
+        return (int)Math.Round(pillHeightPx * 0.5 * pct);
+    }
 
     /// <summary>Returns Light direction (x, y, z) — y axis is +Y down (screen coords).</summary>
     public (float x, float y, float z) LightDirection()

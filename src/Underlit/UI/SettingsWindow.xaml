@@ -428,6 +428,16 @@
                                     <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
                                                Text="{Binding ElementName=SldGlassFrost, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Corner radius"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassCornerRadius"
+                                            Minimum="0" Maximum="100" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassCornerRadius, Path=Value, StringFormat={}{0:F0}%}"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

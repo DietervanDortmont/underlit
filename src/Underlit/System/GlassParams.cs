@@ -69,11 +69,18 @@ public sealed class GlassParams
     /// Maps the Depth slider (0..100) to the convex-squircle exponent used by the
     /// height function f(t) = (1 − (1−t)^n)^(1/n).
     ///
-    ///   Depth = 0   → n = 8   (very flat top, sharp rim — the "pill with bevel" look)
-    ///   Depth = 50  → n = 5   (Apple-ish — close to their preferred squircle of n=4)
-    ///   Depth = 100 → n = 2   (sphere-dome — strong lens warping across the whole body)
+    /// Curvature distribution:
+    ///   • High n  → very flat top, sharp drop at the rim. With heavy frost the
+    ///               flat-vs-curved boundary becomes visible (banding).
+    ///   • Low n   → smooth dome — slope decreases continuously from rim to centre,
+    ///               so refraction varies smoothly. Frost-friendly.
+    ///
+    ///   Depth = 0   → n = 4    (squircle, Apple's preferred flat-top look — sharper
+    ///                            transition; pair with low Frost to avoid banding)
+    ///   Depth = 50  → n = 2.75 (default — smooth domed lens; works well with Frost)
+    ///   Depth = 100 → n = 1.5  (near-spherical — strongest, most uniform body warping)
     /// </summary>
-    public double SquircleExponent() => 8.0 - (Math.Clamp(Depth, 0, 100) / 100.0) * 6.0;
+    public double SquircleExponent() => 4.0 - (Math.Clamp(Depth, 0, 100) / 100.0) * 2.5;
 
     /// <summary>Maps LightIntensity slider (0..200) to a multiplier (0..2).</summary>
     public double IntensityMul() => LightIntensity / 100.0;

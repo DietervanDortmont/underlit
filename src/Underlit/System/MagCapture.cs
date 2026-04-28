@@ -83,18 +83,20 @@ public sealed class MagCapture : IDisposable
             int w = Math.Max(1, captureWidth);
             int h = Math.Max(1, captureHeight);
 
-            // Host window — invisible (alpha=0) layered popup, off-screen, no taskbar.
+            // Host window — placed on the PRIMARY MONITOR so the DWM compositor
+            // actually renders it (and its magnifier child). Positioning off-screen
+            // at (-32000, -32000) caused the compositor to skip rendering →
+            // magnifier never painted → BitBlt read empty pixels (v0.6.6/0.6.7 bug).
+            // We hide the host from the user with DwmSetWindowAttribute(DWMWA_CLOAK)
+            // below — that's the documented way to keep a window fully composed
+            // but invisible to the user (used by screen-capture tools).
             _hostHwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 HostWindowClass, "UnderlitMagHost", WS_POPUP,
-                -32000, -32000, w, h,
+                0, 0, w, h,
                 IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
             if (_hostHwnd == IntPtr.Zero)
                 throw new InvalidOperationException("CreateWindowEx(host) failed: " + Marshal.GetLastWin32Error());
-            // FULLY OPAQUE alpha so the DWM compositor actually renders the window
-            // (and its magnifier child). Earlier alpha=0 made the compositor skip
-            // it entirely → magnifier never painted → BitBlt got empty pixels.
-            // Window is positioned at (-32000, -32000) so the user can't see it.
             SetLayeredWindowAttributes(_hostHwnd, 0, 255, LWA_ALPHA);
             Logger.Info("MagCapture: host hwnd created 0x" + _hostHwnd.ToInt64().ToString("X"));
 
@@ -115,9 +117,13 @@ public sealed class MagCapture : IDisposable
             else
                 Logger.Info("MagCapture: filter list set (OSD excluded)");
 
-            // Show the host so the magnifier child can render. SW_SHOWNOACTIVATE so
-            // it doesn't steal focus.
+            // Show the host (no focus steal) so the magnifier child renders, then
+            // immediately cloak it so the user doesn't see it.
             ShowWindow(_hostHwnd, SW_SHOWNOACTIVATE);
+            int cloak = 1;
+            int hr = DwmSetWindowAttribute(_hostHwnd, DWMWA_CLOAK, ref cloak, sizeof(int));
+            if (hr != 0) Logger.Warn($"MagCapture: DwmCloak failed 0x{hr:X8} — host may be visible");
+            else Logger.Info("MagCapture: host cloaked (rendered but invisible)");
 
             _initialized = true;
             Logger.Info("MagCapture: Initialize complete");
@@ -162,7 +168,7 @@ public sealed class MagCapture : IDisposable
             if (w != _bufW || h != _bufH)
             {
                 MoveWindow(_magHwnd, 0, 0, w, h, false);
-                MoveWindow(_hostHwnd, -32000, -32000, w, h, false);
+                MoveWindow(_hostHwnd, 0, 0, w, h, false);
                 ReallocReadbackResources(w, h);
             }
 
@@ -397,6 +403,10 @@ public sealed class MagCapture : IDisposable
     [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
     private const uint RDW_INVALIDATE = 0x1;
     private const uint RDW_UPDATENOW  = 0x100;
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    private const int DWMWA_CLOAK = 13;
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);

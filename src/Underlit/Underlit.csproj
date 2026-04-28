@@ -14,7 +14,7 @@
     <AssemblyName>Underlit</AssemblyName>
     <RootNamespace>Underlit</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.6.7</Version>
+    <Version>0.6.8</Version>
     <Product>Underlit</Product>
     <Company>Underlit</Company>
     <Copyright>Copyright (c) 2026</Copyright>

@@ -86,7 +86,7 @@ public sealed class LiveGlassController : IDisposable
         }
         catch (Exception ex)
         {
-            Logger.Warn("LiveGlass: WGC init failed, falling back to capture-on-show", ex);
+            Logger.Warn("LiveGlass: WGC init failed — OSD will show empty glass until this is fixed", ex);
             try { _wgc?.Dispose(); } catch { }
             _wgc = null;
             _liveSupported = false;

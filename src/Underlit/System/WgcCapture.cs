@@ -114,7 +114,10 @@ public sealed class WgcCapture : IDisposable
             var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
             Logger.Info("WGC: IGraphicsCaptureItemInterop obtained");
 
-            Guid itemIID = typeof(GraphicsCaptureItem).GUID;
+            // IGraphicsCaptureItem default-interface IID (NOT typeof(GraphicsCaptureItem).GUID
+            // which under CsWinRT returns the runtime-class GUID — that's E_NOINTERFACE
+            // when passed to CreateForMonitor; took a v0.6.2 → v0.6.3 round-trip to learn).
+            Guid itemIID = new Guid("79c3f95b-31f7-4ec2-a464-632ef5d30760");
             hr = interop.CreateForMonitor(hMonitor, ref itemIID, out IntPtr itemPtr);
             if (hr != 0 || itemPtr == IntPtr.Zero)
                 throw new InvalidOperationException($"CreateForMonitor failed: 0x{hr:X8}");

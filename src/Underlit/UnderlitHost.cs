@@ -283,6 +283,8 @@ public sealed class UnderlitHost : IDisposable
         BevelWidth     = s.GlassBevelWidth,
         BodyCurvature  = s.GlassBodyCurvature,
         BevelDepthSliderValue = s.GlassBevelDepth,
+        RimBrightness  = s.GlassRimBrightness,
+        RimWidth       = s.GlassRimWidth,
     };
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>

@@ -145,7 +145,8 @@ public static class GlassRenderer
         ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, dmap,
                            halfVec, (float)p.IntensityMul(),
                            (float)p.Refraction, (float)p.BevelDepth(), (float)p.BevelWidthPx(dmap.PillH),
-                           (float)p.Dispersion);
+                           (float)p.Dispersion,
+                           (float)p.RimBrightnessMul(), (float)p.RimWidthExponent());
 
         return true;
     }
@@ -155,7 +156,8 @@ public static class GlassRenderer
                                            (float x, float y, float z) halfVec,
                                            float intensityMul,
                                            float refraction, float bevelDepth, float bevelWidthPx,
-                                           float dispersion)
+                                           float dispersion,
+                                           float rimBrightnessMul, float rimWidthExponent)
     {
         float[] sdf = dmap.Sdf;
         float[] outX = dmap.OutwardX;
@@ -234,14 +236,12 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Thin sharp rim highlight — the "tiny bezel on the bezel" effect.
-                // Phong with very high shininess (concentrated to a small bright spot)
-                // multiplied by edge^16 (so it only fires in the very last 1-2 px of
-                // the rim, not across the whole bevel zone). Comes from the SAME light
-                // direction as the broad crescent so they read as one coherent
-                // lighting setup.
-                float rimMask = edge * edge; rimMask *= rimMask; rimMask *= rimMask; rimMask *= rimMask; // edge^16
-                float thinRim = MathF.Pow(NdotH, 80f) * 1.4f * intensityMul * rimMask;
+                // Thin sharp rim highlight ("tiny bezel on the bezel"). Phong with
+                // very high shininess (sharp spot) × edge^N (band mask). Both N
+                // (rimWidthExponent) and the brightness multiplier are user-tunable
+                // via the Settings sliders.
+                float rimMask = MathF.Pow(edge, rimWidthExponent);
+                float thinRim = MathF.Pow(NdotH, 80f) * rimBrightnessMul * intensityMul * rimMask;
                 spec += thinRim;
 
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;

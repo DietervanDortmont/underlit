@@ -32,6 +32,8 @@ public sealed class GlassParams
     public double BevelWidth     { get; set; } = 25;      // 0..100 (% of pillH/2 — bevel zone width)
     public double BodyCurvature  { get; set; } = 50;      // legacy / unused — kept so saved settings load cleanly
     public double BevelDepthSliderValue { get; set; } = 35;   // 0..100 (pixels of edge-spike refraction)
+    public double RimBrightness  { get; set; } = 250;     // 0..300 — thin rim-highlight intensity multiplier
+    public double RimWidth       { get; set; } = 50;      // 0..100 — thin rim-highlight band width (low=thin, high=wide)
 
     public GlassParams Clone() => new()
     {
@@ -45,7 +47,15 @@ public sealed class GlassParams
         BevelWidth     = BevelWidth,
         BodyCurvature  = BodyCurvature,
         BevelDepthSliderValue = BevelDepthSliderValue,
+        RimBrightness = RimBrightness,
+        RimWidth = RimWidth,
     };
+
+    /// <summary>Rim-highlight intensity multiplier (0..3.0).</summary>
+    public double RimBrightnessMul() => Math.Clamp(RimBrightness, 0, 300) / 100.0;
+
+    /// <summary>Rim-highlight band exponent: lower = wider band, higher = thinner. Slider 0..100 → 32..4.</summary>
+    public double RimWidthExponent() => 32.0 - Math.Clamp(RimWidth, 0, 100) / 100.0 * 28.0;
 
     public (float x, float y, float z) LightDirection()
     {

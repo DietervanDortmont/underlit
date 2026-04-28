@@ -102,6 +102,8 @@ public sealed class AppSettings
     public double GlassBevelWidth     { get; set; } = 25;    // 0..100 (% of pillH/2 — bevel zone width)
     public double GlassBodyCurvature  { get; set; } = 50;    // legacy, unused in v0.5+
     public double GlassBevelDepth     { get; set; } = 35;    // 0..100 px (rim spike depth)
+    public double GlassRimBrightness  { get; set; } = 250;   // 0..300 — thin rim-highlight brightness
+    public double GlassRimWidth       { get; set; } = 50;    // 0..100 — thin rim-highlight band width
 
     // ---- Schedule (optional baseline curve) ----
 

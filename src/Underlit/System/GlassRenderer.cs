@@ -236,12 +236,19 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Thin sharp rim highlight ("tiny bezel on the bezel"). Phong with
-                // very high shininess (sharp spot) × edge^N (band mask). Both N
-                // (rimWidthExponent) and the brightness multiplier are user-tunable
-                // via the Settings sliders.
+                // Rim highlight — a thin RING around the entire perimeter, visible
+                // all the way around with mild directional brightening from the same
+                // light as the bevel. Formula:
+                //
+                //   brightness = (baseline + directional × NdotH) × bandMask × user
+                //
+                // baseline=0.45 keeps the unlit side of the ring visible, the
+                // directional term up to +0.55 brightens the lit side. bandMask is
+                // edge^N where N comes from the Rim-width slider; lower N = wider band.
                 float rimMask = MathF.Pow(edge, rimWidthExponent);
-                float thinRim = MathF.Pow(NdotH, 80f) * rimBrightnessMul * intensityMul * rimMask;
+                float NdotHc  = NdotH < 0f ? 0f : NdotH;
+                float rimDir  = 0.45f + 0.55f * NdotHc;
+                float thinRim = rimMask * rimDir * rimBrightnessMul * intensityMul;
                 spec += thinRim;
 
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;

@@ -54,8 +54,10 @@ public sealed class GlassParams
     /// <summary>Rim-highlight intensity multiplier (0..3.0).</summary>
     public double RimBrightnessMul() => Math.Clamp(RimBrightness, 0, 300) / 100.0;
 
-    /// <summary>Rim-highlight band exponent: lower = wider band, higher = thinner. Slider 0..100 → 32..4.</summary>
-    public double RimWidthExponent() => 32.0 - Math.Clamp(RimWidth, 0, 100) / 100.0 * 28.0;
+    /// <summary>Rim-highlight band exponent: lower = wider band, higher = thinner.
+    /// Slider 0..100 → 24..2. At slider=50 (default) exponent≈13, which gives a
+    /// visibly thick ring (about 1/8 of the bevel zone deep).</summary>
+    public double RimWidthExponent() => 24.0 - Math.Clamp(RimWidth, 0, 100) / 100.0 * 22.0;
 
     public (float x, float y, float z) LightDirection()
     {

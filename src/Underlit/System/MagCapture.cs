@@ -91,7 +91,11 @@ public sealed class MagCapture : IDisposable
                 IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
             if (_hostHwnd == IntPtr.Zero)
                 throw new InvalidOperationException("CreateWindowEx(host) failed: " + Marshal.GetLastWin32Error());
-            SetLayeredWindowAttributes(_hostHwnd, 0, 0, LWA_ALPHA);
+            // FULLY OPAQUE alpha so the DWM compositor actually renders the window
+            // (and its magnifier child). Earlier alpha=0 made the compositor skip
+            // it entirely → magnifier never painted → BitBlt got empty pixels.
+            // Window is positioned at (-32000, -32000) so the user can't see it.
+            SetLayeredWindowAttributes(_hostHwnd, 0, 255, LWA_ALPHA);
             Logger.Info("MagCapture: host hwnd created 0x" + _hostHwnd.ToInt64().ToString("X"));
 
             _magHwnd = CreateWindowExW(0, MagWindowClass, "MagChild",
@@ -169,12 +173,18 @@ public sealed class MagCapture : IDisposable
                 return false;
             }
 
+            // FORCE SYNCHRONOUS PAINT. MagSetWindowSource only queues the source change;
+            // the magnifier window paints asynchronously on its own WM_PAINT cycle.
+            // Without RedrawWindow we'd BitBlt before new content is rendered and read
+            // stale (or empty) pixels. RDW_UPDATENOW makes WM_PAINT happen immediately.
+            RedrawWindow(_magHwnd, IntPtr.Zero, IntPtr.Zero, RDW_INVALIDATE | RDW_UPDATENOW);
+
             // BitBlt the magnifier's content into our memory DC.
             IntPtr magDC = GetDC(_magHwnd);
             if (magDC == IntPtr.Zero) return false;
             try
             {
-                BitBlt(_memDC, 0, 0, w, h, magDC, 0, 0, SRCCOPY | CAPTUREBLT);
+                BitBlt(_memDC, 0, 0, w, h, magDC, 0, 0, SRCCOPY);
             }
             finally
             {
@@ -210,6 +220,15 @@ public sealed class MagCapture : IDisposable
                 FrameHeight = h;
                 FrameStride = w * 4;
                 FrameId++;
+                if (FrameId == 1)
+                {
+                    // One-shot diagnostic: log a sample pixel from the centre of the
+                    // first captured frame so we can confirm BitBlt actually pulled
+                    // real desktop content (not a black/empty frame).
+                    int cx = w / 2, cy = h / 2;
+                    int idx = cy * (w * 4) + cx * 4;
+                    Logger.Info($"MagCapture: first frame captured ({w}x{h}); centre pixel BGRA = ({buf[idx]}, {buf[idx+1]}, {buf[idx+2]}, {buf[idx+3]})");
+                }
             }
             FrameArrived?.Invoke();
             return true;
@@ -326,7 +345,6 @@ public sealed class MagCapture : IDisposable
     private const uint LWA_ALPHA = 0x2;
     private const int SW_SHOWNOACTIVATE = 4;
     private const uint SRCCOPY = 0xCC0020;
-    private const uint CAPTUREBLT = 0x40000000;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int left, top, right, bottom; }
@@ -376,6 +394,9 @@ public sealed class MagCapture : IDisposable
     [DllImport("user32.dll", SetLastError = true)] private static extern bool DestroyWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int w, int h, bool repaint);
+    [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr hWnd, IntPtr lprcUpdate, IntPtr hrgnUpdate, uint flags);
+    private const uint RDW_INVALIDATE = 0x1;
+    private const uint RDW_UPDATENOW  = 0x100;
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint crKey, byte bAlpha, uint dwFlags);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);

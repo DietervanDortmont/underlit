@@ -213,31 +213,18 @@ public sealed class LiveGlassController : IDisposable
     }
 
     /// <summary>
-    /// One-shot capture-on-show fallback. Call before Show() so the OSD itself isn't
-    /// in the BitBlt. If live mode is active (WGC running + ticker on) this is a
-    /// no-op since the live ticker will refresh the bitmap on its own.
+    /// In v0.6.2 the BitBlt-on-show fallback is gone — the OSD is intentionally
+    /// LIVE-ONLY now. If WGC failed to initialise, this method is a no-op and the
+    /// OSD's GlassBackdrop will simply be blank (so the failure is visible rather
+    /// than masked by a static-capture path that "kicks in" without being asked).
+    ///
+    /// Diagnose any WGC failure by inspecting %LOCALAPPDATA%\Underlit\underlit.log
+    /// — WgcCapture.StartForMonitor logs every step it succeeds at, so the last
+    /// "WGC: ..." line tells you exactly where init died.
     /// </summary>
     public void RefreshNow(GlassParams parameters)
     {
-        if (_disposed) return;
-        if (_liveActive) return;   // live ticker is doing the work
-        try
-        {
-            var src = PresentationSource.FromVisual(_window);
-            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            int physWinX = (int)Math.Round(_window.Left * scale);
-            int physWinY = (int)Math.Round(_window.Top  * scale);
-            int physFullW = (int)Math.Round(FullWidthDip  * scale);
-            int physFullH = (int)Math.Round(FullHeightDip * scale);
-            if (physFullW <= 0 || physFullH <= 0) return;
-
-            using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
-            RenderInto(capture, parameters);
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn("Glass capture failed", ex);
-        }
+        // Intentionally empty. See doc comment.
     }
 
     /// <summary>Run the renderer over a captured bitmap and update the WriteableBitmap.</summary>

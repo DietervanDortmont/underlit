@@ -3,29 +3,33 @@ using System.Runtime.InteropServices;
 using Windows.Graphics.Capture;
 using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
+using WinRT;
 
 namespace Underlit.Sys;
 
 /// <summary>
-/// Live screen capture via Windows.Graphics.Capture (WGC). Returns the latest
-/// captured monitor frame as a BGRA byte buffer. The OSD is excluded from the
-/// captured frames via SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) — this
-/// flag IS honoured by WGC (it isn't by BitBlt/DXGI), so the captured monitor
-/// shows the desktop *behind* the OSD with proper transparency rather than a
-/// black silhouette.
+/// Live screen capture via Windows.Graphics.Capture (WGC). The OSD must call
+/// SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) on its HWND first — that flag
+/// is honoured by WGC (BitBlt and DXGI Output Duplication don't), so the captured
+/// monitor frames will show the desktop *behind* the OSD with proper transparency
+/// rather than a black silhouette.
 ///
 /// Threading: WGC's FrameArrived fires on a free-threaded WGC worker thread.
-/// We grab the texture, copy to a CPU-readable staging texture, map it,
-/// and store the pixels in a shared byte[] (lock-protected). The caller's
-/// render loop on the UI thread polls for the latest pixels.
+/// We grab the texture, copy to a CPU-readable staging texture, map it, and store
+/// the pixels in a shared byte[] (lock-protected). The caller's render loop on
+/// the UI thread polls for the latest pixels.
 ///
-/// LIFECYCLE: Start() boots the D3D11 + WGC stack and begins receiving frames.
-/// Stop() ends the session and disposes resources. Any failure during Start()
-/// throws; caller should catch and fall back to the static capture path.
+/// .NET 8 + windows10.0.19041.0 WinRT marshaling notes:
+///   • WinRT projected types (GraphicsCaptureItem, IDirect3DDevice, etc) MUST be
+///     marshaled with WinRT.MarshalInspectable&lt;T&gt;.FromAbi — not the legacy
+///     Marshal.GetObjectForIUnknown which returns a generic __ComObject and fails
+///     to cast to the projected type.
+///   • Casting a projected WinRT type to a [ComImport] COM interface (e.g. casting
+///     IDirect3DSurface to IDirect3DDxgiInterfaceAccess) requires going via the
+///     ABI pointer — get pointer with MarshalInspectable.FromManaged, QI, wrap.
 /// </summary>
 public sealed class WgcCapture : IDisposable
 {
-    // Public output: latest BGRA frame and its dimensions. Lock _frameLock to read.
     public byte[]? LatestFrame { get; private set; }
     public int FrameWidth  { get; private set; }
     public int FrameHeight { get; private set; }
@@ -48,70 +52,109 @@ public sealed class WgcCapture : IDisposable
 
     public bool IsRunning => _running && !_disposed;
 
-    /// <summary>
-    /// Start capturing the monitor that contains the given HWND. Throws if the
-    /// platform doesn't support WGC or any setup step fails.
-    /// </summary>
     public void StartForMonitor(IntPtr hMonitor)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WgcCapture));
         if (_running) return;
 
-        // 1. Create a D3D11 device (BGRA support so we can copy to CPU-readable texture).
+        Logger.Info("WGC: StartForMonitor begin, hMon=0x" + hMonitor.ToInt64().ToString("X"));
+
+        // ---- 1. D3D11 device -----------------------------------------------
         IntPtr device, context;
         const uint FLAGS = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
         var featureLevels = new[] { 0xb000 /* 11_0 */ };
         int hr = D3D11CreateDevice(IntPtr.Zero, /*HARDWARE*/ 1, IntPtr.Zero, FLAGS,
-                                    featureLevels, featureLevels.Length, 7 /*SDK_VERSION*/,
+                                    featureLevels, featureLevels.Length, 7,
                                     out device, out _, out context);
         if (hr != 0) throw new InvalidOperationException($"D3D11CreateDevice failed: 0x{hr:X8}");
         _d3dDevice = device;
         _d3dContext = context;
+        Logger.Info("WGC: D3D11 device created");
 
-        // 2. Get IDXGIDevice from the D3D11 device.
+        // ---- 2. Wrap as WinRT IDirect3DDevice ------------------------------
         Guid iidDxgiDevice = new("54ec77fa-1377-44e6-8c32-88fd5f44c84c");
         if (Marshal.QueryInterface(_d3dDevice, ref iidDxgiDevice, out IntPtr dxgiDevice) != 0)
             throw new InvalidOperationException("Could not QI for IDXGIDevice");
 
-        // 3. Wrap as a WinRT IDirect3DDevice.
         try
         {
             hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice, out IntPtr graphicsDevice);
             if (hr != 0) throw new InvalidOperationException($"CreateDirect3D11DeviceFromDXGIDevice failed: 0x{hr:X8}");
-            _winrtDevice = MarshalInterfaceFromIntPtr<IDirect3DDevice>(graphicsDevice);
+            try
+            {
+                // CsWinRT marshalling: IInspectable* → projected IDirect3DDevice.
+                _winrtDevice = MarshalInspectable<IDirect3DDevice>.FromAbi(graphicsDevice);
+            }
+            finally
+            {
+                Marshal.Release(graphicsDevice);
+            }
         }
         finally
         {
             Marshal.Release(dxgiDevice);
         }
+        Logger.Info("WGC: IDirect3DDevice wrapped");
 
-        // 4. GraphicsCaptureItem from the monitor handle (via interop COM interface).
-        Guid itemIID = typeof(GraphicsCaptureItem).GUID;
-        var interop = GetActivationFactory<IGraphicsCaptureItemInterop>(
-            "Windows.Graphics.Capture.GraphicsCaptureItem");
-        hr = interop.CreateForMonitor(hMonitor, ref itemIID, out IntPtr itemPtr);
-        if (hr != 0) throw new InvalidOperationException($"CreateForMonitor failed: 0x{hr:X8}");
-        _item = MarshalInterfaceFromIntPtr<GraphicsCaptureItem>(itemPtr);
+        // ---- 3. GraphicsCaptureItem from monitor via interop COM -----------
+        IntPtr factoryPtr = IntPtr.Zero;
+        IntPtr hstr = IntPtr.Zero;
+        const string itemClassName = "Windows.Graphics.Capture.GraphicsCaptureItem";
+        try
+        {
+            hr = WindowsCreateString(itemClassName, itemClassName.Length, out hstr);
+            if (hr != 0) throw new InvalidOperationException($"WindowsCreateString failed: 0x{hr:X8}");
 
-        // 5. Frame pool — free-threaded so FrameArrived fires off-UI.
+            Guid iidInterop = typeof(IGraphicsCaptureItemInterop).GUID;
+            hr = RoGetActivationFactory(hstr, ref iidInterop, out factoryPtr);
+            if (hr != 0 || factoryPtr == IntPtr.Zero)
+                throw new InvalidOperationException($"RoGetActivationFactory(IGraphicsCaptureItemInterop) failed: 0x{hr:X8}");
+
+            // The factory pointer IS the interop interface (we asked for that IID).
+            var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(factoryPtr);
+            Logger.Info("WGC: IGraphicsCaptureItemInterop obtained");
+
+            Guid itemIID = typeof(GraphicsCaptureItem).GUID;
+            hr = interop.CreateForMonitor(hMonitor, ref itemIID, out IntPtr itemPtr);
+            if (hr != 0 || itemPtr == IntPtr.Zero)
+                throw new InvalidOperationException($"CreateForMonitor failed: 0x{hr:X8}");
+
+            try
+            {
+                _item = MarshalInspectable<GraphicsCaptureItem>.FromAbi(itemPtr);
+            }
+            finally
+            {
+                Marshal.Release(itemPtr);
+            }
+            Logger.Info("WGC: GraphicsCaptureItem created");
+        }
+        finally
+        {
+            if (factoryPtr != IntPtr.Zero) Marshal.Release(factoryPtr);
+            if (hstr != IntPtr.Zero) WindowsDeleteString(hstr);
+        }
+
+        // ---- 4. Frame pool -------------------------------------------------
         _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
             _winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _item.Size);
         _framePool.FrameArrived += OnFrameArrived;
+        Logger.Info($"WGC: framepool created at {_item.Size.Width}x{_item.Size.Height}");
 
-        // 6. Session.
+        // ---- 5. Session ----------------------------------------------------
         _session = _framePool.CreateCaptureSession(_item);
-        try { _session.IsCursorCaptureEnabled = false; } catch { /* older WGC */ }
-        // IsBorderRequired only exists from Win11 24H2 SDK — set via reflection so the
+        try { _session.IsCursorCaptureEnabled = false; } catch { }
+        // IsBorderRequired only exists Win11 24H2+ — set via reflection so the
         // build doesn't fail against older Windows SDK projections.
         try
         {
             var prop = typeof(GraphicsCaptureSession).GetProperty("IsBorderRequired");
             prop?.SetValue(_session, false);
-        }
-        catch { /* property unavailable on this SDK */ }
+        } catch { }
 
         _session.StartCapture();
         _running = true;
+        Logger.Info("WGC: session.StartCapture OK — capture is live");
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
@@ -127,57 +170,31 @@ public sealed class WgcCapture : IDisposable
             int h = frame.ContentSize.Height;
             if (w <= 0 || h <= 0) return;
 
-            // Get ID3D11Texture2D from the IDirect3DSurface via DXGI interop.
-            IntPtr texture;
-            Guid iidTex2D = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
-            var access = (IDirect3DDxgiInterfaceAccess)(object)frame.Surface;
-            access.GetInterface(ref iidTex2D, out texture);
-            if (texture == IntPtr.Zero) return;
-
+            // Get ID3D11Texture2D from the IDirect3DSurface.
+            // The projected IDirect3DSurface implements (via QI) the COM interface
+            // IDirect3DDxgiInterfaceAccess. To get the raw COM pointer we go via
+            // the ABI: MarshalInspectable.FromManaged → QueryInterface.
+            IntPtr surfaceAbi = MarshalInspectable<IDirect3DSurface>.FromManaged(frame.Surface);
+            if (surfaceAbi == IntPtr.Zero) return;
             try
             {
-                EnsureStagingTexture(w, h);
-                // Copy framePool texture → CPU-readable staging.
-                ID3D11DeviceContext_CopyResource(_d3dContext, _stagingTex, texture);
-
-                // Map staging.
-                D3D11_MAPPED_SUBRESOURCE mapped = default;
-                int hr = ID3D11DeviceContext_Map(_d3dContext, _stagingTex, 0,
-                                                  /*D3D11_MAP_READ=1*/ 1, 0, ref mapped);
-                if (hr != 0) return;
+                Guid iidAccess = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
+                if (Marshal.QueryInterface(surfaceAbi, ref iidAccess, out IntPtr accessPtr) != 0) return;
                 try
                 {
-                    int rowBytes = w * 4;
-                    int total = rowBytes * h;
-                    byte[] buf = LatestFrame != null && LatestFrame.Length >= total
-                        ? LatestFrame : new byte[total];
-
-                    // Copy pixels row by row (mapped.RowPitch may be larger than rowBytes).
-                    for (int y = 0; y < h; y++)
+                    var access = (IDirect3DDxgiInterfaceAccess)Marshal.GetObjectForIUnknown(accessPtr);
+                    Guid iidTex2D = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
+                    int hr = access.GetInterface(ref iidTex2D, out IntPtr texture);
+                    if (hr != 0 || texture == IntPtr.Zero) return;
+                    try
                     {
-                        Marshal.Copy(IntPtr.Add(mapped.pData, y * (int)mapped.RowPitch),
-                                     buf, y * rowBytes, rowBytes);
+                        ProcessTexture(texture, w, h);
                     }
-
-                    lock (FrameLock)
-                    {
-                        LatestFrame = buf;
-                        FrameWidth  = w;
-                        FrameHeight = h;
-                        FrameStride = rowBytes;
-                    }
+                    finally { Marshal.Release(texture); }
                 }
-                finally
-                {
-                    ID3D11DeviceContext_Unmap(_d3dContext, _stagingTex, 0);
-                }
-
-                FrameArrived?.Invoke();
+                finally { Marshal.Release(accessPtr); }
             }
-            finally
-            {
-                Marshal.Release(texture);
-            }
+            finally { Marshal.Release(surfaceAbi); }
         }
         catch (Exception ex)
         {
@@ -185,9 +202,45 @@ public sealed class WgcCapture : IDisposable
         }
         finally
         {
-            // Direct3D11CaptureFrame implements IDisposable.
             (frame as IDisposable)?.Dispose();
         }
+    }
+
+    private void ProcessTexture(IntPtr texture, int w, int h)
+    {
+        EnsureStagingTexture(w, h);
+        ID3D11DeviceContext_CopyResource(_d3dContext, _stagingTex, texture);
+
+        D3D11_MAPPED_SUBRESOURCE mapped = default;
+        int hr = ID3D11DeviceContext_Map(_d3dContext, _stagingTex, 0, /*D3D11_MAP_READ=1*/ 1, 0, ref mapped);
+        if (hr != 0) return;
+        try
+        {
+            int rowBytes = w * 4;
+            int total = rowBytes * h;
+            byte[] buf = LatestFrame != null && LatestFrame.Length >= total
+                ? LatestFrame : new byte[total];
+
+            for (int y = 0; y < h; y++)
+            {
+                Marshal.Copy(IntPtr.Add(mapped.pData, y * (int)mapped.RowPitch),
+                             buf, y * rowBytes, rowBytes);
+            }
+
+            lock (FrameLock)
+            {
+                LatestFrame = buf;
+                FrameWidth  = w;
+                FrameHeight = h;
+                FrameStride = rowBytes;
+            }
+        }
+        finally
+        {
+            ID3D11DeviceContext_Unmap(_d3dContext, _stagingTex, 0);
+        }
+
+        FrameArrived?.Invoke();
     }
 
     private void EnsureStagingTexture(int w, int h)
@@ -270,7 +323,7 @@ public sealed class WgcCapture : IDisposable
         public IntPtr pData; public uint RowPitch; public uint DepthPitch;
     }
 
-    // Manually invoke ID3D11Device::CreateTexture2D via vtable slot 5.
+    // ID3D11Device::CreateTexture2D — vtable slot 5
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int CreateTexture2DDelegate(IntPtr self, ref D3D11_TEXTURE2D_DESC desc,
                                                   IntPtr initialData, out IntPtr texture);
@@ -278,12 +331,12 @@ public sealed class WgcCapture : IDisposable
                                                      IntPtr initialData, out IntPtr texture)
     {
         IntPtr vtable = Marshal.ReadIntPtr(device);
-        IntPtr fn = Marshal.ReadIntPtr(vtable, 5 * IntPtr.Size); // CreateTexture2D
+        IntPtr fn = Marshal.ReadIntPtr(vtable, 5 * IntPtr.Size);
         var del = Marshal.GetDelegateForFunctionPointer<CreateTexture2DDelegate>(fn);
         return del(device, ref desc, initialData, out texture);
     }
 
-    // ID3D11DeviceContext::CopyResource — vtable slot 47.
+    // ID3D11DeviceContext::CopyResource — vtable slot 47
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate void CopyResourceDelegate(IntPtr self, IntPtr dst, IntPtr src);
     private static void ID3D11DeviceContext_CopyResource(IntPtr ctx, IntPtr dst, IntPtr src)
@@ -294,7 +347,7 @@ public sealed class WgcCapture : IDisposable
         del(ctx, dst, src);
     }
 
-    // ID3D11DeviceContext::Map — vtable slot 14.
+    // ID3D11DeviceContext::Map — vtable slot 14
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int MapDelegate(IntPtr self, IntPtr resource, uint subresource,
                                       int mapType, uint mapFlags, ref D3D11_MAPPED_SUBRESOURCE mapped);
@@ -307,7 +360,7 @@ public sealed class WgcCapture : IDisposable
         return del(ctx, resource, sub, mapType, flags, ref mapped);
     }
 
-    // ID3D11DeviceContext::Unmap — vtable slot 15.
+    // ID3D11DeviceContext::Unmap — vtable slot 15
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate void UnmapDelegate(IntPtr self, IntPtr resource, uint subresource);
     private static void ID3D11DeviceContext_Unmap(IntPtr ctx, IntPtr resource, uint sub)
@@ -344,40 +397,4 @@ public sealed class WgcCapture : IDisposable
 
     [DllImport("api-ms-win-core-winrt-string-l1-1-0.dll", PreserveSig = true)]
     private static extern int WindowsDeleteString(IntPtr hstring);
-
-    /// <summary>Get a typed activation-factory interface for a WinRT class.</summary>
-    private static T GetActivationFactory<T>(string className) where T : class
-    {
-        WindowsCreateString(className, className.Length, out IntPtr hstr);
-        try
-        {
-            Guid iid = typeof(T).GUID;
-            int hr = RoGetActivationFactory(hstr, ref iid, out IntPtr factory);
-            if (hr != 0 || factory == IntPtr.Zero)
-                throw new InvalidOperationException($"RoGetActivationFactory failed: 0x{hr:X8}");
-            try
-            {
-                return (T)Marshal.GetTypedObjectForIUnknown(factory, typeof(T));
-            }
-            finally { Marshal.Release(factory); }
-        }
-        finally { WindowsDeleteString(hstr); }
-    }
-
-    /// <summary>Wrap a raw IInspectable* pointer as the projected WinRT type T.</summary>
-    private static T MarshalInterfaceFromIntPtr<T>(IntPtr ptr) where T : class
-    {
-        if (ptr == IntPtr.Zero) throw new ArgumentNullException(nameof(ptr));
-        try
-        {
-            // .NET's built-in WinRT marshaller handles projected types when this
-            // pointer is an IInspectable. GetObjectForIUnknown returns the runtime
-            // object; cast to the projection type.
-            return (T)Marshal.GetObjectForIUnknown(ptr);
-        }
-        finally
-        {
-            Marshal.Release(ptr);
-        }
-    }
 }

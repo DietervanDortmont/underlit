@@ -34,6 +34,7 @@ public sealed class GlassParams
     public double BevelDepthSliderValue { get; set; } = 35;   // 0..100 (pixels of edge-spike refraction)
     public double RimBrightness  { get; set; } = 250;     // 0..300 — thin rim-highlight intensity multiplier
     public double RimWidth       { get; set; } = 50;      // 0..100 — thin rim-highlight band width (low=thin, high=wide)
+    public double RimSecondary   { get; set; } = 50;      // 0..100 — strength of the opposing-corner highlight (Apple-style)
 
     /// <summary>0..100. How strongly the captured backdrop is mixed toward TintColor
     /// before the blur/refraction passes. 0 = no tint (pure transparent glass).
@@ -57,9 +58,13 @@ public sealed class GlassParams
         BevelDepthSliderValue = BevelDepthSliderValue,
         RimBrightness = RimBrightness,
         RimWidth = RimWidth,
+        RimSecondary = RimSecondary,
         TintStrength = TintStrength,
         TintR = TintR, TintG = TintG, TintB = TintB,
     };
+
+    /// <summary>0..1 — strength of the opposing-corner secondary rim highlight.</summary>
+    public double SecondaryRimMul() => Math.Clamp(RimSecondary, 0, 100) / 100.0;
 
     /// <summary>Rim-highlight intensity multiplier (0..3.0).</summary>
     public double RimBrightnessMul() => Math.Clamp(RimBrightness, 0, 300) / 100.0;

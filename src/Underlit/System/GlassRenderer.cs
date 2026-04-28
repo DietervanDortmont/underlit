@@ -149,7 +149,8 @@ public static class GlassRenderer
                            halfVec, (float)p.IntensityMul(),
                            (float)p.Refraction, (float)p.BevelDepth(), (float)p.BevelWidthPx(dmap.PillH),
                            (float)p.Dispersion,
-                           (float)p.RimBrightnessMul(), (float)p.RimWidthExponent());
+                           (float)p.RimBrightnessMul(), (float)p.RimWidthExponent(),
+                           (float)p.SecondaryRimMul());
 
         return true;
     }
@@ -160,7 +161,8 @@ public static class GlassRenderer
                                            float intensityMul,
                                            float refraction, float bevelDepth, float bevelWidthPx,
                                            float dispersion,
-                                           float rimBrightnessMul, float rimWidthExponent)
+                                           float rimBrightnessMul, float rimWidthExponent,
+                                           float secondaryRimMul)
     {
         float[] sdf = dmap.Sdf;
         float[] outX = dmap.OutwardX;
@@ -239,14 +241,36 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Rim highlight — a SECOND Phong specular layer with the same
-                // directional response as the bevel (so the bright spot lands in the
-                // same place), masked to a thin rim band by edge^N. Crucially this
-                // does NOT use intensityMul, so the user can turn the bevel off
-                // (Light intensity = 0) and keep the rim on independently.
-                float rimMask  = MathF.Pow(edge, rimWidthExponent);
-                float rimPhong = MathF.Pow(NdotH, SpecShininess);
-                float thinRim  = rimMask * rimPhong * rimBrightnessMul;
+                // Rim highlight — Phong specular masked to a thin rim band.
+                //   • Mask peak SHIFTED INWARD by the AA width so the brightest band
+                //     lands on the visible edge (otherwise the peak is hidden behind
+                //     AA-fade transparency).
+                //   • Symmetric: a primary highlight at NdotH (lit-side rim) AND a
+                //     secondary one at NdotH_inv (opposite-side rim) using a flipped
+                //     half-vector. RimSecondary slider weights the secondary.
+                //   • Width-compensated brightness: thin bands get a small boost so
+                //     perceived brightness doesn't fall off as the user narrows it.
+                //   • Independent of intensityMul (light-intensity slider) so user can
+                //     disable the bevel and keep the rim glowing.
+                float adjustedSdf = pixSdf - EdgeAaWidth;
+                if (adjustedSdf < 0) adjustedSdf = 0;
+                float adjustedBevel = bevelWidthPx - EdgeAaWidth;
+                if (adjustedBevel < 1f) adjustedBevel = 1f;
+                float edgeShifted = 1f - Smoothstep(0f, adjustedBevel, adjustedSdf);
+                float rimMask = MathF.Pow(edgeShifted, rimWidthExponent);
+
+                // Inverted half-vector for the opposing-corner highlight (flip xy, keep z).
+                float NdotH_inv = -nx * halfVec.x - ny * halfVec.y + nz * halfVec.z;
+                if (NdotH_inv < 0f) NdotH_inv = 0f;
+
+                float rimPhong1 = MathF.Pow(NdotH, SpecShininess);
+                float rimPhong2 = MathF.Pow(NdotH_inv, SpecShininess) * secondaryRimMul;
+
+                // Compensate so per-pixel peak brightness stays ~constant when the
+                // user changes Rim width. (Higher exponent = thinner band = less area;
+                // bump per-pixel intensity to keep total visible energy steady.)
+                float widthComp = MathF.Pow((rimWidthExponent + 1f) / 14f, 0.5f);
+                float thinRim = rimMask * (rimPhong1 + rimPhong2) * rimBrightnessMul * widthComp;
                 spec += thinRim;
 
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;

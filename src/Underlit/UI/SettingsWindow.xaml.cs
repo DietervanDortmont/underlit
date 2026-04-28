@@ -71,7 +71,7 @@ public partial class SettingsWindow : Window
                                      SldGlassDepth, SldGlassDispersion, SldGlassFrost,
                                      SldGlassCornerRadius, SldGlassBevelWidth,
                                      SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth,
-                                     SldGlassTintStrength })
+                                     SldGlassRimSecondary, SldGlassTintStrength })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
@@ -359,6 +359,7 @@ public partial class SettingsWindow : Window
         SldGlassBevelDepth.Value     = _snapshot.GlassBevelDepth;
         SldGlassRimBrightness.Value  = _snapshot.GlassRimBrightness;
         SldGlassRimWidth.Value       = _snapshot.GlassRimWidth;
+        SldGlassRimSecondary.Value   = _snapshot.GlassRimSecondary;
         SldGlassTintStrength.Value   = _snapshot.GlassTintStrength;
         RefreshTintSwatch();
 
@@ -451,6 +452,7 @@ public partial class SettingsWindow : Window
         _snapshot.GlassBevelDepth     = SldGlassBevelDepth.Value;
         _snapshot.GlassRimBrightness  = SldGlassRimBrightness.Value;
         _snapshot.GlassRimWidth       = SldGlassRimWidth.Value;
+        _snapshot.GlassRimSecondary   = SldGlassRimSecondary.Value;
         _snapshot.GlassTintStrength   = SldGlassTintStrength.Value;
 
         _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();

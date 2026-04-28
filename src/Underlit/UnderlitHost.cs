@@ -285,6 +285,7 @@ public sealed class UnderlitHost : IDisposable
         BevelDepthSliderValue = s.GlassBevelDepth,
         RimBrightness  = s.GlassRimBrightness,
         RimWidth       = s.GlassRimWidth,
+        RimSecondary   = s.GlassRimSecondary,
         TintStrength   = s.GlassTintStrength,
         TintR          = ParseTintByte(s.GlassTintColor, 1, 255),
         TintG          = ParseTintByte(s.GlassTintColor, 2, 255),

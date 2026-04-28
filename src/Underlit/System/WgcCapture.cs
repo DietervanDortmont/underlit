@@ -101,7 +101,14 @@ public sealed class WgcCapture : IDisposable
         // 6. Session.
         _session = _framePool.CreateCaptureSession(_item);
         try { _session.IsCursorCaptureEnabled = false; } catch { /* older WGC */ }
-        try { _session.IsBorderRequired = false;       } catch { /* Win11 24H2+ only */ }
+        // IsBorderRequired only exists from Win11 24H2 SDK — set via reflection so the
+        // build doesn't fail against older Windows SDK projections.
+        try
+        {
+            var prop = typeof(GraphicsCaptureSession).GetProperty("IsBorderRequired");
+            prop?.SetValue(_session, false);
+        }
+        catch { /* property unavailable on this SDK */ }
 
         _session.StartCapture();
         _running = true;

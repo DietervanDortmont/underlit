@@ -503,6 +503,16 @@
                                     <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
                                                Text="{Binding ElementName=SldGlassRimWidth, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="56"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Rim secondary"/>
+                                    <Slider Grid.Column="1" x:Name="SldGlassRimSecondary"
+                                            Minimum="0" Maximum="100" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Text="{Binding ElementName=SldGlassRimSecondary, Path=Value, StringFormat={}{0:F0}%}"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

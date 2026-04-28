@@ -50,10 +50,15 @@ public sealed class LiveGlassController : IDisposable
 
     // Live mode plumbing.
     private WgcCapture? _wgc;
-    private DispatcherTimer? _liveTicker;
     private GlassParams? _liveParams;
     private bool _liveSupported;
     private bool _liveActive;
+    private long _lastRenderedFrameId = -1;
+    // Pre-allocated bitmap for the cropped pill region — re-used every frame
+    // to avoid per-frame GC pressure (was a measurable spike before v0.6.4).
+    private Bitmap? _cropBmp;
+    private int _cropBmpW;
+    private int _cropBmpH;
 
     public LiveGlassController(Window window, ImageBrush targetBrush)
     {
@@ -103,20 +108,16 @@ public sealed class LiveGlassController : IDisposable
     {
         if (_disposed || !_liveSupported || _wgc == null) return;
         _liveParams = parameters.Clone();
-        if (_liveTicker == null)
-        {
-            _liveTicker = new DispatcherTimer(DispatcherPriority.Render)
-            {
-                Interval = TimeSpan.FromMilliseconds(33),     // ~30 fps
-            };
-            _liveTicker.Tick += OnLiveTick;
-        }
         if (!_liveActive)
         {
             _liveActive = true;
-            _liveTicker.Start();
-            // Render the first frame inline so the OSD doesn't fade in over a stale image.
-            OnLiveTick(this, EventArgs.Empty);
+            _lastRenderedFrameId = -1;
+            // Start the WGC session — frames begin flowing, AND the Win11 yellow
+            // capture border appears now. We pair this with StopCapture() in
+            // StopLiveTicker so the border only shows while the OSD is visible.
+            _wgc.StartCapture();
+            CompositionTarget.Rendering += OnRendering;
+            OnRendering(this, EventArgs.Empty);
         }
     }
 
@@ -124,7 +125,10 @@ public sealed class LiveGlassController : IDisposable
     {
         if (!_liveActive) return;
         _liveActive = false;
-        _liveTicker?.Stop();
+        CompositionTarget.Rendering -= OnRendering;
+        // Dispose the session so the Win11 capture-border indicator goes away.
+        // The D3D11 device + GraphicsCaptureItem stay cached for cheap restart.
+        _wgc?.StopCapture();
     }
 
     public void UpdateLiveParams(GlassParams parameters)
@@ -132,29 +136,34 @@ public sealed class LiveGlassController : IDisposable
         if (_liveActive) _liveParams = parameters.Clone();
     }
 
-    private void OnLiveTick(object? sender, EventArgs e)
+    private void OnRendering(object? sender, EventArgs e)
     {
         if (_disposed || !_liveActive || _wgc == null || _liveParams == null) return;
         try
         {
             byte[]? frameBytes;
             int frameW, frameH, frameStride;
+            long frameId;
             lock (_wgc.FrameLock)
             {
+                // FrameId dedup — skip if WGC hasn't delivered a new frame since last render.
+                if (_wgc.FrameId == _lastRenderedFrameId) return;
                 frameBytes = _wgc.LatestFrame;
                 frameW = _wgc.FrameWidth;
                 frameH = _wgc.FrameHeight;
                 frameStride = _wgc.FrameStride;
+                frameId = _wgc.FrameId;
             }
             if (frameBytes == null || frameW <= 0 || frameH <= 0) return;
 
-            using var crop = CropMonitorToOsd(frameBytes, frameW, frameH, frameStride);
+            var crop = CropMonitorToOsd(frameBytes, frameW, frameH, frameStride);
             if (crop == null) return;
             RenderInto(crop, _liveParams);
+            _lastRenderedFrameId = frameId;
         }
         catch (Exception ex)
         {
-            Logger.Warn("Live tick failed", ex);
+            Logger.Warn("Live render failed", ex);
         }
     }
 
@@ -175,9 +184,16 @@ public sealed class LiveGlassController : IDisposable
         if (physWinX >= frameW || physWinY >= frameH) return null;
         if (physWinX + physFullW <= 0 || physWinY + physFullH <= 0) return null;
 
-        // Output bitmap is the FULL window region (including the 10-px shadow padding
-        // around the pill). The renderer needs that padding for refraction headroom.
-        var bmp = new Bitmap(physFullW, physFullH, DPixelFormat.Format32bppArgb);
+        // Pre-allocated reusable crop bitmap — saves a per-frame Bitmap allocation
+        // and the GC spike pause that came with it.
+        if (_cropBmp == null || _cropBmpW != physFullW || _cropBmpH != physFullH)
+        {
+            _cropBmp?.Dispose();
+            _cropBmp = new Bitmap(physFullW, physFullH, DPixelFormat.Format32bppArgb);
+            _cropBmpW = physFullW;
+            _cropBmpH = physFullH;
+        }
+        var bmp = _cropBmp;
         var data = bmp.LockBits(new Rectangle(0, 0, physFullW, physFullH),
                                   ImageLockMode.WriteOnly, DPixelFormat.Format32bppArgb);
         try
@@ -269,13 +285,10 @@ public sealed class LiveGlassController : IDisposable
         if (_disposed) return;
         _disposed = true;
         StopLiveTicker();
-        if (_liveTicker != null)
-        {
-            _liveTicker.Tick -= OnLiveTick;
-            _liveTicker = null;
-        }
         try { _wgc?.Dispose(); } catch { }
         _wgc = null;
+        try { _cropBmp?.Dispose(); } catch { }
+        _cropBmp = null;
         _bitmap = null;
     }
 

@@ -34,6 +34,9 @@ public sealed class WgcCapture : IDisposable
     public int FrameWidth  { get; private set; }
     public int FrameHeight { get; private set; }
     public int FrameStride { get; private set; }
+    /// <summary>Monotonic counter, bumped each time LatestFrame is replaced.
+    /// Consumers compare against their last-seen value to skip redundant renders.</summary>
+    public long FrameId    { get; private set; }
     public readonly object FrameLock = new();
     public event Action? FrameArrived;
 
@@ -138,26 +141,50 @@ public sealed class WgcCapture : IDisposable
             if (hstr != IntPtr.Zero) WindowsDeleteString(hstr);
         }
 
-        // ---- 4. Frame pool -------------------------------------------------
+        // Init done — D3D + capture item are alive. The framepool + session are
+        // created on demand in StartCapture() so the Win11 yellow border only
+        // shows while we're ACTIVELY capturing (i.e. while the OSD is visible),
+        // not 24/7.
+        _running = true;
+        Logger.Info("WGC: capture initialised (session not yet started)");
+    }
+
+    /// <summary>
+    /// Begin actively capturing frames. Creates the framepool + session. The
+    /// Win11 22H2+ yellow capture border appears WHILE this is running. Call
+    /// StopCapture when you no longer need frames so the border goes away.
+    /// </summary>
+    public void StartCapture()
+    {
+        if (_disposed || !_running) return;
+        if (_session != null) return;          // already capturing
+        if (_winrtDevice == null || _item == null) return;
+
         _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
             _winrtDevice, DirectXPixelFormat.B8G8R8A8UIntNormalized, 2, _item.Size);
         _framePool.FrameArrived += OnFrameArrived;
-        Logger.Info($"WGC: framepool created at {_item.Size.Width}x{_item.Size.Height}");
 
-        // ---- 5. Session ----------------------------------------------------
         _session = _framePool.CreateCaptureSession(_item);
         try { _session.IsCursorCaptureEnabled = false; } catch { }
-        // IsBorderRequired only exists Win11 24H2+ — set via reflection so the
-        // build doesn't fail against older Windows SDK projections.
+        TrySuppressCaptureBorder();
+        _session.StartCapture();
+        Logger.Info("WGC: StartCapture OK — frames flowing, border visible");
+    }
+
+    /// <summary>Stop capturing. Disposes the session + framepool, which removes
+    /// the Win11 capture-border indicator. Safe to call multiple times.</summary>
+    public void StopCapture()
+    {
+        if (_session == null && _framePool == null) return;
+        try { _session?.Dispose(); } catch { }
+        _session = null;
         try
         {
-            var prop = typeof(GraphicsCaptureSession).GetProperty("IsBorderRequired");
-            prop?.SetValue(_session, false);
+            if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived;
+            _framePool?.Dispose();
         } catch { }
-
-        _session.StartCapture();
-        _running = true;
-        Logger.Info("WGC: session.StartCapture OK — capture is live");
+        _framePool = null;
+        Logger.Info("WGC: StopCapture — session disposed, border removed");
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
@@ -236,6 +263,7 @@ public sealed class WgcCapture : IDisposable
                 FrameWidth  = w;
                 FrameHeight = h;
                 FrameStride = rowBytes;
+                FrameId++;
             }
         }
         finally
@@ -272,16 +300,63 @@ public sealed class WgcCapture : IDisposable
         _stagingH = h;
     }
 
+    /// <summary>
+    /// Try every known mechanism to remove the yellow WGC capture border.
+    /// Win11 24H2+ supports it; older Win11 22H2/23H2 enforces it unconditionally.
+    /// </summary>
+    private void TrySuppressCaptureBorder()
+    {
+        // 1. Optional: Win11 24H2+ borderless access request. The API takes a
+        //    GraphicsCaptureAccessKind; "Borderless" is value 1 in the enum.
+        //    Calling this may pop a permission dialog the first time.
+        try
+        {
+            var accessType = Type.GetType(
+                "Windows.Graphics.Capture.GraphicsCaptureAccess, Windows, ContentType=WindowsRuntime");
+            var kindType = Type.GetType(
+                "Windows.Graphics.Capture.GraphicsCaptureAccessKind, Windows, ContentType=WindowsRuntime");
+            if (accessType != null && kindType != null)
+            {
+                var requestMethod = accessType.GetMethod("RequestAccessAsync",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (requestMethod != null)
+                {
+                    object borderless = Enum.ToObject(kindType, 1);
+                    requestMethod.Invoke(null, new[] { borderless });   // fire-and-forget
+                    Logger.Info("WGC: requested borderless capture access");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Info($"WGC: GraphicsCaptureAccess.RequestAccessAsync unavailable ({ex.GetType().Name})");
+        }
+
+        // 2. Set the per-session IsBorderRequired flag (Win11 24H2+).
+        try
+        {
+            var prop = typeof(GraphicsCaptureSession).GetProperty("IsBorderRequired");
+            if (prop != null)
+            {
+                prop.SetValue(_session, false);
+                Logger.Info("WGC: IsBorderRequired = false set");
+            }
+            else
+            {
+                Logger.Info("WGC: IsBorderRequired property not available on this build");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Info($"WGC: setting IsBorderRequired threw ({ex.GetType().Name}: {ex.Message})");
+        }
+    }
+
     public void Stop()
     {
         if (!_running) return;
         _running = false;
-        try { _session?.Dispose(); } catch { } _session = null;
-        try
-        {
-            if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived;
-            _framePool?.Dispose();
-        } catch { } _framePool = null;
+        StopCapture();
         _item = null;
     }
 

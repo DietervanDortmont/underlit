@@ -35,6 +35,14 @@ public sealed class GlassParams
     public double RimBrightness  { get; set; } = 250;     // 0..300 — thin rim-highlight intensity multiplier
     public double RimWidth       { get; set; } = 50;      // 0..100 — thin rim-highlight band width (low=thin, high=wide)
 
+    /// <summary>0..100. How strongly the captured backdrop is mixed toward TintColor
+    /// before the blur/refraction passes. 0 = no tint (pure transparent glass).
+    /// 6 ≈ the v0.4 baseline (subtle white wash). Higher = "tinted glass" look.</summary>
+    public double TintStrength   { get; set; } = 6;
+    public byte TintR { get; set; } = 255;
+    public byte TintG { get; set; } = 255;
+    public byte TintB { get; set; } = 255;
+
     public GlassParams Clone() => new()
     {
         LightAngleDeg  = LightAngleDeg,
@@ -49,6 +57,8 @@ public sealed class GlassParams
         BevelDepthSliderValue = BevelDepthSliderValue,
         RimBrightness = RimBrightness,
         RimWidth = RimWidth,
+        TintStrength = TintStrength,
+        TintR = TintR, TintG = TintG, TintB = TintB,
     };
 
     /// <summary>Rim-highlight intensity multiplier (0..3.0).</summary>

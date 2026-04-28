@@ -104,6 +104,8 @@ public sealed class AppSettings
     public double GlassBevelDepth     { get; set; } = 35;    // 0..100 px (rim spike depth)
     public double GlassRimBrightness  { get; set; } = 250;   // 0..300 — thin rim-highlight brightness
     public double GlassRimWidth       { get; set; } = 50;    // 0..100 — thin rim-highlight band width
+    public string GlassTintColor      { get; set; } = "#FFFFFFFF"; // #AARRGGBB — tint hue (white = neutral)
+    public double GlassTintStrength   { get; set; } = 6;     // 0..100 — how strong the tint mix is
 
     // ---- Schedule (optional baseline curve) ----
 

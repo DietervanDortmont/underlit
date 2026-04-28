@@ -32,7 +32,6 @@ public static class GlassRenderer
 {
     // ---- Constants ----
     public const double SaturationBoost   = 1.10;
-    public const double GlassWashStrength = 0.06;
     public const int    BlurPasses        = 3;
 
     public const float  SpecShininess = 25f;
@@ -125,8 +124,12 @@ public static class GlassRenderer
         // 2. Average pre-blur luminance of the icon zone for adaptive icon colour.
         LastPillLuminance = ComputePillLuminance(a, fullW, fullH, fullStride, dmap);
 
-        // 3. Saturation + light wash.
-        ApplyGlassWashAndSaturation(a, fullW, fullH, fullStride, GlassWashStrength, SaturationBoost);
+        // 3. Saturation + tint wash. TintStrength = 0 means raw refracted backdrop
+        // with no undertone (pure transparent glass).
+        double tintT = Math.Clamp(p.TintStrength, 0, 100) / 100.0;
+        ApplyGlassWashAndSaturation(a, fullW, fullH, fullStride,
+                                     tintT, SaturationBoost,
+                                     p.TintR, p.TintG, p.TintB);
 
         // 4. Box blur (frost).
         int blurRadius = Math.Max(0, (int)Math.Round(p.Frost));
@@ -236,19 +239,14 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Rim highlight — a thin RING around the entire perimeter, visible
-                // all the way around with mild directional brightening from the same
-                // light as the bevel. Formula:
-                //
-                //   brightness = (baseline + directional × NdotH) × bandMask × user
-                //
-                // baseline=0.45 keeps the unlit side of the ring visible, the
-                // directional term up to +0.55 brightens the lit side. bandMask is
-                // edge^N where N comes from the Rim-width slider; lower N = wider band.
-                float rimMask = MathF.Pow(edge, rimWidthExponent);
-                float NdotHc  = NdotH < 0f ? 0f : NdotH;
-                float rimDir  = 0.45f + 0.55f * NdotHc;
-                float thinRim = rimMask * rimDir * rimBrightnessMul * intensityMul;
+                // Rim highlight — a SECOND Phong specular layer with the same
+                // directional response as the bevel (so the bright spot lands in the
+                // same place), masked to a thin rim band by edge^N. Crucially this
+                // does NOT use intensityMul, so the user can turn the bevel off
+                // (Light intensity = 0) and keep the rim on independently.
+                float rimMask  = MathF.Pow(edge, rimWidthExponent);
+                float rimPhong = MathF.Pow(NdotH, SpecShininess);
+                float thinRim  = rimMask * rimPhong * rimBrightnessMul;
                 spec += thinRim;
 
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;
@@ -303,7 +301,8 @@ public static class GlassRenderer
     }
 
     private static void ApplyGlassWashAndSaturation(byte[] buf, int w, int h, int stride,
-                                                     double washT, double saturation)
+                                                     double washT, double saturation,
+                                                     byte tintR, byte tintG, byte tintB)
     {
         int it  = (int)(washT * 256);
         int omt = 256 - it;
@@ -327,9 +326,10 @@ public static class GlassRenderer
                 if (G < 0) G = 0; else if (G > 255) G = 255;
                 if (B < 0) B = 0; else if (B > 255) B = 255;
 
-                B = (B * omt + 255 * it) >> 8;
-                G = (G * omt + 255 * it) >> 8;
-                R = (R * omt + 255 * it) >> 8;
+                // Tint mix: pull pixel toward the user's tint color by `washT`.
+                B = (B * omt + tintB * it) >> 8;
+                G = (G * omt + tintG * it) >> 8;
+                R = (R * omt + tintR * it) >> 8;
 
                 buf[i + 0] = (byte)B;
                 buf[i + 1] = (byte)G;

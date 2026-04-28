@@ -70,7 +70,8 @@ public partial class SettingsWindow : Window
                                      SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
                                      SldGlassDepth, SldGlassDispersion, SldGlassFrost,
                                      SldGlassCornerRadius, SldGlassBevelWidth,
-                                     SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth })
+                                     SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth,
+                                     SldGlassTintStrength })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
@@ -85,6 +86,7 @@ public partial class SettingsWindow : Window
         SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
 
         BtnPickAccent.Click += OnPickAccent;
+        BtnPickTint.Click   += OnPickTint;
         CboTransparency.SelectionChanged += (_, _) =>
         {
             PushSettings();
@@ -142,6 +144,34 @@ public partial class SettingsWindow : Window
             RefreshAccentSwatch();
             PushSettings();
         }
+    }
+
+    private void OnPickTint(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+        };
+        if (TryParseHex(_snapshot.GlassTintColor, out var current))
+        {
+            dlg.Color = System.Drawing.Color.FromArgb(current.A, current.R, current.G, current.B);
+        }
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            var c = dlg.Color;
+            _snapshot.GlassTintColor = $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+            RefreshTintSwatch();
+            PushSettings();
+        }
+    }
+
+    private void RefreshTintSwatch()
+    {
+        Color color = TryParseHex(_snapshot.GlassTintColor, out var c)
+            ? c
+            : Color.FromRgb(0xFF, 0xFF, 0xFF);
+        TintSwatch.Background = new SolidColorBrush(color);
     }
 
     private void RefreshAccentSwatch()
@@ -329,6 +359,8 @@ public partial class SettingsWindow : Window
         SldGlassBevelDepth.Value     = _snapshot.GlassBevelDepth;
         SldGlassRimBrightness.Value  = _snapshot.GlassRimBrightness;
         SldGlassRimWidth.Value       = _snapshot.GlassRimWidth;
+        SldGlassTintStrength.Value   = _snapshot.GlassTintStrength;
+        RefreshTintSwatch();
 
         TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
         TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;
@@ -419,6 +451,7 @@ public partial class SettingsWindow : Window
         _snapshot.GlassBevelDepth     = SldGlassBevelDepth.Value;
         _snapshot.GlassRimBrightness  = SldGlassRimBrightness.Value;
         _snapshot.GlassRimWidth       = SldGlassRimWidth.Value;
+        _snapshot.GlassTintStrength   = SldGlassTintStrength.Value;
 
         _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();
         _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Text.Trim();

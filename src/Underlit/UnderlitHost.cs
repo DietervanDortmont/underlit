@@ -285,7 +285,29 @@ public sealed class UnderlitHost : IDisposable
         BevelDepthSliderValue = s.GlassBevelDepth,
         RimBrightness  = s.GlassRimBrightness,
         RimWidth       = s.GlassRimWidth,
+        TintStrength   = s.GlassTintStrength,
+        TintR          = ParseTintByte(s.GlassTintColor, 1, 255),
+        TintG          = ParseTintByte(s.GlassTintColor, 2, 255),
+        TintB          = ParseTintByte(s.GlassTintColor, 3, 255),
     };
+
+    /// <summary>Pull a single channel byte (R=1, G=2, B=3) out of a "#AARRGGBB" string.</summary>
+    private static byte ParseTintByte(string? hex, int channelIndex, byte fallback)
+    {
+        if (string.IsNullOrWhiteSpace(hex)) return fallback;
+        try
+        {
+            var c = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex);
+            return channelIndex switch
+            {
+                1 => c.R,
+                2 => c.G,
+                3 => c.B,
+                _ => fallback,
+            };
+        }
+        catch { return fallback; }
+    }
 
     /// <summary>Parse a "#AARRGGBB" or "#RRGGBB" hex string into a Color, or null.</summary>
     private static System.Windows.Media.Color? ParseColor(string? hex)

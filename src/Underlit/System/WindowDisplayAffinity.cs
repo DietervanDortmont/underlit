@@ -1,22 +1,40 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// DEPRECATED in v0.2.3.
-//
-// This file used to wrap SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) so the
-// OSD wouldn't appear in its own BitBlt captures during the live-glass loop.
-//
-// Turns out WDA_EXCLUDEFROMCAPTURE is an anti-DRM feature: it makes the window
-// appear as a *black rectangle* in any screen capture, not "see-through". So a
-// per-frame BitBlt loop captured black, blurred black, and the OSD ended up
-// looking permanently dark and opaque (and the user couldn't take screenshots
-// of it either). Removed from the code path.
-//
-// Future: the proper fix is Windows.Graphics.Capture or DXGI Output Duplication
-// (which return the desktop minus our window via DWM). That's a v0.3 task.
-// ─────────────────────────────────────────────────────────────────────────────
+using System;
+using System.Runtime.InteropServices;
 
 namespace Underlit.Sys;
 
-internal static class WindowDisplayAffinity_Deprecated
+/// <summary>
+/// SetWindowDisplayAffinity wrapper. Used by the WGC live-capture path so the OSD
+/// excludes itself from frames while WGC captures the monitor — the only flag/API
+/// combination on Windows that gives proper "desktop minus our window" capture.
+///
+/// Note: WDA_EXCLUDEFROMCAPTURE behaves differently per capture method:
+///   • BitBlt of desktop DC      → window appears BLACK in capture (don't use)
+///   • DXGI Output Duplication   → window appears BLACK in capture (don't use)
+///   • Windows.Graphics.Capture  → window is properly EXCLUDED (this is what we want)
+///
+/// So this flag is only safe to use in combination with WGC, not BitBlt.
+/// </summary>
+public static class WindowDisplayAffinity
 {
-    // Intentionally empty. See header comment.
+    private const uint WDA_NONE              = 0x0;
+    private const uint WDA_EXCLUDEFROMCAPTURE = 0x11; // Win10 2004 / build 19041+
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
+
+    public static bool ExcludeFromCapture(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        try { return SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE); }
+        catch { return false; }
+    }
+
+    public static bool ResetAffinity(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        try { return SetWindowDisplayAffinity(hwnd, WDA_NONE); }
+        catch { return false; }
+    }
 }

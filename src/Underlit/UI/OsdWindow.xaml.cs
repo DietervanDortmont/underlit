@@ -466,17 +466,27 @@ public partial class OsdWindow : Window
     // ---- Liquid Glass capture ----
 
     /// <summary>
-    /// Capture the screen pixels behind us NOW, run them through GlassRenderer, and
-    /// paint into GlassBackdropBrush. Call before Show() so the OSD window isn't in
-    /// the capture (we don't have a flicker-free "exclude from capture" mechanism on
-    /// Windows yet — see LiveGlassController docstring).
+    /// Bring the glass to its current state. In LIVE mode (WGC running) this just
+    /// kicks the live ticker; in LEGACY mode it captures once on each show.
     /// </summary>
     private void RefreshGlass()
     {
         if (_liveGlass == null)
+        {
             _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
+            // Try to enable live capture once, on the first show. The HWND must
+            // exist (which it does after Show()), so this is safe here.
+            _liveGlass.TryEnableLive(Hwnd);
+        }
         GlassBackdrop.Visibility = Visibility.Visible;
+
+        // LIVE: keep the ticker running for the duration the OSD is visible.
+        // It refreshes the bitmap every ~33 ms from WGC frames.
+        _liveGlass.StartLiveTicker(_glass);
+
+        // LEGACY (WGC failed/unsupported): one BitBlt per Show().
         _liveGlass.RefreshNow(_glass);
+
         ApplyAdaptiveIconColor(_liveGlass.LastPillLuminance);
     }
 
@@ -578,7 +588,13 @@ public partial class OsdWindow : Window
         };
         fadeOut.Completed += (_, _) =>
         {
-            if (Opacity <= 0.01) Hide();
+            if (Opacity <= 0.01)
+            {
+                Hide();
+                // Stop the WGC render ticker while the OSD is invisible — no point
+                // burning ~30 fps of CPU on frames nobody can see.
+                _liveGlass?.StopLiveTicker();
+            }
         };
         BeginAnimation(OpacityProperty, fadeOut);
         BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);

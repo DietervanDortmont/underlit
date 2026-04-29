@@ -48,8 +48,13 @@ public sealed class LiveGlassController : IDisposable
 
     public float LastPillLuminance { get; private set; } = 0.5f;
 
-    // Live mode plumbing — uses Magnification API (no yellow capture border).
-    private MagCapture? _mag;
+    // Live mode plumbing — back to WGC after the Magnification-API detour.
+    // MagCapture (left in the codebase) couldn't be made invisible AND keep capturing
+    // simultaneously: cloaked or alpha=0 hosts cause DWM to skip rendering, so the
+    // magnifier surface stays empty (logged as centre pixel BGRA = (240,240,240)).
+    // The visible-host alternative shows a 450×99 preview rectangle, which is uglier
+    // than the yellow border. WGC's border is at least time-limited to the OSD.
+    private WgcCapture? _wgc;
     private GlassParams? _liveParams;
     private bool _liveSupported;
     private bool _liveActive;
@@ -80,25 +85,27 @@ public sealed class LiveGlassController : IDisposable
         if (_disposed || _liveSupported) return _liveSupported;
         try
         {
-            // Initial capture region size — we resize on first frame anyway.
-            var src = PresentationSource.FromVisual(_window);
-            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            int physFullW = Math.Max(1, (int)Math.Round(FullWidthDip  * scale));
-            int physFullH = Math.Max(1, (int)Math.Round(FullHeightDip * scale));
+            // Exclude the OSD from WGC frames so the captured monitor doesn't see
+            // the OSD itself (would otherwise create a feedback loop / black hole).
+            WindowDisplayAffinity.ExcludeFromCapture(hwnd);
 
-            _mag = new MagCapture();
-            if (!_mag.Initialize(hwnd, physFullW, physFullH))
-                throw new InvalidOperationException("MagCapture.Initialize returned false");
+            // WGC captures the entire monitor; we crop to the OSD rect each frame.
+            IntPtr hMon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+            if (hMon == IntPtr.Zero)
+                throw new InvalidOperationException("MonitorFromWindow returned NULL");
+
+            _wgc = new WgcCapture();
+            _wgc.StartForMonitor(hMon);
 
             _liveSupported = true;
-            Logger.Info("LiveGlass: Magnification capture initialised (no yellow border)");
+            Logger.Info("LiveGlass: WGC initialised (yellow capture border will appear while OSD is visible)");
             return true;
         }
         catch (Exception ex)
         {
-            Logger.Warn("LiveGlass: MagCapture init failed — OSD will show empty glass until this is fixed", ex);
-            try { _mag?.Dispose(); } catch { }
-            _mag = null;
+            Logger.Warn("LiveGlass: WGC init failed — OSD will show empty glass until this is fixed", ex);
+            try { _wgc?.Dispose(); } catch { }
+            _wgc = null;
             _liveSupported = false;
             return false;
         }
@@ -111,13 +118,13 @@ public sealed class LiveGlassController : IDisposable
     /// </summary>
     public void StartLiveTicker(GlassParams parameters)
     {
-        if (_disposed || !_liveSupported || _mag == null) return;
+        if (_disposed || !_liveSupported || _wgc == null) return;
         _liveParams = parameters.Clone();
         if (!_liveActive)
         {
             _liveActive = true;
             _lastRenderedFrameId = -1;
-            _mag.StartCapture();
+            _wgc.StartCapture();
             CompositionTarget.Rendering += OnRendering;
             OnRendering(this, EventArgs.Empty);
         }
@@ -128,7 +135,7 @@ public sealed class LiveGlassController : IDisposable
         if (!_liveActive) return;
         _liveActive = false;
         CompositionTarget.Rendering -= OnRendering;
-        _mag?.StopCapture();
+        _wgc?.StopCapture();
     }
 
     public void UpdateLiveParams(GlassParams parameters)
@@ -138,7 +145,7 @@ public sealed class LiveGlassController : IDisposable
 
     private void OnRendering(object? sender, EventArgs e)
     {
-        if (_disposed || !_liveActive || _mag == null || _liveParams == null) return;
+        if (_disposed || !_liveActive || _wgc == null || _liveParams == null) return;
         // Rate-limit to ~30 fps so the dispatcher has slack for other timers
         // (the OSD's 1.3s auto-hide DispatcherTimer was starved before this).
         long now = Environment.TickCount64;
@@ -146,37 +153,24 @@ public sealed class LiveGlassController : IDisposable
         _lastRenderTicks = now;
         try
         {
-            // Magnification API captures the EXACT pill rect (with the OSD itself
-            // already excluded via MagSetWindowFilterList), so there's no per-frame
-            // monitor-wide capture + crop step like the WGC path needed.
-            var src = PresentationSource.FromVisual(_window);
-            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            int physWinX = (int)Math.Round(_window.Left * scale);
-            int physWinY = (int)Math.Round(_window.Top  * scale);
-            int physFullW = (int)Math.Round(FullWidthDip  * scale);
-            int physFullH = (int)Math.Round(FullHeightDip * scale);
-            if (physFullW <= 0 || physFullH <= 0) return;
-
-            if (!_mag.CaptureFrame(physWinX, physWinY, physFullW, physFullH)) return;
-
+            // WGC delivers full-monitor frames asynchronously into _wgc.LatestFrame.
+            // Snapshot the frame state under FrameLock, then crop to the OSD rect.
             byte[]? frameBytes;
             int frameW, frameH, frameStride;
             long frameId;
-            lock (_mag.FrameLock)
+            lock (_wgc.FrameLock)
             {
-                if (_mag.FrameId == _lastRenderedFrameId) return;
-                frameBytes = _mag.LatestFrame;
-                frameW = _mag.FrameWidth;
-                frameH = _mag.FrameHeight;
-                frameStride = _mag.FrameStride;
-                frameId = _mag.FrameId;
+                if (_wgc.FrameId == _lastRenderedFrameId) return;
+                frameBytes = _wgc.LatestFrame;
+                frameW = _wgc.FrameWidth;
+                frameH = _wgc.FrameHeight;
+                frameStride = _wgc.FrameStride;
+                frameId = _wgc.FrameId;
             }
             if (frameBytes == null) return;
 
-            // Wrap the BGRA byte buffer as a Bitmap of the exact pill size and
-            // hand it to the renderer. Bitmap is cached/reused across frames —
-            // do NOT dispose it here.
-            var bmp = WrapBufferAsBitmap(frameBytes, frameW, frameH, frameStride);
+            var bmp = CropMonitorToOsd(frameBytes, frameW, frameH, frameStride);
+            if (bmp == null) return;
             RenderInto(bmp, _liveParams);
             _lastRenderedFrameId = frameId;
         }
@@ -187,37 +181,10 @@ public sealed class LiveGlassController : IDisposable
     }
 
     /// <summary>
-    /// Build a Bitmap from a managed BGRA byte[] without allocating a new pixel
-    /// store every frame. We copy into the pre-allocated _cropBmp's locked bits.
+    /// Crop the full-monitor WGC frame to the OSD's physical pixel rect, copying
+    /// into a pre-allocated reusable Bitmap to avoid per-frame GC pressure.
     /// </summary>
-    private Bitmap WrapBufferAsBitmap(byte[] frame, int w, int h, int stride)
-    {
-        if (_cropBmp == null || _cropBmpW != w || _cropBmpH != h)
-        {
-            _cropBmp?.Dispose();
-            _cropBmp = new Bitmap(w, h, DPixelFormat.Format32bppArgb);
-            _cropBmpW = w;
-            _cropBmpH = h;
-        }
-        var data = _cropBmp.LockBits(new Rectangle(0, 0, w, h),
-                                       ImageLockMode.WriteOnly, DPixelFormat.Format32bppArgb);
-        try
-        {
-            for (int y = 0; y < h; y++)
-                Marshal.Copy(frame, y * stride, IntPtr.Add(data.Scan0, y * data.Stride), w * 4);
-        }
-        finally
-        {
-            _cropBmp.UnlockBits(data);
-        }
-        return _cropBmp;
-    }
-
-    // Old WGC monitor-crop path. Kept as private (and unreferenced after the
-    // Magnification rewrite) so the file diff in v0.6.6 stays small and readable;
-    // the dead-code warning is suppressed below.
-#pragma warning disable IDE0051, CS0169, CS8321
-    private Bitmap? CropMonitorToOsd_Legacy(byte[] frame, int frameW, int frameH, int frameStride)
+    private Bitmap? CropMonitorToOsd(byte[] frame, int frameW, int frameH, int frameStride)
     {
         var src = PresentationSource.FromVisual(_window);
         double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
@@ -273,7 +240,6 @@ public sealed class LiveGlassController : IDisposable
         }
         return bmp;
     }
-#pragma warning restore IDE0051, CS0169, CS8321
 
     /// <summary>
     /// In v0.6.2 the BitBlt-on-show fallback is gone — the OSD is intentionally
@@ -332,8 +298,8 @@ public sealed class LiveGlassController : IDisposable
         if (_disposed) return;
         _disposed = true;
         StopLiveTicker();
-        try { _mag?.Dispose(); } catch { }
-        _mag = null;
+        try { _wgc?.Dispose(); } catch { }
+        _wgc = null;
         try { _cropBmp?.Dispose(); } catch { }
         _cropBmp = null;
         _bitmap = null;

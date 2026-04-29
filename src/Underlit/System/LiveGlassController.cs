@@ -54,6 +54,11 @@ public sealed class LiveGlassController : IDisposable
     private bool _liveSupported;
     private bool _liveActive;
     private long _lastRenderedFrameId = -1;
+    private long _lastRenderTicks;
+    /// <summary>Minimum gap between renders. Caps the live ticker at ~30 fps so
+    /// the WPF dispatcher has time to run other DispatcherTimers (notably the
+    /// OSD's 1.3s auto-hide timer, which was being starved at 60 fps).</summary>
+    private const int MinFrameMs = 33;
     // Pre-allocated bitmap for the cropped pill region — re-used every frame
     // to avoid per-frame GC pressure (was a measurable spike before v0.6.4).
     private Bitmap? _cropBmp;
@@ -134,6 +139,11 @@ public sealed class LiveGlassController : IDisposable
     private void OnRendering(object? sender, EventArgs e)
     {
         if (_disposed || !_liveActive || _mag == null || _liveParams == null) return;
+        // Rate-limit to ~30 fps so the dispatcher has slack for other timers
+        // (the OSD's 1.3s auto-hide DispatcherTimer was starved before this).
+        long now = Environment.TickCount64;
+        if (now - _lastRenderTicks < MinFrameMs) return;
+        _lastRenderTicks = now;
         try
         {
             // Magnification API captures the EXACT pill rect (with the OSD itself

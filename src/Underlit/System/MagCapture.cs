@@ -219,6 +219,11 @@ public sealed class MagCapture : IDisposable
                 return false;
             }
 
+            // GDI's GetDIBits leaves the alpha byte at 0 for 32-bit DIBs. The
+            // downstream renderer treats alpha=0 as "no content" and renders dull
+            // gray instead of the actual captured pixels. Force opaque alpha now.
+            for (int i = 3; i < needed; i += 4) buf[i] = 255;
+
             lock (FrameLock)
             {
                 LatestFrame = buf;

@@ -56,7 +56,8 @@ public sealed class UnderlitHost : IDisposable
             ParseColor(_settings.OsdAccentColor),
             _settings.TransparencyEffects,
             _settings.OsdBackdrop,
-            GlassParamsFromSettings(_settings));
+            GlassParamsFromSettings(_settings),
+            _settings.GlassLiveCapture);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -92,17 +93,15 @@ public sealed class UnderlitHost : IDisposable
         _hotkeys.Triggered += OnHotkeyTriggered;
         RegisterAllHotkeys();
 
-        // Low-level hook (optional, per-settings)
-        // When enabled, we take complete ownership of the Fn brightness keys:
-        // we swallow the native key and call our own step logic, so Windows doesn't
-        // pop its own OSD on top of ours and we don't get hardware write conflicts.
-        if (_settings.HookNativeBrightnessKeys)
-        {
-            _llHook = new LowLevelKeyboardHook(_ui, swallowNativeKey: true);
-            _llHook.BrightnessDown += OnNativeBrightnessDown;
-            _llHook.BrightnessUp   += OnNativeBrightnessUp;
-            _llHook.Install();
-        }
+        // v0.6.12: the LowLevelKeyboardHook is no longer installed at start, even
+        // if the saved setting is true. The hook used to match VK 0xAF/0xB0 thinking
+        // they were brightness up/down — they're actually VK_VOLUME_UP and
+        // VK_MEDIA_NEXT_TRACK, so the hook was stealing the user's volume keys and
+        // remapping them to brightness changes. The hook itself is now a passthrough
+        // (see LowLevelKeyboardHook.HookCallback) and there's no benefit to installing
+        // it. Use the configurable RegisterHotKey hotkeys (Ctrl+Alt+Up/Down) instead.
+        // Setting kept on disk for back-compat but ignored.
+        _ = _settings.HookNativeBrightnessKeys;
 
         // Foreground watcher for exclusions
         _fgWatcher = new ForegroundAppWatcher(_ui,
@@ -200,19 +199,10 @@ public sealed class UnderlitHost : IDisposable
         }
     }
 
-    private void OnNativeBrightnessDown()
-    {
-        if (_engine == null) return;
-        _engine.StepBrightness(-_settings.BrightnessStep);
-        _osd?.ShowBrightness(_engine.CurrentBrightness);
-    }
-
-    private void OnNativeBrightnessUp()
-    {
-        if (_engine == null) return;
-        _engine.StepBrightness(+_settings.BrightnessStep);
-        _osd?.ShowBrightness(_engine.CurrentBrightness);
-    }
+    // OnNativeBrightnessDown/Up handlers removed in v0.6.12 — the LowLevelKeyboardHook
+    // that called them was matching the wrong VK codes (volume + media instead of
+    // brightness) and isn't installed anymore. Brightness control now flows entirely
+    // through the configurable RegisterHotKey hotkeys (see RegisterAllHotkeys).
 
     // ---- Settings UI ----
 
@@ -244,16 +234,9 @@ public sealed class UnderlitHost : IDisposable
         // Hotkey re-registration
         if (_hotkeys != null) RegisterAllHotkeys();
 
-        // Low-level hook on/off. When on we always swallow native brightness keys
-        // so Windows' own OSD doesn't overlap ours and hardware writes don't collide.
-        if (next.HookNativeBrightnessKeys && _llHook == null)
-        {
-            _llHook = new LowLevelKeyboardHook(_ui, swallowNativeKey: true);
-            _llHook.BrightnessDown += OnNativeBrightnessDown;
-            _llHook.BrightnessUp   += OnNativeBrightnessUp;
-            _llHook.Install();
-        }
-        else if (!next.HookNativeBrightnessKeys && _llHook != null)
+        // v0.6.12: setting ignored. See note in Start(). If a hook from before this
+        // version is somehow still alive, dispose it now.
+        if (_llHook != null)
         {
             _llHook.Dispose();
             _llHook = null;
@@ -268,7 +251,8 @@ public sealed class UnderlitHost : IDisposable
             ParseColor(next.OsdAccentColor),
             next.TransparencyEffects,
             next.OsdBackdrop,
-            GlassParamsFromSettings(next));
+            GlassParamsFromSettings(next),
+            next.GlassLiveCapture);
     }
 
     private static Underlit.Sys.GlassParams GlassParamsFromSettings(AppSettings s) => new()

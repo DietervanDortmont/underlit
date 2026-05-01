@@ -61,7 +61,7 @@ public partial class SettingsWindow : Window
         UpdateAllValueChips();
 
         // Live-apply: push as you change, don't require save/close
-        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled, ChkFollowAccent })
+        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled, ChkFollowAccent, ChkGlassLiveCapture })
         {
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
@@ -339,6 +339,7 @@ public partial class SettingsWindow : Window
         ChkHookNativeKeys.IsChecked    = _snapshot.HookNativeBrightnessKeys;
         ChkScheduleEnabled.IsChecked   = _snapshot.ScheduleEnabled;
         ChkFollowAccent.IsChecked      = _snapshot.FollowWindowsAccent;
+        ChkGlassLiveCapture.IsChecked  = _snapshot.GlassLiveCapture;
         CboTransparency.SelectedIndex  = (int)_snapshot.TransparencyEffects;
         CboBackdrop.SelectedIndex      = (int)_snapshot.OsdBackdrop;
         RefreshAccentSwatch();
@@ -432,6 +433,7 @@ public partial class SettingsWindow : Window
         _snapshot.HookNativeBrightnessKeys  = ChkHookNativeKeys.IsChecked == true;
         _snapshot.ScheduleEnabled           = ChkScheduleEnabled.IsChecked == true;
         _snapshot.FollowWindowsAccent       = ChkFollowAccent.IsChecked == true;
+        _snapshot.GlassLiveCapture          = ChkGlassLiveCapture.IsChecked == true;
         _snapshot.TransparencyEffects       = (TransparencyMode)Math.Max(0, CboTransparency.SelectedIndex);
         _snapshot.OsdBackdrop               = (BackdropStyle)Math.Max(0, CboBackdrop.SelectedIndex);
 

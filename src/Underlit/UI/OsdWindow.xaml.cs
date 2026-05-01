@@ -113,6 +113,11 @@ public partial class OsdWindow : Window
     private bool _useTransparency = true;
     private BackdropStyle _backdrop = BackdropStyle.Subtle;
     private GlassParams _glass = new();
+    /// <summary>
+    /// True = WGC live capture (real-time refraction + brief Win11 yellow border).
+    /// False = one-shot BitBlt per Show() (frozen for 1.3 s, no yellow border).
+    /// </summary>
+    private bool _glassLiveCapture = true;
 
     // ---- Liquid Glass live engine ----
     // Created lazily after the window is first shown (we need an HWND to set
@@ -167,7 +172,7 @@ public partial class OsdWindow : Window
 
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
                                      TransparencyMode transparencyMode, BackdropStyle backdrop,
-                                     GlassParams glass)
+                                     GlassParams glass, bool glassLiveCapture)
     {
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
@@ -181,6 +186,17 @@ public partial class OsdWindow : Window
 
         _backdrop = backdrop;
         _glass = glass.Clone();
+
+        // Mode flip handling: if the user just turned live OFF, tear down WGC right
+        // away so no yellow border can be triggered on the next Show(). If they turned
+        // it ON, the next RefreshGlass() will lazily re-init WGC.
+        bool prevLive = _glassLiveCapture;
+        _glassLiveCapture = glassLiveCapture;
+        if (prevLive && !glassLiveCapture)
+        {
+            // DisableLive() handles both ticker shutdown AND WGC dispose.
+            _liveGlass?.DisableLive();
+        }
 
         if (IsLoaded)
         {
@@ -466,26 +482,39 @@ public partial class OsdWindow : Window
     // ---- Liquid Glass capture ----
 
     /// <summary>
-    /// Bring the glass to its current state. In LIVE mode (WGC running) this just
-    /// kicks the live ticker; in LEGACY mode it captures once on each show.
+    /// Bring the glass to its current state. Two paths:
+    ///   • LIVE  — kick the WGC ticker so the bitmap updates every ~33 ms while OSD
+    ///             is visible (yellow border appears on Win11 22H2/23H2).
+    ///   • STATIC — one BitBlt of whatever is behind the about-to-show OSD, frozen
+    ///             for the 1.3 s the OSD is up. No border, ever.
+    /// Routing is driven by _glassLiveCapture (settable via Settings).
     /// </summary>
     private void RefreshGlass()
     {
         if (_liveGlass == null)
         {
             _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
-            // Try to enable live capture once, on the first show. The HWND must
-            // exist (which it does after Show()), so this is safe here.
-            _liveGlass.TryEnableLive(Hwnd);
         }
         GlassBackdrop.Visibility = Visibility.Visible;
 
-        // LIVE: keep the ticker running for the duration the OSD is visible.
-        // It refreshes the bitmap every ~33 ms from WGC frames.
-        _liveGlass.StartLiveTicker(_glass);
+        if (_glassLiveCapture)
+        {
+            // Lazy-init WGC the first time live mode is needed. If WGC fails
+            // (older Windows / permissions), TryEnableLive returns false and we
+            // fall through to the static refresh — better some glass than none.
+            _liveGlass.TryEnableLive(Hwnd);
+            _liveGlass.StartLiveTicker(_glass);
 
-        // LEGACY (WGC failed/unsupported): one BitBlt per Show().
-        _liveGlass.RefreshNow(_glass);
+            // Belt-and-braces: also do a one-shot static render on first show so
+            // the FIRST frame isn't blank while WGC's first FrameArrived flies in.
+            _liveGlass.RefreshNow(_glass);
+        }
+        else
+        {
+            // STATIC mode — must run BEFORE Show() (which Flash() arranges) so the
+            // BitBlt doesn't include the OSD itself.
+            _liveGlass.RefreshNow(_glass);
+        }
 
         ApplyAdaptiveIconColor(_liveGlass.LastPillLuminance);
     }
@@ -563,7 +592,14 @@ public partial class OsdWindow : Window
         BeginAnimation(OpacityProperty, fadeIn);
         BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideIn);
 
-        _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ShowDurationMs) };
+        // DispatcherTimer's parameterless ctor uses Background priority, which is
+        // BELOW Render — meaning a 60 fps live-glass render loop at Render priority
+        // would starve this timer and the OSD would never auto-hide. Pinning it to
+        // Normal (above Render and DataBind) guarantees the tick fires on time.
+        _hideTimer = new DispatcherTimer(DispatcherPriority.Normal)
+        {
+            Interval = TimeSpan.FromMilliseconds(ShowDurationMs)
+        };
         _hideTimer.Tick += (_, _) =>
         {
             _hideTimer?.Stop();

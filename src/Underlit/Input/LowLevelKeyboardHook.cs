@@ -7,20 +7,32 @@ using Underlit.Display;
 namespace Underlit.Input;
 
 /// <summary>
-/// Global WH_KEYBOARD_LL hook. Catches brightness keys (VK 0xAF/0xB0) that modern
-/// Windows laptops surface when you press Fn+F-brightness.
+/// Global WH_KEYBOARD_LL hook stub.
 ///
-/// Not every OEM surfaces these. Some (especially older Dell, some HP) route
-/// brightness keys through vendor HID devices and never hit the system hook.
-/// For those, the user binds a custom RegisterHotKey-style hotkey instead.
+/// Originally this hook tried to catch laptop Fn-brightness keys by matching
+/// VKs 0xAF / 0xB0 — which we'd labelled VK_BRIGHTNESS_DOWN / VK_BRIGHTNESS_UP.
+/// That was wrong: 0xAF is VK_VOLUME_UP and 0xB0 is VK_MEDIA_NEXT_TRACK in the
+/// real Win32 VK table. There is no standard VK_BRIGHTNESS_* — modern laptop
+/// brightness keys go through HID consumer-page input that never fires
+/// WM_KEYDOWN at all. So the hook was silently stealing the user's volume-up
+/// and media-next-track presses and remapping them to brightness changes.
+///
+/// As of v0.6.12 the hook installs but matches NO VK codes — it's a transparent
+/// passthrough. Brightness can still be controlled via RegisterHotKey-style
+/// hotkeys configured in Settings (Ctrl+Alt+Up/Down by default), which is the
+/// only reliable cross-OEM mechanism.
 ///
 /// Handler events fire on a dedicated hook thread — we marshal to the UI
 /// dispatcher before invoking the subscriber.
 /// </summary>
 public sealed class LowLevelKeyboardHook : IDisposable
 {
+    // Events kept on the API surface for backwards compatibility with subscribers,
+    // but are never raised after v0.6.12 (the hook is a passthrough — see class doc).
+#pragma warning disable CS0067
     public event Action? BrightnessDown;
     public event Action? BrightnessUp;
+#pragma warning restore CS0067
 
     private IntPtr _hook;
     private NativeMethods.HookProc? _proc; // keep a strong reference so it isn't GC'd
@@ -34,9 +46,9 @@ public sealed class LowLevelKeyboardHook : IDisposable
     }
 
     /// <summary>
-    /// If true, we return a non-zero value from the hook for VK_BRIGHTNESS_* events,
-    /// which prevents Windows' default brightness behavior from also firing.
-    /// We only want this when our "below-min" or "above-max" dimming is in charge.
+    /// Vestigial setting from the v0.5-era hook. The hook no longer matches any
+    /// VK codes (see HookCallback) so this flag has no observable effect.
+    /// Retained on the API surface for back-compat.
     /// </summary>
     public bool SwallowNativeKey
     {
@@ -59,24 +71,11 @@ public sealed class LowLevelKeyboardHook : IDisposable
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (nCode < 0) return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
-
-        int msg = wParam.ToInt32();
-        if (msg == NativeMethods.WM_KEYDOWN || msg == NativeMethods.WM_SYSKEYDOWN)
-        {
-            var data = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam);
-            if (data.vkCode == NativeMethods.VK_BRIGHTNESS_DOWN)
-            {
-                _uiDispatcher.BeginInvoke((Action)(() => BrightnessDown?.Invoke()), DispatcherPriority.Input);
-                if (_swallowNativeKey) return (IntPtr)1;
-            }
-            else if (data.vkCode == NativeMethods.VK_BRIGHTNESS_UP)
-            {
-                _uiDispatcher.BeginInvoke((Action)(() => BrightnessUp?.Invoke()), DispatcherPriority.Input);
-                if (_swallowNativeKey) return (IntPtr)1;
-            }
-        }
-
+        // v0.6.12: hook is a transparent passthrough. The VK codes we used to match
+        // (0xAF, 0xB0) were really VK_VOLUME_UP and VK_MEDIA_NEXT_TRACK — see the
+        // class doc comment. Matching them caused the user's volume keys to dim the
+        // screen, so the matching is gone. Real laptop brightness keys do NOT fire
+        // WM_KEYDOWN at all; they need OEM-specific HID handling we don't ship.
         return NativeMethods.CallNextHookEx(_hook, nCode, wParam, lParam);
     }
 

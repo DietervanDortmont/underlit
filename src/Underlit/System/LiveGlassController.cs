@@ -14,22 +14,22 @@ namespace Underlit.Sys;
 /// <summary>
 /// Drives the Liquid Glass backdrop for a WPF window.
 ///
-/// Two modes:
+/// Two modes (selectable per-user via Settings → Liquid Glass → "Live capture"):
 ///
-///   • LEGACY (fallback): BitBlt the screen pixels behind the OSD before each Show().
-///     The capture is frozen for the 1.3 s the OSD is visible. This is the bulletproof
-///     path that works on every Windows configuration.
+///   • STATIC (no yellow border): BitBlt the screen pixels behind the OSD's about-
+///     to-show position once per Show(). Capture is frozen for the 1.3 s the OSD is
+///     visible. No yellow border on any Windows build.
 ///
 ///   • LIVE (v0.6+): Windows.Graphics.Capture continuously captures the primary
 ///     monitor at ~30 fps. The OSD has WDA_EXCLUDEFROMCAPTURE set so it's
 ///     properly excluded from those frames (no feedback). On every render tick we
 ///     crop the latest monitor frame to the OSD's physical rect, run the renderer,
 ///     and WritePixels into the WriteableBitmap in place. Result: glass refracts
-///     whatever is behind it in real time.
+///     whatever is behind it in real time. On Win11 22H2/23H2 this shows a brief
+///     yellow capture-border indicator while the OSD is visible.
 ///
-/// If WGC fails to initialise (older Windows, missing API, permissions) we silently
-/// fall back to LEGACY so the OSD always works — this is alpha-stage code and we
-/// don't want a single bug in WGC interop to brick the app.
+/// If LIVE is requested but WGC fails to initialise (older Windows, missing API,
+/// permissions) we silently fall back to STATIC so the OSD always works.
 /// </summary>
 public sealed class LiveGlassController : IDisposable
 {
@@ -59,11 +59,13 @@ public sealed class LiveGlassController : IDisposable
     private bool _liveSupported;
     private bool _liveActive;
     private long _lastRenderedFrameId = -1;
-    private long _lastRenderTicks;
-    /// <summary>Minimum gap between renders. Caps the live ticker at ~30 fps so
-    /// the WPF dispatcher has time to run other DispatcherTimers (notably the
-    /// OSD's 1.3s auto-hide timer, which was being starved at 60 fps).</summary>
-    private const int MinFrameMs = 33;
+    /// <summary>
+    /// True between BeginInvoke schedule and dispatch. Prevents the dispatcher
+    /// queue from filling up if WGC delivers frames faster than the UI can render
+    /// (the dropped frame is fine — the next FrameArrived will pick up the latest
+    /// pixels via FrameId).
+    /// </summary>
+    private volatile bool _renderQueued;
     // Pre-allocated bitmap for the cropped pill region — re-used every frame
     // to avoid per-frame GC pressure (was a measurable spike before v0.6.4).
     private Bitmap? _cropBmp;
@@ -78,7 +80,7 @@ public sealed class LiveGlassController : IDisposable
 
     /// <summary>
     /// Try to start the live-capture engine. Returns true if WGC initialised; false
-    /// means the controller silently falls back to legacy capture-on-show behaviour.
+    /// means the controller silently falls back to static capture-on-show behaviour.
     /// </summary>
     public bool TryEnableLive(IntPtr hwnd)
     {
@@ -112,6 +114,31 @@ public sealed class LiveGlassController : IDisposable
     }
 
     /// <summary>
+    /// Tear down the live-capture engine if it was initialised. Safe to call when
+    /// nothing is running. After this returns, RefreshNow() (the static BitBlt
+    /// path) is the only way to update the glass — no yellow border can appear.
+    /// </summary>
+    public void DisableLive()
+    {
+        if (_liveActive)
+        {
+            _liveActive = false;
+            if (_wgc != null) _wgc.FrameArrived -= OnWgcFrameArrived;
+        }
+        if (_wgc != null)
+        {
+            try { _wgc.Dispose(); } catch { }
+            _wgc = null;
+        }
+        _renderQueued = false;
+        // Reset the OSD's display affinity — we don't need WDA_EXCLUDEFROMCAPTURE
+        // anymore, and leaving it on would still apply if any other app used WGC.
+        // (No-op if hwnd is unknown here — caller can re-set as needed.)
+        _liveSupported = false;
+        Logger.Info("LiveGlass: WGC torn down — static BitBlt path active, no yellow border");
+    }
+
+    /// <summary>
     /// Begin per-frame rendering while the OSD is visible. Caller invokes this in
     /// Flash() (see OsdWindow). Stops on its own when StopLiveTicker() is called.
     /// No-op if live mode isn't supported.
@@ -124,9 +151,9 @@ public sealed class LiveGlassController : IDisposable
         {
             _liveActive = true;
             _lastRenderedFrameId = -1;
+            // Subscribe BEFORE StartCapture so we don't miss the first FrameArrived.
+            _wgc.FrameArrived += OnWgcFrameArrived;
             _wgc.StartCapture();
-            CompositionTarget.Rendering += OnRendering;
-            OnRendering(this, EventArgs.Empty);
         }
     }
 
@@ -134,8 +161,9 @@ public sealed class LiveGlassController : IDisposable
     {
         if (!_liveActive) return;
         _liveActive = false;
-        CompositionTarget.Rendering -= OnRendering;
+        if (_wgc != null) _wgc.FrameArrived -= OnWgcFrameArrived;
         _wgc?.StopCapture();
+        _renderQueued = false;
     }
 
     public void UpdateLiveParams(GlassParams parameters)
@@ -143,17 +171,30 @@ public sealed class LiveGlassController : IDisposable
         if (_liveActive) _liveParams = parameters.Clone();
     }
 
-    private void OnRendering(object? sender, EventArgs e)
+    /// <summary>
+    /// Called on a WGC worker thread whenever a fresh frame is available. We schedule
+    /// the actual render on the UI dispatcher at <see cref="DispatcherPriority.Render"/>
+    /// so it runs after any pending Normal-priority work — that way the OSD's auto-hide
+    /// DispatcherTimer (now Normal) always wins, even when frames pour in at 60+ fps.
+    ///
+    /// Coalescing: if a render is already queued, we skip — the queued render will pick
+    /// up whatever the LATEST FrameId is when it runs. So we never let the UI thread
+    /// fall behind the WGC producer thread.
+    /// </summary>
+    private void OnWgcFrameArrived()
     {
+        if (_disposed || !_liveActive) return;
+        if (_renderQueued) return;
+        _renderQueued = true;
+        _window.Dispatcher.BeginInvoke(DispatcherPriority.Render, (Action)RenderLatestFrame);
+    }
+
+    private void RenderLatestFrame()
+    {
+        _renderQueued = false;
         if (_disposed || !_liveActive || _wgc == null || _liveParams == null) return;
-        // Rate-limit to ~30 fps so the dispatcher has slack for other timers
-        // (the OSD's 1.3s auto-hide DispatcherTimer was starved before this).
-        long now = Environment.TickCount64;
-        if (now - _lastRenderTicks < MinFrameMs) return;
-        _lastRenderTicks = now;
         try
         {
-            // WGC delivers full-monitor frames asynchronously into _wgc.LatestFrame.
             // Snapshot the frame state under FrameLock, then crop to the OSD rect.
             byte[]? frameBytes;
             int frameW, frameH, frameStride;
@@ -242,18 +283,35 @@ public sealed class LiveGlassController : IDisposable
     }
 
     /// <summary>
-    /// In v0.6.2 the BitBlt-on-show fallback is gone — the OSD is intentionally
-    /// LIVE-ONLY now. If WGC failed to initialise, this method is a no-op and the
-    /// OSD's GlassBackdrop will simply be blank (so the failure is visible rather
-    /// than masked by a static-capture path that "kicks in" without being asked).
+    /// Static (one-shot) refresh: BitBlt the screen pixels at the OSD's about-to-show
+    /// position into a Bitmap, run the renderer once. The capture is frozen for the
+    /// 1.3 s the OSD is visible. Used when "Live capture" is OFF in settings, AND as
+    /// a fallback when WGC failed to init.
     ///
-    /// Diagnose any WGC failure by inspecting %LOCALAPPDATA%\Underlit\underlit.log
-    /// — WgcCapture.StartForMonitor logs every step it succeeds at, so the last
-    /// "WGC: ..." line tells you exactly where init died.
+    /// MUST be called BEFORE the OSD's Show() so the OSD itself isn't in the BitBlt.
     /// </summary>
     public void RefreshNow(GlassParams parameters)
     {
-        // Intentionally empty. See doc comment.
+        if (_disposed) return;
+        try
+        {
+            var src = PresentationSource.FromVisual(_window);
+            double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+            int physWinX = (int)Math.Round(_window.Left * scale);
+            int physWinY = (int)Math.Round(_window.Top  * scale);
+            int physFullW = (int)Math.Round(FullWidthDip  * scale);
+            int physFullH = (int)Math.Round(FullHeightDip * scale);
+            if (physFullW <= 0 || physFullH <= 0) return;
+
+            // Allocate a fresh Bitmap each call (it's once per Show — cheap), then
+            // render through the same RenderInto path the live mode uses.
+            using var capture = ScreenCapture.CaptureRegion(physWinX, physWinY, physFullW, physFullH);
+            RenderInto(capture, parameters);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn("Static glass refresh failed", ex);
+        }
     }
 
     /// <summary>Run the renderer over a captured bitmap and update the WriteableBitmap.</summary>

@@ -40,8 +40,18 @@ public sealed class AppSettings
     public double BrightnessStep { get; set; } = 5;
     public int WarmthStep { get; set; } = 200;
 
-    /// <summary>Try to intercept the laptop's Fn brightness keys.</summary>
-    public bool HookNativeBrightnessKeys { get; set; } = true;
+    /// <summary>
+    /// Try to intercept the laptop's Fn brightness keys via WH_KEYBOARD_LL.
+    ///
+    /// In practice this no longer does anything useful — modern laptop brightness
+    /// keys go through HID consumer-page input that doesn't surface as WM_KEYDOWN,
+    /// and our previous implementation matched VK 0xAF/0xB0 which are really volume
+    /// up and media-next-track (see LowLevelKeyboardHook). Default is now FALSE so
+    /// new installs don't even register the hook. Brightness should be controlled
+    /// via the configurable RegisterHotKey hotkeys instead (Ctrl+Alt+Up/Down by
+    /// default).
+    /// </summary>
+    public bool HookNativeBrightnessKeys { get; set; } = false;
 
     // ---- Behavior toggles ----
 
@@ -107,6 +117,18 @@ public sealed class AppSettings
     public double GlassRimSecondary   { get; set; } = 50;    // 0..100 — opposing-corner rim highlight strength
     public string GlassTintColor      { get; set; } = "#FFFFFFFF"; // #AARRGGBB — tint hue (white = neutral)
     public double GlassTintStrength   { get; set; } = 6;     // 0..100 — how strong the tint mix is
+
+    /// <summary>
+    /// Glass capture mode.
+    ///   true  (default): WGC live capture — glass refracts whatever moves behind the
+    ///                    OSD in real time. On Win11 22H2/23H2 this triggers a brief
+    ///                    yellow capture-border indicator while the OSD is visible.
+    ///                    Win11 24H2+ supports a no-border mode.
+    ///   false:           BitBlt one-shot capture per Show(). Glass freezes at the
+    ///                    snapshot taken when the OSD appeared. No yellow border on
+    ///                    any Windows build.
+    /// </summary>
+    public bool GlassLiveCapture { get; set; } = true;
 
     // ---- Schedule (optional baseline curve) ----
 

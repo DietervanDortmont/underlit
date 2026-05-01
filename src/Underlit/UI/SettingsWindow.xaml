@@ -233,18 +233,12 @@
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" x:Name="ChkDisableNightLight" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
-                                <Border Style="{StaticResource RowDivider}"/>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Hook Fn brightness keys"/>
-                                        <TextBlock Style="{StaticResource RowHint}" Text="Extends the laptop Fn+brightness keys past the Windows minimum."/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" x:Name="ChkHookNativeKeys" Style="{StaticResource ToggleSwitch}"/>
-                                </Grid>
+                                <!-- "Hook Fn brightness keys" toggle removed in v0.6.12 — the underlying
+                                     low-level hook was matching the wrong VK codes (volume up + media next
+                                     instead of brightness) and was silently stealing those keys. The hook
+                                     is now a no-op regardless of this setting. The CheckBox stays in the
+                                     visual tree (Collapsed) so existing code-behind references still bind. -->
+                                <CheckBox x:Name="ChkHookNativeKeys" Visibility="Collapsed"/>
                             </StackPanel>
                         </Border>
 
@@ -367,6 +361,20 @@
                             <StackPanel>
                                 <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
                                            Text="Knobs to dial in the look. Press a hotkey while sliding to preview."/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Live capture"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="On: glass refracts what's behind in real time. Windows 11 22H2/23H2 shows a brief yellow capture-border indicator while the OSD is visible. Off: a single snapshot is taken when the OSD appears (frozen for ~1.3s) — no yellow border on any Windows version."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkGlassLiveCapture" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
 
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>

@@ -153,10 +153,20 @@ internal static class NativeMethods
     public const int WM_SYSKEYDOWN = 0x0104;
     public const int WM_SYSKEYUP   = 0x0105;
 
-    // Brightness virtual-key codes, VK_BRIGHTNESS_DOWN / UP.
-    // Not defined in WinUser.h headers under these names for all SDKs — hard-code the values.
-    public const uint VK_BRIGHTNESS_DOWN = 0xAF;
-    public const uint VK_BRIGHTNESS_UP   = 0xB0;
+    // ⚠️ HISTORICAL BUG (fixed v0.6.12).
+    //
+    // These constants used to be named VK_BRIGHTNESS_DOWN (0xAF) and VK_BRIGHTNESS_UP
+    // (0xB0) and were used by LowLevelKeyboardHook to "swallow" laptop Fn-brightness
+    // keys. But 0xAF and 0xB0 are actually VK_VOLUME_UP and VK_MEDIA_NEXT_TRACK
+    // respectively (per the Win32 VK table) — there is NO documented VK_BRIGHTNESS_*
+    // because brightness keys come through HID consumer-page input that does not
+    // fire WM_KEYDOWN at all. So the hook was silently stealing the user's volume-up
+    // and media-next-track keys and routing them through OnNativeBrightnessDown/Up.
+    //
+    // The hook no longer matches these VKs (see LowLevelKeyboardHook). Constants
+    // renamed to their REAL Win32 names so any future reference is unambiguous.
+    public const uint VK_VOLUME_UP        = 0xAF;
+    public const uint VK_MEDIA_NEXT_TRACK = 0xB0;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT

@@ -49,17 +49,35 @@ public partial class OsdWindow : Window
     // pill shape via animating WindowRoot.Clip's RectangleGeometry — this gives a
     // TRUE shape morph with the corners staying perfectly rounded throughout
     // (a ScaleTransform would distort the corner radii in screen space).
-    // Combined with a small Y-translate slide and a back-ease (overshoot) we get
-    // the spring/bounce feel the user asked for.
-    private const int    EntryDurationMs = 420;
+    // Combined with a Y-translate slide and a back-ease (overshoot) we get the
+    // spring/bounce feel.
+    private const int    EntryDurationMs = 460;
     private const int    FadeInDurationMs = 240;
     private const int    ExitDurationMs   = 220;
-    private const double SlideFromBelowDip = 22;   // initial Y offset — pill rises from below rest
+    /// <summary>
+    /// Initial Y-offset for the entry slide, in dip. The seed circle is 46 dip
+    /// tall, sits at local y=10–56, and the window is 66 dip tall. With slide=44
+    /// the circle is rendered at y=54–100 → only the top 12 dip is visible at
+    /// frame 0, sitting right above the taskbar (BottomMarginDip is 0). That's
+    /// the "circle peeking up from behind the taskbar" moment. Animation then
+    /// pulls slide to 0, with a BackEase overshoot of about 18 dip past rest
+    /// (44 × 0.4) for the bouncy spring.
+    ///
+    /// Push higher (max ≈ 56) to bury the circle deeper at frame 0; lower to
+    /// reveal more of it. Beyond ~50 nothing is visible at the start, so the
+    /// "rise" effect disappears.
+    /// </summary>
+    private const double SlideFromBelowDip = 44;
     private const double EntryBackAmplitude = 0.4; // BackEase amplitude — overshoot strength
-    // Visual pill bottom should sit ~60dip above the working area's bottom. The window
-    // itself includes 10dip of shadow padding under the pill, so the window's OWN bottom
-    // is 50dip above the working area bottom.
-    private const double BottomMarginDip = 50;
+    /// <summary>
+    /// Gap between the WPF window's bottom edge and the working area's bottom
+    /// (top of the taskbar). The visible pill's bottom sits 10 dip above the
+    /// window's bottom (shadow padding inside the bitmap), so the actual gap
+    /// from pill bottom to taskbar top is BottomMarginDip + 10. Was 50 → 60 dip
+    /// gap, now 0 → 10 dip gap. Keep ≥ 0 to avoid the window overlapping the
+    /// taskbar (which can cause the taskbar to render in front of the pill).
+    /// </summary>
+    private const double BottomMarginDip = 0;
 
     // ---- Theme palettes ----
     private sealed record ThemeTints(

@@ -43,9 +43,19 @@ public partial class OsdWindow : Window
 
     private DispatcherTimer? _hideTimer;
     private const int ShowDurationMs = 1300;
-    private const int EntryMs = 220;
-    private const int ExitMs  = 170;
-    private const double SlideDistance = 8;       // small internal bar slide on entry/exit
+
+    // ---- Dynamic-Island entry animation tunables ----
+    // The pill morphs from a circle (height×height, fully rounded) into the full
+    // pill shape via animating WindowRoot.Clip's RectangleGeometry — this gives a
+    // TRUE shape morph with the corners staying perfectly rounded throughout
+    // (a ScaleTransform would distort the corner radii in screen space).
+    // Combined with a small Y-translate slide and a back-ease (overshoot) we get
+    // the spring/bounce feel the user asked for.
+    private const int    EntryDurationMs = 420;
+    private const int    FadeInDurationMs = 240;
+    private const int    ExitDurationMs   = 220;
+    private const double SlideFromBelowDip = 22;   // initial Y offset — pill rises from below rest
+    private const double EntryBackAmplitude = 0.4; // BackEase amplitude — overshoot strength
     // Visual pill bottom should sit ~60dip above the working area's bottom. The window
     // itself includes 10dip of shadow padding under the pill, so the window's OWN bottom
     // is 50dip above the working area bottom.
@@ -123,6 +133,11 @@ public partial class OsdWindow : Window
     /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
     private double _lastBrightness;
     private int _lastWarmth = 6500;
+
+    // Animated clip + slide for the Dynamic-Island-style entry. Created on first
+    // SourceInitialized; animated on every Flash()/StartExitAnimation().
+    private RectangleGeometry? _entryClip;
+    private TranslateTransform? _entrySlide;
 
     // ---- Liquid Glass live engine ----
     // Created lazily after the window is first shown (we need an HWND to set
@@ -230,6 +245,40 @@ public partial class OsdWindow : Window
         // treatment. Win11 22H2+ paints these even on layered AllowsTransparency=true
         // windows by default; we don't want any of it.
         Acrylic.DisableSystemRounding(Hwnd);
+
+        // Set up the animated clip + slide that drive the Dynamic-Island-style
+        // entry/exit. We seed the clip with the FULL pill rect so the OSD looks
+        // normal during the initial Show()/Hide() pair UnderlitHost does at
+        // startup, then Flash() overwrites it with the seed circle on each show.
+        _entryClip = new RectangleGeometry
+        {
+            RadiusX = LiveGlassController.PillHeightDip / 2.0,
+            RadiusY = LiveGlassController.PillHeightDip / 2.0,
+            Rect = FullPillRect(),
+        };
+        WindowRoot.Clip = _entryClip;
+
+        _entrySlide = new TranslateTransform();
+        WindowRoot.RenderTransform = _entrySlide;
+    }
+
+    /// <summary>The Rect that, used with the WindowRoot clip, exposes the entire visible
+    /// pill — i.e. the OSD at rest. Matches the SetWindowRgn the layout uses.</summary>
+    private static Rect FullPillRect() => new Rect(
+        LiveGlassController.PaddingDip,
+        LiveGlassController.PaddingDip,
+        LiveGlassController.PillWidthDip,
+        LiveGlassController.PillHeightDip);
+
+    /// <summary>The Rect that makes the clip a centred CIRCLE (height×height with R=H/2).
+    /// This is the "seed" the entry animation grows out of.</summary>
+    private static Rect SeedCircleRect()
+    {
+        double d = LiveGlassController.PillHeightDip;
+        return new Rect(
+            (LiveGlassController.FullWidthDip - d) / 2.0,
+            LiveGlassController.PaddingDip,
+            d, d);
     }
 
     /// <summary>
@@ -653,6 +702,24 @@ public partial class OsdWindow : Window
 
     // ---- Animation ----
 
+    /// <summary>
+    /// Dynamic-Island-style entry animation:
+    ///   • The WindowRoot clip morphs from a CIRCLE (height×height, R=H/2) sitting
+    ///     in the centre of the window to the FULL pill rect. Because the
+    ///     RectangleGeometry has fixed RadiusX/Y = H/2, the corners stay perfectly
+    ///     rounded the whole way through — a true shape morph.
+    ///   • The pill simultaneously slides up from <see cref="SlideFromBelowDip"/>
+    ///     pixels below its rest position, suggesting it's coming up from behind
+    ///     the taskbar.
+    ///   • Both animations use BackEase EaseOut for the spring/overshoot bounce.
+    ///   • A short opacity fade-in runs in parallel so the visible content
+    ///     doesn't pop in instantly.
+    ///
+    /// Using Clip + a render-transform Y means the OSD Window itself doesn't move
+    /// (the laggy DWM-rerender path the codebase used to fight). Everything
+    /// happens inside the existing 300×66 window, with the clip handling the
+    /// visible "shape" and the transform handling the slide.
+    /// </summary>
     private void Flash()
     {
         PositionAboveTaskbar();
@@ -660,36 +727,62 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
-            // Capture the screen pixels behind our about-to-show position BEFORE Show()
-            // so we don't include ourselves in the BitBlt. The capture is frozen during
-            // the 1.3s display, but each new press starts fresh — same model Apple uses
-            // for transient flyouts on iOS lock-screen Control Center.
+            // INITIAL SHOW: run the full Dynamic-Island entry animation.
+            // (On re-press while visible we deliberately skip this so the OSD
+            // doesn't shrink back to a circle and re-pop on every key tap.)
+
             if (_backdrop == BackdropStyle.LiquidGlass && _useTransparency)
                 RefreshGlass();
 
-            // Initial states for the in-animation
-            Opacity = 0;
-            BarSlideTransform.Y = SlideDistance;
-            Show();
-        }
+            // Cancel any animations leftover from the previous hide cycle.
+            _entryClip!.BeginAnimation(RectangleGeometry.RectProperty, null);
+            _entrySlide!.BeginAnimation(TranslateTransform.YProperty, null);
+            BeginAnimation(OpacityProperty, null);
 
-        // Fade in. Slight bar slide for a touch of motion. Window itself stays put —
-        // moving Window.Top causes DWM to re-render acrylic each frame, which the user
-        // reported as laggy.
-        var fadeIn = new DoubleAnimation
-        {
-            To = 1.0,
-            Duration = TimeSpan.FromMilliseconds(EntryMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        var slideIn = new DoubleAnimation
-        {
-            To = 0,
-            Duration = TimeSpan.FromMilliseconds(EntryMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        BeginAnimation(OpacityProperty, fadeIn);
-        BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideIn);
+            // Match the clip's corner radius to the user's chosen pill corner
+            // radius so the shape morph hugs the actual pill edges rather than
+            // over-rounding when the user has dialled it down.
+            double pillR = (LiveGlassController.PillHeightDip / 2.0) * (_glass.CornerRadius / 100.0);
+            _entryClip.RadiusX = pillR;
+            _entryClip.RadiusY = pillR;
+
+            // Seed the start state, then Show() and animate to rest.
+            _entryClip.Rect = SeedCircleRect();
+            _entrySlide.Y   = SlideFromBelowDip;
+            Opacity         = 0;
+            Show();
+
+            var spring = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = EntryBackAmplitude };
+
+            var rectAnim = new RectAnimation
+            {
+                From = SeedCircleRect(),
+                To   = FullPillRect(),
+                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
+                EasingFunction = spring,
+            };
+            var slideAnim = new DoubleAnimation
+            {
+                From = SlideFromBelowDip,
+                To   = 0,
+                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
+                EasingFunction = spring,
+            };
+            var fadeIn = new DoubleAnimation
+            {
+                From = 0,
+                To   = 1.0,
+                Duration = TimeSpan.FromMilliseconds(FadeInDurationMs),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+            };
+
+            _entryClip.BeginAnimation(RectangleGeometry.RectProperty, rectAnim);
+            _entrySlide.BeginAnimation(TranslateTransform.YProperty, slideAnim);
+            BeginAnimation(OpacityProperty, fadeIn);
+        }
+        // else: already visible (mid-show re-press) — leave the current geometry
+        // alone and just refresh the hide timer below. The new value is already
+        // showing because UpdateBrightnessBar/UpdateWarmthBar ran before Flash().
 
         // DispatcherTimer's parameterless ctor uses Background priority, which is
         // BELOW Render — meaning a 60 fps live-glass render loop at Render priority
@@ -707,19 +800,32 @@ public partial class OsdWindow : Window
         _hideTimer.Start();
     }
 
+    /// <summary>
+    /// Reverse of the entry: pill shrinks back to the seed circle and slides
+    /// down behind the taskbar while fading out. We use QuadraticEase EaseIn for
+    /// the exit (no overshoot — undershoot before disappearing would look weird).
+    /// </summary>
     private void StartExitAnimation()
     {
+        var ease = new QuadraticEase { EasingMode = EasingMode.EaseIn };
+
+        var rectAnim = new RectAnimation
+        {
+            To = SeedCircleRect(),
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
+            EasingFunction = ease,
+        };
+        var slideAnim = new DoubleAnimation
+        {
+            To = SlideFromBelowDip,
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
+            EasingFunction = ease,
+        };
         var fadeOut = new DoubleAnimation
         {
             To = 0.0,
-            Duration = TimeSpan.FromMilliseconds(ExitMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-        };
-        var slideOut = new DoubleAnimation
-        {
-            To = SlideDistance,
-            Duration = TimeSpan.FromMilliseconds(ExitMs),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
+            EasingFunction = ease,
         };
         fadeOut.Completed += (_, _) =>
         {
@@ -727,11 +833,13 @@ public partial class OsdWindow : Window
             {
                 Hide();
                 // Stop the WGC render ticker while the OSD is invisible — no point
-                // burning ~30 fps of CPU on frames nobody can see.
+                // burning frames nobody can see.
                 _liveGlass?.StopLiveTicker();
             }
         };
+
+        _entryClip!.BeginAnimation(RectangleGeometry.RectProperty, rectAnim);
+        _entrySlide!.BeginAnimation(TranslateTransform.YProperty, slideAnim);
         BeginAnimation(OpacityProperty, fadeOut);
-        BarSlideTransform.BeginAnimation(TranslateTransform.YProperty, slideOut);
     }
 }

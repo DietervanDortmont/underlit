@@ -331,13 +331,29 @@ public partial class OsdWindow : Window
         WarmthBar.Visibility     = brightness ? Visibility.Collapsed : Visibility.Visible;
         IconText.Visibility      = brightness ? Visibility.Visible : Visibility.Collapsed;
         CandleIcon.Visibility    = brightness ? Visibility.Collapsed : Visibility.Visible;
+
+        // Mirror brightness/warmth visibility onto the solid-fill layer too —
+        // it lives outside BrightnessBar/WarmthBar so we have to switch its
+        // children explicitly. No-op when the style is Bar (whole layer hidden).
+        if (_barStyle == OsdBarStyle.SolidFill)
+        {
+            SolidFillBrightness.Visibility = brightness ? Visibility.Visible : Visibility.Collapsed;
+            SolidFillWarmthBar.Visibility  = brightness ? Visibility.Collapsed : Visibility.Visible;
+        }
     }
 
     // ---- Bar drawing ----
 
     private void UpdateBrightnessBar(double levelSigned)
     {
-        double total = Math.Max(0, BarRoot.ActualWidth);
+        // The width source depends on the active style:
+        //   • Bar       — the thin BarRoot, sitting in the column AFTER the icon.
+        //                  brightness=0 anchors at the centre of THAT column.
+        //   • SolidFill — the full pill width (SolidFillRoot is 280dp wide), with
+        //                  brightness=0 anchored at the geometric centre of the pill.
+        bool solid = _barStyle == OsdBarStyle.SolidFill;
+        double total = solid ? Math.Max(0, SolidFillRoot.ActualWidth)
+                             : Math.Max(0, BarRoot.ActualWidth);
         if (total <= 0)
         {
             Dispatcher.BeginInvoke(() => UpdateBrightnessBar(levelSigned), DispatcherPriority.Loaded);
@@ -346,30 +362,44 @@ public partial class OsdWindow : Window
 
         double half = total / 2.0;
         double clamped = Math.Clamp(levelSigned, -100, 100);
+        double posWidth = clamped >= 0 ?  clamped / 100.0 * half : 0;
+        double negWidth = clamped <  0 ? -clamped / 100.0 * half : 0;
 
-        if (clamped >= 0)
+        if (solid)
         {
-            FillRight.Width = clamped / 100.0 * half;
-            FillLeft.Width  = 0;
+            SolidFillPos.Width = posWidth;
+            SolidFillNeg.Width = negWidth;
         }
         else
         {
-            FillLeft.Width  = -clamped / 100.0 * half;
-            FillRight.Width = 0;
+            FillRight.Width = posWidth;
+            FillLeft.Width  = negWidth;
         }
     }
 
     private void UpdateWarmthBar(int kelvin)
     {
-        double total = Math.Max(0, BarRoot.ActualWidth);
+        bool solid = _barStyle == OsdBarStyle.SolidFill;
+        double total = solid ? Math.Max(0, SolidFillRoot.ActualWidth)
+                             : Math.Max(0, BarRoot.ActualWidth);
         if (total <= 0)
         {
             Dispatcher.BeginInvoke(() => UpdateWarmthBar(kelvin), DispatcherPriority.Loaded);
             return;
         }
         double f = Math.Clamp((kelvin - 1500) / 5000.0, 0, 1);
-        WarmthFill.Width = f * total;
-        WarmthEndStop.Color = BlendKelvin(kelvin);
+        var endColor = BlendKelvin(kelvin);
+
+        if (solid)
+        {
+            SolidFillWarmthBar.Width    = f * total;
+            SolidFillWarmthEndStop.Color = endColor;
+        }
+        else
+        {
+            WarmthFill.Width    = f * total;
+            WarmthEndStop.Color = endColor;
+        }
     }
 
     private Color BlendKelvin(int kelvin)
@@ -474,56 +504,58 @@ public partial class OsdWindow : Window
         WarmthTrack.Background = new SolidColorBrush(p.Track);
         WarmthStartStop.Color  = p.WarmthStart;
 
+        // Solid-fill layer brushes — same colour scheme as the thin bar but
+        // applied to the full-pill-width fills. Slight alpha reduction so the
+        // live glass refraction (or Subtle blur) is still visible underneath.
+        SolidFillNeg.Background       = new SolidColorBrush(WithAlpha(p.FillNegative, 0xC0));
+        SolidFillPos.Background       = new SolidColorBrush(WithAlpha(CurrentAccent(), 0xC0));
+        SolidFillWarmthStartStop.Color = p.WarmthStart;
+        // Warmth end stop is set per-frame from BlendKelvin in UpdateWarmthBar.
+
         ApplyBarStyle();
     }
 
+    private static Color WithAlpha(Color c, byte a) => Color.FromArgb(a, c.R, c.G, c.B);
+
     /// <summary>
-    /// Switches the brightness/warmth indicator between the thin slider ("Bar")
-    /// and the tall pill-shaped fill ("SolidFill"). The two modes share all the
-    /// same XAML elements — we just resize and restyle in place.
+    /// Switches between two visually distinct indicator widgets:
     ///
-    /// Bar mode (default): 4px height, visible track, mid-marker visible, tight
-    /// 2px corner radius. The fill grows from the centre and feels like a
-    /// classic slider.
+    ///   • Bar (default) — the classic thin slider. Lives in BarRoot, which sits
+    ///     in the column AFTER the icon. Has a track, a partial fill, and a
+    ///     centre mid-marker. Brightness 0 anchors to the BAR's centre (NOT the
+    ///     pill's centre — there's an icon to the left).
     ///
-    /// SolidFill mode: 28px height (most of the pill's interior), no track, no
-    /// mid-marker, large 14px corner radius so the fills read as a pill-within-
-    /// the-pill. The fill width still tracks the level so brightness 100 = full
-    /// right half filled, brightness -100 = full left half filled.
+    ///   • SolidFill   — full-pill-width fills in SolidFillRoot, sitting BEHIND
+    ///     the icon so the icon overlays on top of the colour. Fills are dead-
+    ///     rectangular (the pill's SetWindowRgn clip rounds the outer edges for
+    ///     us). Brightness 0 anchors to the pill's geometric centre, so a
+    ///     negative reading flows leftward across the icon area — like Apple's
+    ///     brightness OSD.
+    ///
+    /// We toggle Visibility on BarRoot and SolidFillRoot here, plus the inner
+    /// brightness/warmth children of SolidFillRoot, then re-run the bar-update
+    /// methods so widths recompute against the new container's ActualWidth.
     /// </summary>
     private void ApplyBarStyle()
     {
-        if (_barStyle == OsdBarStyle.SolidFill)
+        bool solid = _barStyle == OsdBarStyle.SolidFill;
+
+        // Thin slider widgets (BarRoot's children) — visible only in Bar mode.
+        // We hide BarRoot wholesale so it doesn't claim any layout space; in
+        // Solid-fill mode the entire indicator lives in SolidFillRoot.
+        BarRoot.Visibility = solid ? Visibility.Collapsed : Visibility.Visible;
+
+        // Full-pill-width solid-fill layer — visible only in Solid-fill mode.
+        SolidFillRoot.Visibility = solid ? Visibility.Visible : Visibility.Collapsed;
+
+        // Inside SolidFillRoot, route brightness vs warmth visibility based on
+        // the current mode. SetMode() also handles this — we mirror its choice
+        // here for the case where the style flips while OSD is mid-show.
+        if (solid)
         {
-            const double H = 28;     // tall pill fill height — fits inside 46-tall pill
-            const double R = H / 2;  // corner radius = half-height for full pill ends
-            BarRoot.Height = H;
-
-            // Hide track + midmarker; the fill IS the indicator.
-            TrackLeft.Visibility   = Visibility.Collapsed;
-            TrackRight.Visibility  = Visibility.Collapsed;
-            WarmthTrack.Visibility = Visibility.Collapsed;
-            MidMarker.Visibility   = Visibility.Collapsed;
-
-            FillLeft.CornerRadius   = new CornerRadius(R, 0, 0, R);
-            FillRight.CornerRadius  = new CornerRadius(0, R, R, 0);
-            WarmthFill.CornerRadius = new CornerRadius(R);
-        }
-        else  // OsdBarStyle.Bar
-        {
-            BarRoot.Height = 4;
-
-            TrackLeft.Visibility   = Visibility.Visible;
-            TrackRight.Visibility  = Visibility.Visible;
-            WarmthTrack.Visibility = Visibility.Visible;
-            // MidMarker is only meaningful in Brightness mode — let SetMode() decide
-            // its visibility there. Just make sure it's allowed to show.
-            if (_mode == Mode.Brightness)
-                MidMarker.Visibility = Visibility.Visible;
-
-            FillLeft.CornerRadius   = new CornerRadius(2, 0, 0, 2);
-            FillRight.CornerRadius  = new CornerRadius(0, 2, 2, 0);
-            WarmthFill.CornerRadius = new CornerRadius(2);
+            bool brightness = _mode == Mode.Brightness;
+            SolidFillBrightness.Visibility = brightness ? Visibility.Visible : Visibility.Collapsed;
+            SolidFillWarmthBar.Visibility  = brightness ? Visibility.Collapsed : Visibility.Visible;
         }
 
         // Re-trigger the width update so the fill width recalculates against the

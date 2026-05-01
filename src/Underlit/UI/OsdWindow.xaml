@@ -112,6 +112,54 @@
                 BorderThickness="1"
                 IsHitTestVisible="False"/>
 
+        <!-- ====== Solid-fill bar layer (OsdBarStyle.SolidFill) ======
+             Spans the FULL pill width — beginning to end, not just the column
+             after the icon. The pill's SetWindowRgn clip handles the rounded
+             outer corners, so the fills themselves are dead-rectangular: the
+             leading edge (where each fill meets the centre) is a straight
+             vertical line and the outer edge is whatever the pill clips it to.
+
+             Brightness 0 corresponds to the GEOMETRIC centre of the pill —
+             neg fill grows leftward (covering the icon area), pos fill grows
+             rightward — same model Apple uses for its brightness bar.
+
+             This layer sits ABOVE TintLayer/EdgeRing but BELOW ContentRoot, so
+             the icon and the existing thin-bar widgets overlay on top of it
+             when both are visible. (In Solid-fill mode the thin-bar widgets
+             are hidden via ApplyBarStyle.) -->
+        <Grid x:Name="SolidFillRoot" Margin="10" Visibility="Collapsed"
+              IsHitTestVisible="False">
+            <!-- Brightness: split into two halves so the fill grows outward
+                 from the geometric centre. Fill widths are driven from
+                 UpdateBrightnessBar(). -->
+            <Grid x:Name="SolidFillBrightness">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" x:Name="SolidFillNeg"
+                        HorizontalAlignment="Right" Width="0"
+                        Background="#FFE5B675"/>
+                <Border Grid.Column="1" x:Name="SolidFillPos"
+                        HorizontalAlignment="Left" Width="0"
+                        Background="#FFFFFFFF"/>
+            </Grid>
+            <!-- Warmth: single fill that grows from the left edge of the pill
+                 toward the right as kelvin increases. Uses the same warmth
+                 gradient brush the small bar does. -->
+            <Border x:Name="SolidFillWarmthBar"
+                    HorizontalAlignment="Left" Width="0"
+                    Visibility="Collapsed">
+                <Border.Background>
+                    <LinearGradientBrush x:Name="SolidFillWarmthGradient"
+                                         StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop x:Name="SolidFillWarmthStartStop" Offset="0" Color="#FFFF5A00"/>
+                        <GradientStop x:Name="SolidFillWarmthEndStop"   Offset="1" Color="#FFFFF9FB"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+        </Grid>
+
         <!-- Content: icon + bar. No DropShadowEffect — it was casting a faint
              rectangular halo around the bar/icon shapes that read as "weird shadow
              behind the pill". Renderer's vibrancy step keeps icons readable on

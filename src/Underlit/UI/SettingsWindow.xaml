@@ -352,6 +352,22 @@
                                         <ComboBoxItem Content="Liquid Glass"/>
                                     </ComboBox>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Bar style"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Bar = thin slider with a partial fill (current default). Solid fill = the bar column fills with a tall pill-shaped block whose width tracks the level. Applies to both brightness and warmth."/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" x:Name="CboBarStyle"
+                                              Margin="0,0,14,0" MinWidth="120">
+                                        <ComboBoxItem Content="Bar"/>
+                                        <ComboBoxItem Content="Solid fill"/>
+                                    </ComboBox>
+                                </Grid>
                             </StackPanel>
                         </Border>
 

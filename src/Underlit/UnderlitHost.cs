@@ -57,7 +57,8 @@ public sealed class UnderlitHost : IDisposable
             _settings.TransparencyEffects,
             _settings.OsdBackdrop,
             GlassParamsFromSettings(_settings),
-            _settings.GlassLiveCapture);
+            _settings.GlassLiveCapture,
+            _settings.OsdBarStyle);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -252,7 +253,8 @@ public sealed class UnderlitHost : IDisposable
             next.TransparencyEffects,
             next.OsdBackdrop,
             GlassParamsFromSettings(next),
-            next.GlassLiveCapture);
+            next.GlassLiveCapture,
+            next.OsdBarStyle);
     }
 
     private static Underlit.Sys.GlassParams GlassParamsFromSettings(AppSettings s) => new()

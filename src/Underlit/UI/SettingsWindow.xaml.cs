@@ -99,6 +99,7 @@ public partial class SettingsWindow : Window
             ApplyBackdropToWindow();
             ApplyTheme(ThemeInfo.IsDarkMode());
         };
+        CboBarStyle.SelectionChanged += (_, _) => PushSettings();
 
         // Apply DWM backdrop to this window so the settings UI matches the OSD's mode.
         SourceInitialized += (_, _) => ApplyBackdropToWindow();
@@ -342,6 +343,7 @@ public partial class SettingsWindow : Window
         ChkGlassLiveCapture.IsChecked  = _snapshot.GlassLiveCapture;
         CboTransparency.SelectedIndex  = (int)_snapshot.TransparencyEffects;
         CboBackdrop.SelectedIndex      = (int)_snapshot.OsdBackdrop;
+        CboBarStyle.SelectedIndex      = (int)_snapshot.OsdBarStyle;
         RefreshAccentSwatch();
 
         SldBrightnessStep.Value = _snapshot.BrightnessStep;
@@ -436,6 +438,7 @@ public partial class SettingsWindow : Window
         _snapshot.GlassLiveCapture          = ChkGlassLiveCapture.IsChecked == true;
         _snapshot.TransparencyEffects       = (TransparencyMode)Math.Max(0, CboTransparency.SelectedIndex);
         _snapshot.OsdBackdrop               = (BackdropStyle)Math.Max(0, CboBackdrop.SelectedIndex);
+        _snapshot.OsdBarStyle               = (OsdBarStyle)Math.Max(0, CboBarStyle.SelectedIndex);
 
         _snapshot.BrightnessStep  = SldBrightnessStep.Value;
         _snapshot.WarmthStep      = (int)SldWarmthStep.Value;

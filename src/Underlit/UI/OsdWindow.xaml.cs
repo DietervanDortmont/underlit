@@ -118,6 +118,11 @@ public partial class OsdWindow : Window
     /// False = one-shot BitBlt per Show() (frozen for 1.3 s, no yellow border).
     /// </summary>
     private bool _glassLiveCapture = true;
+    /// <summary>Which bar style the OSD draws — Bar (thin slider) vs SolidFill (tall pill fill).</summary>
+    private OsdBarStyle _barStyle = OsdBarStyle.Bar;
+    /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
+    private double _lastBrightness;
+    private int _lastWarmth = 6500;
 
     // ---- Liquid Glass live engine ----
     // Created lazily after the window is first shown (we need an HWND to set
@@ -172,8 +177,10 @@ public partial class OsdWindow : Window
 
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
                                      TransparencyMode transparencyMode, BackdropStyle backdrop,
-                                     GlassParams glass, bool glassLiveCapture)
+                                     GlassParams glass, bool glassLiveCapture,
+                                     OsdBarStyle barStyle)
     {
+        _barStyle = barStyle;
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
 
@@ -294,6 +301,7 @@ public partial class OsdWindow : Window
     {
         SetMode(Mode.Brightness);
         IconText.Text = "\uE706";
+        _lastBrightness = levelSigned;
         UpdateBrightnessBar(levelSigned);
         Flash();
     }
@@ -301,6 +309,7 @@ public partial class OsdWindow : Window
     public void ShowWarmth(int kelvin)
     {
         SetMode(Mode.Warmth);
+        _lastWarmth = kelvin;
         UpdateWarmthBar(kelvin);
         Flash();
     }
@@ -309,7 +318,8 @@ public partial class OsdWindow : Window
     {
         SetMode(Mode.Brightness);
         IconText.Text = paused ? "\uE769" : "\uE768";
-        UpdateBrightnessBar(paused ? 0 : 100);
+        _lastBrightness = paused ? 0 : 100;
+        UpdateBrightnessBar(_lastBrightness);
         Flash();
     }
 
@@ -463,6 +473,63 @@ public partial class OsdWindow : Window
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
         WarmthTrack.Background = new SolidColorBrush(p.Track);
         WarmthStartStop.Color  = p.WarmthStart;
+
+        ApplyBarStyle();
+    }
+
+    /// <summary>
+    /// Switches the brightness/warmth indicator between the thin slider ("Bar")
+    /// and the tall pill-shaped fill ("SolidFill"). The two modes share all the
+    /// same XAML elements — we just resize and restyle in place.
+    ///
+    /// Bar mode (default): 4px height, visible track, mid-marker visible, tight
+    /// 2px corner radius. The fill grows from the centre and feels like a
+    /// classic slider.
+    ///
+    /// SolidFill mode: 28px height (most of the pill's interior), no track, no
+    /// mid-marker, large 14px corner radius so the fills read as a pill-within-
+    /// the-pill. The fill width still tracks the level so brightness 100 = full
+    /// right half filled, brightness -100 = full left half filled.
+    /// </summary>
+    private void ApplyBarStyle()
+    {
+        if (_barStyle == OsdBarStyle.SolidFill)
+        {
+            const double H = 28;     // tall pill fill height — fits inside 46-tall pill
+            const double R = H / 2;  // corner radius = half-height for full pill ends
+            BarRoot.Height = H;
+
+            // Hide track + midmarker; the fill IS the indicator.
+            TrackLeft.Visibility   = Visibility.Collapsed;
+            TrackRight.Visibility  = Visibility.Collapsed;
+            WarmthTrack.Visibility = Visibility.Collapsed;
+            MidMarker.Visibility   = Visibility.Collapsed;
+
+            FillLeft.CornerRadius   = new CornerRadius(R, 0, 0, R);
+            FillRight.CornerRadius  = new CornerRadius(0, R, R, 0);
+            WarmthFill.CornerRadius = new CornerRadius(R);
+        }
+        else  // OsdBarStyle.Bar
+        {
+            BarRoot.Height = 4;
+
+            TrackLeft.Visibility   = Visibility.Visible;
+            TrackRight.Visibility  = Visibility.Visible;
+            WarmthTrack.Visibility = Visibility.Visible;
+            // MidMarker is only meaningful in Brightness mode — let SetMode() decide
+            // its visibility there. Just make sure it's allowed to show.
+            if (_mode == Mode.Brightness)
+                MidMarker.Visibility = Visibility.Visible;
+
+            FillLeft.CornerRadius   = new CornerRadius(2, 0, 0, 2);
+            FillRight.CornerRadius  = new CornerRadius(0, 2, 2, 0);
+            WarmthFill.CornerRadius = new CornerRadius(2);
+        }
+
+        // Re-trigger the width update so the fill width recalculates against the
+        // new bar geometry without waiting for the next hotkey press.
+        if (_mode == Mode.Brightness) UpdateBrightnessBar(_lastBrightness);
+        else                          UpdateWarmthBar(_lastWarmth);
     }
 
     /// <summary>

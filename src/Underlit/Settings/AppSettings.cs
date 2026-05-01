@@ -99,6 +99,17 @@ public sealed class AppSettings
     /// <summary>The visual style of the OSD background.</summary>
     public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Subtle;
 
+    /// <summary>
+    /// How the brightness / warmth indicator inside the OSD pill is drawn.
+    ///   Bar       — current default. Thin 4px slider with a track + small partial
+    ///                fill that grows from the centre outward.
+    ///   SolidFill — fills the OSD's bar column with a tall pill-shaped block whose
+    ///                width grows with the level. No track, no mid-marker — the
+    ///                fill IS the value indicator. Applies to both brightness and
+    ///                warmth bars.
+    /// </summary>
+    public OsdBarStyle OsdBarStyle { get; set; } = OsdBarStyle.Bar;
+
     // ---- Liquid Glass tunable parameters (v0.3.2) ----
     // Slider conventions match the Figma "Glass" plugin so the user can hit values
     // they've already tuned visually elsewhere.
@@ -229,4 +240,13 @@ public enum BackdropStyle
     Solid       = 0,
     Subtle      = 1,
     LiquidGlass = 2,
+}
+
+/// <summary>
+/// How the brightness/warmth bar inside the OSD pill is drawn. See AppSettings.OsdBarStyle.
+/// </summary>
+public enum OsdBarStyle
+{
+    Bar       = 0,
+    SolidFill = 1,
 }

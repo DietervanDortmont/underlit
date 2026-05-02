@@ -732,10 +732,13 @@ public partial class OsdWindow : Window
             var ease = new QuadraticEase { EasingMode = EasingMode.EaseInOut };
             var anim       = new ColorAnimation { To = target,      Duration = TimeSpan.FromMilliseconds(ColourFadeMs), EasingFunction = ease };
             var animAlpha  = new ColorAnimation { To = targetAlpha, Duration = TimeSpan.FromMilliseconds(ColourFadeMs), EasingFunction = ease };
-            _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, anim);
-            _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, anim);
-            _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
-            _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
+            // The four brushes are guaranteed non-null in this branch
+            // (see lazy-init above); silence CS8602 explicitly so the
+            // CI's nullable-warnings-as-errors gate doesn't trip.
+            _brushFillLeft!.BeginAnimation(SolidColorBrush.ColorProperty, anim);
+            _brushFillRight!.BeginAnimation(SolidColorBrush.ColorProperty, anim);
+            _brushSolidNeg!.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
+            _brushSolidPos!.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
             _wasBelowOsMin             = below;
             _lastBrightnessTargetColor = target;
         }
@@ -750,10 +753,10 @@ public partial class OsdWindow : Window
             // .Color which is the in-animation value. The old code did the
             // latter, which mistakenly cancelled the fade on every drag-tick
             // because the live colour disagrees with target mid-fade.
-            _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, null);
-            _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, null);
-            _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, null);
-            _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushFillLeft!.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushFillRight!.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushSolidNeg!.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushSolidPos!.BeginAnimation(SolidColorBrush.ColorProperty, null);
             _brushFillLeft.Color  = target;
             _brushFillRight.Color = target;
             _brushSolidNeg.Color  = targetAlpha;

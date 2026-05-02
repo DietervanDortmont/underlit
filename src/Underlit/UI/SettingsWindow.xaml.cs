@@ -78,7 +78,9 @@ public partial class SettingsWindow : Window
         BtnRefreshRunningApps.Click += (_, _) => RefreshRunningApps();
 
         // Sidebar → page switching
-        _pages = new FrameworkElement[] { PageGeneral, PageHotkeys, PageSchedule, PageLights, PageMonitors, PageExclusions };
+        // Order MUST match the sidebar ListBoxItems in SettingsWindow.xaml.
+        // v0.6.48: Schedule, Hotkeys, Lights, Monitors, Exclusions, General.
+        _pages = new FrameworkElement[] { PageSchedule, PageHotkeys, PageLights, PageMonitors, PageExclusions, PageGeneral };
         NavList.SelectionChanged += (_, _) => ShowSelectedPage();
 
         // Theming — initial, plus live follow on Windows theme change
@@ -86,6 +88,11 @@ public partial class SettingsWindow : Window
         _themeHandler = isDark => Dispatcher.BeginInvoke(() => ApplyTheme(isDark));
         ThemeInfo.ThemeChanged += _themeHandler;
         Closed += (_, _) => ThemeInfo.ThemeChanged -= _themeHandler;
+
+        // v0.6.48: persist Settings window geometry across sessions.
+        // Restore from settings on construction; save on Closed.
+        RestoreWindowGeometry();
+        Closed += (_, _) => SaveWindowGeometry();
 
         // Populate the sidebar logo. Render our programmatic icon to a WPF ImageSource.
         AppLogo.Source = RenderLogoToImageSource(56);
@@ -266,6 +273,17 @@ public partial class SettingsWindow : Window
 
         // Lights / Hue page wiring.
         WireHuePage();
+
+        // v0.6.48: About footer wiring. Version label, GitHub icon
+        // (opens releases page), log folder icon, "Check for updates"
+        // button (polls GitHub Releases API).
+        var version = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetName().Version?.ToString(3) ?? "?";
+        LblAppVersion.Text = $"Underlit {version}";
+        BtnAboutGithub.Click       += (_, _) => OpenUrl(GitHubReleasesUrl);
+        BtnAboutLog.Click          += (_, _) => OpenLogFolder();
+        BtnAboutCheckUpdate.Click  += async (_, _) => await CheckForUpdatesAsync();
+        BtnRestoreDefaults.Click   += (_, _) => RestoreAllDefaults();
 
         // v0.6.40: every inline RowHint TextBlock turns into a hover
         // tooltip on the closest interactive control in its row, so the
@@ -819,9 +837,13 @@ public partial class SettingsWindow : Window
         };
         ScheduleGraph.Children.Add(nowLine);
 
+        // v0.6.48: include the current schedule kelvin in the now-line
+        // label so the user can read off "what colour temperature am I
+        // targeting right now" at a glance.
+        int nowKelvin = Underlit.Core.Scheduler.ComputeWarmth(now, s);
         var nowLabel = new TextBlock
         {
-            Text = "now",
+            Text = $"now · {nowKelvin} K",
             FontSize = 10,
             FontWeight = FontWeights.SemiBold,
             Foreground = nowAccent,
@@ -1638,6 +1660,170 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>
+    /// v0.6.48: restore Settings window geometry from settings.json. The
+    /// snapshot fields default to -1 ("no saved value"), in which case
+    /// we let WPF use WindowStartupLocation=CenterScreen with the XAML-
+    /// declared 760x600. Width/height are clamped to a minimum so a
+    /// borked save can't render the window unusable.
+    /// </summary>
+    private void RestoreWindowGeometry()
+    {
+        if (_snapshot.SettingsWindowWidth  > 200 &&
+            _snapshot.SettingsWindowHeight > 200)
+        {
+            Width  = Math.Max(MinWidth,  _snapshot.SettingsWindowWidth);
+            Height = Math.Max(MinHeight, _snapshot.SettingsWindowHeight);
+        }
+        if (_snapshot.SettingsWindowLeft >= 0 && _snapshot.SettingsWindowTop >= 0)
+        {
+            // Clamp to virtual screen bounds so a window saved on a
+            // disconnected monitor doesn't reopen off-screen.
+            var virtualLeft   = SystemParameters.VirtualScreenLeft;
+            var virtualTop    = SystemParameters.VirtualScreenTop;
+            var virtualRight  = virtualLeft + SystemParameters.VirtualScreenWidth;
+            var virtualBottom = virtualTop  + SystemParameters.VirtualScreenHeight;
+            Left = Math.Min(Math.Max(_snapshot.SettingsWindowLeft, virtualLeft), virtualRight - 200);
+            Top  = Math.Min(Math.Max(_snapshot.SettingsWindowTop,  virtualTop),  virtualBottom - 200);
+            WindowStartupLocation = WindowStartupLocation.Manual;
+        }
+    }
+
+    private void SaveWindowGeometry()
+    {
+        if (WindowState == WindowState.Maximized || WindowState == WindowState.Minimized)
+            return;  // skip pathological states; restore the last "normal" geometry on next open
+        _snapshot.SettingsWindowLeft   = (int)Math.Round(Left);
+        _snapshot.SettingsWindowTop    = (int)Math.Round(Top);
+        _snapshot.SettingsWindowWidth  = (int)Math.Round(Width);
+        _snapshot.SettingsWindowHeight = (int)Math.Round(Height);
+        // The host saves settings.json on its own when Applied fires;
+        // we trigger that here so the geometry persists immediately.
+        try { Applied?.Invoke(_snapshot); } catch { /* host handles */ }
+    }
+
+    /// <summary>
+    /// v0.6.48: nuke every setting and reload from defaults. Replaces
+    /// _snapshot with a fresh AppSettings, re-loads the UI, and pushes
+    /// so the host applies the reset everywhere downstream. Confirmation
+    /// dialog because there's no undo.
+    /// </summary>
+    private void RestoreAllDefaults()
+    {
+        var result = MessageBox.Show(
+            this,
+            "This wipes every setting (hotkeys, schedule profiles, Hue pairing, monitor offsets, exclusions) and resets to the factory defaults. There is no undo.\n\nContinue?",
+            "Restore all defaults",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+        if (result != MessageBoxResult.OK) return;
+
+        _snapshot = new AppSettings();
+        _snapshot.EnsureProfilesInitialized();
+        LoadFromSettings();
+        UpdateAllValueChips();
+        PushSettings();
+    }
+
+    // ============================================================
+    // About footer (v0.6.48)
+    // ============================================================
+
+    /// <summary>Public-facing GitHub URL the About icon opens. Uses the
+    /// releases page directly so the user lands on downloadable
+    /// binaries, not the source root.</summary>
+    private const string GitHubReleasesUrl = "https://github.com/dieterdort/underlit/releases/latest";
+
+    /// <summary>GitHub Releases API endpoint for the latest release.
+    /// Returns JSON with a <c>tag_name</c> field which is what we
+    /// compare against the running assembly version.</summary>
+    private const string GitHubReleasesApiUrl = "https://api.github.com/repos/dieterdort/underlit/releases/latest";
+
+    /// <summary>Where Logger writes daily logs. Surfaced in the About
+    /// footer so users posting bug reports can find them.</summary>
+    private static string LogFolder =>
+        System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Underlit", "logs");
+
+    private static void OpenUrl(string url)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex) { Logger.Warn($"Failed to open {url}", ex); }
+    }
+
+    private void OpenLogFolder()
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(LogFolder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = LogFolder,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex) { Logger.Warn($"Failed to open log folder", ex); }
+    }
+
+    /// <summary>
+    /// Hit the GitHub Releases API, compare the latest tag to the
+    /// running assembly version, and show a status line in the About
+    /// footer. Network errors are reported to the user inline.
+    /// </summary>
+    private async System.Threading.Tasks.Task CheckForUpdatesAsync()
+    {
+        BtnAboutCheckUpdate.IsEnabled = false;
+        LblAboutUpdateStatus.Visibility = Visibility.Visible;
+        LblAboutUpdateStatus.Text = "Checking…";
+        try
+        {
+            using var http = new System.Net.Http.HttpClient
+            {
+                Timeout = TimeSpan.FromSeconds(8),
+            };
+            // GitHub requires a User-Agent on every API request.
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("Underlit-UpdateCheck");
+            string body = await http.GetStringAsync(GitHubReleasesApiUrl);
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            string? tag = doc.RootElement.TryGetProperty("tag_name", out var t) ? t.GetString() : null;
+            if (string.IsNullOrEmpty(tag))
+            {
+                LblAboutUpdateStatus.Text = "Couldn't read the latest version. Try again later.";
+                return;
+            }
+
+            string current = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetName().Version?.ToString(3) ?? "0.0.0";
+            string latest = tag.TrimStart('v', 'V');
+            if (string.Equals(latest, current, StringComparison.OrdinalIgnoreCase))
+            {
+                LblAboutUpdateStatus.Text = $"You're up to date (v{current}).";
+            }
+            else
+            {
+                LblAboutUpdateStatus.Text = $"v{latest} available (you have v{current}). Click the GitHub icon to download.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn("Update check failed", ex);
+            LblAboutUpdateStatus.Text = "Couldn't reach GitHub. Check your network.";
+        }
+        finally
+        {
+            BtnAboutCheckUpdate.IsEnabled = true;
+        }
+    }
+
+    /// <summary>
     /// v0.6.45: dampen mouse-wheel scrolling on the settings panes so a
     /// trackpad's high-frequency low-delta wheel events don't fling the
     /// page or the running-apps list. Default WPF treats every wheel
@@ -1749,6 +1935,19 @@ public partial class SettingsWindow : Window
     {
         var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
         if (active == null || active.IsBuiltIn) return;   // can't delete the recommended preset
+
+        // v0.6.48: confirmation prompt — profile deletion is destructive
+        // and the user has no undo. WarmthProfiles[0] is always the
+        // built-in Recommended preset (EnsureProfilesInitialized seeds
+        // it at index 0), so falling back there is safe.
+        var ok = MessageBox.Show(
+            this,
+            $"Delete profile \"{active.Name}\"? Underlit will switch back to the Recommended preset. There is no undo.",
+            "Delete profile",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+        if (ok != MessageBoxResult.OK) return;
 
         _snapshot.WarmthProfiles.Remove(active);
         _snapshot.ActiveProfileName = _snapshot.WarmthProfiles[0].Name;

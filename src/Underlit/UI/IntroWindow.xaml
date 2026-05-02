@@ -1,0 +1,120 @@
+<Window x:Class="Underlit.UI.IntroWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Welcome to Underlit"
+        Width="460" SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="#FF1C1C1E"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        FontSize="13"
+        Foreground="White"
+        UseLayoutRounding="True">
+    <!--
+        First-run welcome dialog (v0.6.48). Shown once per user when
+        AppSettings.HasSeenIntro is false. Uses a self-contained dark
+        palette so it renders correctly without depending on the
+        SettingsWindow's runtime-generated theme brushes.
+    -->
+    <Window.Resources>
+        <SolidColorBrush x:Key="Intro.CardBg"     Color="#FF242427"/>
+        <SolidColorBrush x:Key="Intro.CardBorder" Color="#1FFFFFFF"/>
+        <SolidColorBrush x:Key="Intro.TextDim"    Color="#99FFFFFF"/>
+        <SolidColorBrush x:Key="Intro.ButtonBg"   Color="#FFE5E5EA"/>
+        <SolidColorBrush x:Key="Intro.ButtonFg"   Color="#FF1A1A1C"/>
+
+        <Style x:Key="IntroButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource Intro.ButtonBg}"/>
+            <Setter Property="Foreground" Value="{StaticResource Intro.ButtonFg}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="22,5"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border CornerRadius="10"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border Padding="32,28">
+        <StackPanel>
+            <TextBlock FontSize="22" FontWeight="SemiBold"
+                       Foreground="White"
+                       Text="Welcome to Underlit"/>
+            <TextBlock Margin="0,6,0,18"
+                       FontSize="13"
+                       TextWrapping="Wrap"
+                       Foreground="{StaticResource Intro.TextDim}"
+                       Text="Underlit dims your screen below the OS minimum and shifts its warmth on a circadian schedule. Here's what you need to know to get going."/>
+
+            <TextBlock FontSize="11" FontWeight="SemiBold"
+                       Foreground="{StaticResource Intro.TextDim}"
+                       Margin="0,0,0,6"
+                       Text="HOTKEYS"/>
+            <Border Background="{StaticResource Intro.CardBg}"
+                    BorderBrush="{StaticResource Intro.CardBorder}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="16,12"
+                    Margin="0,0,0,16">
+                <StackPanel>
+                    <Grid Margin="0,3">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Foreground="White" FontFamily="Cascadia Mono, Consolas" Text="Ctrl + Alt + Up / Down"/>
+                        <TextBlock Grid.Column="1" Foreground="{StaticResource Intro.TextDim}" Text="brightness up / down"/>
+                    </Grid>
+                    <Grid Margin="0,3">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Foreground="White" FontFamily="Cascadia Mono, Consolas" Text="Ctrl + Alt + Left / Right"/>
+                        <TextBlock Grid.Column="1" Foreground="{StaticResource Intro.TextDim}" Text="warmth warmer / cooler"/>
+                    </Grid>
+                    <Grid Margin="0,3">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="160"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Foreground="White" FontFamily="Cascadia Mono, Consolas" Text="Ctrl + Alt + B"/>
+                        <TextBlock Grid.Column="1" Foreground="{StaticResource Intro.TextDim}" Text="boost (toggle to neutral white)"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <TextBlock FontSize="11" FontWeight="SemiBold"
+                       Foreground="{StaticResource Intro.TextDim}"
+                       Margin="0,0,0,6"
+                       Text="SETTINGS"/>
+            <Border Background="{StaticResource Intro.CardBg}"
+                    BorderBrush="{StaticResource Intro.CardBorder}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="16,12"
+                    Margin="0,0,0,16">
+                <TextBlock TextWrapping="Wrap"
+                           Foreground="{StaticResource Intro.TextDim}"
+                           Text="Underlit lives in your tray (next to the clock). Right-click the icon for the menu, or double-click to open the settings window. Change hotkeys, set up your circadian schedule, or pair with Philips Hue lights from there."/>
+            </Border>
+
+            <Button x:Name="BtnDismiss"
+                    HorizontalAlignment="Right"
+                    Margin="0,4,0,0"
+                    Style="{StaticResource IntroButton}"
+                    Content="Got it"/>
+        </StackPanel>
+    </Border>
+</Window>

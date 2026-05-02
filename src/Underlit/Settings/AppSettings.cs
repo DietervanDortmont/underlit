@@ -121,6 +121,21 @@ public sealed class AppSettings
     /// </summary>
     public OsdBarStyle OsdBarStyle { get; set; } = OsdBarStyle.Bar;
 
+    /// <summary>v0.6.48: true once the first-run intro modal has been
+    /// dismissed. Stays in settings.json so the popup never appears
+    /// twice for the same user across upgrades.</summary>
+    public bool HasSeenIntro { get; set; } = false;
+
+    /// <summary>v0.6.48: persisted Settings window geometry. -1 means
+    /// "no saved value — use the WPF default (centre on screen, 760x600)".
+    /// Only saved on close, not during resize, so a transient state
+    /// doesn't get committed if the user accidentally maximises and
+    /// crashes. Stored as int so JSON serialisation is trivial.</summary>
+    public int SettingsWindowLeft   { get; set; } = -1;
+    public int SettingsWindowTop    { get; set; } = -1;
+    public int SettingsWindowWidth  { get; set; } = -1;
+    public int SettingsWindowHeight { get; set; } = -1;
+
     /// <summary>
     /// Vertical distance, in DIP, between the bottom of the OSD pill and the
     /// top edge of the taskbar. Default 30 dip — slightly higher than the
@@ -234,9 +249,24 @@ public sealed class AppSettings
     /// Stored as ARGB hex strings; defaults match the previous hard-coded
     /// behaviour (D65 white at 6500 K, deep red at 1500 K). Users can pick
     /// their own endpoints from the Lights settings page when WhiteToRed
-    /// is selected.</summary>
-    public string HueGradientCoolColor { get; set; } = "#FFFFFFFF";
-    public string HueGradientWarmColor { get; set; } = "#FFB00010";
+    /// is selected.
+    ///
+    /// v0.6.48: defensive null check on the setter — older settings.json
+    /// files predating these fields deserialise as null, which would
+    /// crash the colour picker or get the bridge a literal "null" string.
+    /// Coerce to the default so the gradient still works.</summary>
+    public string HueGradientCoolColor
+    {
+        get => _hueGradientCool ?? "#FFFFFFFF";
+        set => _hueGradientCool = string.IsNullOrWhiteSpace(value) ? "#FFFFFFFF" : value;
+    }
+    public string HueGradientWarmColor
+    {
+        get => _hueGradientWarm ?? "#FFB00010";
+        set => _hueGradientWarm = string.IsNullOrWhiteSpace(value) ? "#FFB00010" : value;
+    }
+    private string? _hueGradientCool = "#FFFFFFFF";
+    private string? _hueGradientWarm = "#FFB00010";
 
     /// <summary>Hue brightness in the bridge's native 1..254 range. Independent
     /// from the screen brightness — the user adjusts it via the Lights slider

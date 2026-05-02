@@ -170,7 +170,52 @@ public sealed class UnderlitHost : IDisposable
         // Listen for display changes (add/remove monitor, resolution change)
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
 
+        // v0.6.48: re-apply gamma when the user wakes from sleep. Otherwise
+        // Windows resets the gamma ramp to neutral on resume, leaving the
+        // screen at default warmth even though Underlit thinks it's
+        // mid-schedule.
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
+        // v0.6.48: first-run welcome dialog. We blocking-show it right
+        // after the rest of startup so the user sees the hotkey hints
+        // before they minimise the settings window and forget Underlit
+        // exists. HasSeenIntro is persisted on dismiss so this never
+        // appears twice for the same user.
+        if (!_settings.HasSeenIntro)
+        {
+            try
+            {
+                var intro = new UI.IntroWindow();
+                intro.ShowDialog();
+            }
+            catch (Exception ex) { Logger.Warn("Intro dialog failed to show", ex); }
+            _settings.HasSeenIntro = true;
+            _settings.Save();
+        }
+
         Logger.Info("Underlit started");
+    }
+
+    /// <summary>
+    /// v0.6.48: Windows resets the gamma ramp on resume from sleep, so we
+    /// re-apply our current target on wake. Without this the screen
+    /// reverts to neutral warmth even though Underlit thinks the schedule
+    /// is mid-ramp.
+    /// </summary>
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode != PowerModes.Resume) return;
+        _ui.BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                _engine?.ReapplyAfterResume();
+                // Re-tick the scheduler so the warmth catches up to the
+                // current time-of-day if the laptop slept across a ramp.
+                _scheduler?.Pulse();
+            }
+            catch (Exception ex) { Logger.Warn("Resume re-apply failed", ex); }
+        }));
     }
 
     private void OnDisplayChanged(object? sender, EventArgs e)
@@ -180,6 +225,13 @@ public sealed class UnderlitHost : IDisposable
             try
             {
                 _engine?.RefreshDisplays(DisplayManager.Enumerate());
+                // v0.6.48: tear down the OSD's live-glass capture too.
+                // Its WGC item is bound to a specific HMONITOR; if that
+                // monitor disconnected, the capture goes stale and the
+                // glass shows a frozen frame from the dead display.
+                // The next OSD show will lazy-recreate it against the
+                // new primary monitor.
+                _osd?.NotifyDisplaysChanged();
             }
             catch (Exception ex)
             {
@@ -203,23 +255,26 @@ public sealed class UnderlitHost : IDisposable
         {
             case "brDown":
                 _engine.StepBrightness(-_settings.BrightnessStep);
-                _osd?.ShowBrightness(_engine.CurrentBrightness);
+                // v0.6.48: show TARGET, not the mid-ramp rendered value,
+                // so the OSD bar moves the moment the hotkey fires
+                // instead of waiting for the gamma ramp to catch up.
+                _osd?.ShowBrightness(_engine.TargetBrightness);
                 break;
             case "brUp":
                 _engine.StepBrightness(+_settings.BrightnessStep);
-                _osd?.ShowBrightness(_engine.CurrentBrightness);
+                _osd?.ShowBrightness(_engine.TargetBrightness);
                 break;
             case "wrDown":
                 _engine.StepWarmth(-_settings.WarmthStep);
-                _osd?.ShowWarmth(_engine.CurrentWarmth);
+                _osd?.ShowWarmth(_engine.TargetWarmth);
                 break;
             case "wrUp":
                 _engine.StepWarmth(+_settings.WarmthStep);
-                _osd?.ShowWarmth(_engine.CurrentWarmth);
+                _osd?.ShowWarmth(_engine.TargetWarmth);
                 break;
             case "boost":
                 _engine.Boost();
-                _osd?.ShowBrightness(_engine.CurrentBrightness);
+                _osd?.ShowBrightness(_engine.TargetBrightness);
                 break;
             case "toggle":
                 _engine.TogglePaused();
@@ -420,6 +475,7 @@ public sealed class UnderlitHost : IDisposable
     {
         Logger.Info("Underlit shutting down");
         try { SystemEvents.DisplaySettingsChanged -= OnDisplayChanged; } catch { }
+        try { SystemEvents.PowerModeChanged       -= OnPowerModeChanged; } catch { }
         _syncPoller?.Dispose();
         _fgWatcher?.Dispose();
         _llHook?.Dispose();

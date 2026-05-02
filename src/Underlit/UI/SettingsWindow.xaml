@@ -633,8 +633,10 @@
             <Setter Property="Background" Value="{DynamicResource App.ButtonBg}"/>
             <Setter Property="Foreground" Value="{DynamicResource App.ButtonFg}"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="14,5"/>
-            <Setter Property="FontSize" Value="13"/>
+            <!-- v0.6.48: tighter vertical padding (5 → 3) and smaller font
+                 (13 → 12) so action buttons feel like buttons, not banners. -->
+            <Setter Property="Padding" Value="14,3"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="Medium"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -734,17 +736,73 @@
                                VerticalAlignment="Center"
                                Foreground="{DynamicResource App.TextPrimary}"/>
                 </StackPanel>
+                <!-- v0.6.48: pinned About footer. Always visible at the
+                     bottom of the sidebar so the user can see the version
+                     and reach GitHub / logs without hunting through pages. -->
+                <Border DockPanel.Dock="Bottom"
+                        Padding="16,12"
+                        Margin="0,4,0,0">
+                    <StackPanel>
+                        <TextBlock x:Name="LblAppVersion"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource App.TextSecondary}"
+                                   Margin="0,0,0,4"
+                                   Text="Underlit"/>
+                        <Grid Margin="0,2,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="BtnAboutGithub"
+                                    Style="{StaticResource IconButton}"
+                                    Padding="2"
+                                    ToolTip="Open the project on GitHub">
+                                <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource App.TextSecondary}"
+                                           Text="&#xE71B;"/>
+                            </Button>
+                            <Button Grid.Column="2"
+                                    x:Name="BtnAboutLog"
+                                    Style="{StaticResource IconButton}"
+                                    Padding="2"
+                                    ToolTip="Open the log folder for bug reports">
+                                <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource App.TextSecondary}"
+                                           Text="&#xE8A5;"/>
+                            </Button>
+                        </Grid>
+                        <Button x:Name="BtnAboutCheckUpdate"
+                                Margin="0,8,0,0"
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource PillButton}"
+                                Content="Check for updates"/>
+                        <TextBlock x:Name="LblAboutUpdateStatus"
+                                   Margin="0,6,0,0"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource App.TextSecondary}"
+                                   Visibility="Collapsed"/>
+                    </StackPanel>
+                </Border>
                 <ListBox x:Name="NavList"
                          BorderThickness="0"
                          Background="Transparent"
                          SelectedIndex="0"
                          ItemContainerStyle="{StaticResource SidebarItem}">
-                    <ListBoxItem Content="General"/>
-                    <ListBoxItem Content="Hotkeys"/>
+                    <!-- v0.6.48: reordered for friendlier UX. Schedule first
+                         (the headline feature), Hotkeys next (the user has
+                         to know how to drive the app), then Lights, Monitors,
+                         Exclusions. General lives at the bottom because it's
+                         the catch-all "everything else" page. -->
                     <ListBoxItem Content="Schedule"/>
+                    <ListBoxItem Content="Hotkeys"/>
                     <ListBoxItem Content="Lights"/>
                     <ListBoxItem Content="Monitors"/>
                     <ListBoxItem Content="Exclusions"/>
+                    <ListBoxItem Content="General"/>
                 </ListBox>
             </DockPanel>
         </Border>
@@ -1137,6 +1195,28 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+
+                        <!-- v0.6.48: emergency reset. Wipes settings.json and
+                             reloads from defaults so a borked configuration
+                             can be recovered without editing files manually. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="RESET"/>
+                        <Border Style="{StaticResource Card}">
+                            <Grid Style="{StaticResource Row}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Restore all defaults"/>
+                                    <TextBlock Style="{StaticResource RowHint}"
+                                               Text="Wipes every setting and reloads the factory configuration. Hotkeys, schedule profiles, Hue pairing, monitor offsets, and exclusions are all reset. There is no undo."/>
+                                </StackPanel>
+                                <Button Grid.Column="1" x:Name="BtnRestoreDefaults"
+                                        Margin="0,0,16,0"
+                                        Style="{StaticResource PillButton}"
+                                        Content="Restore"/>
+                            </Grid>
+                        </Border>
                     </StackPanel>
 
                     <!-- HOTKEYS -->
@@ -1419,8 +1499,18 @@
                     <StackPanel x:Name="PageLights" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Lights"/>
 
-                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,12"
-                                   Text="Connect a Philips Hue Bridge so your room lighting can follow Underlit's circadian schedule. Bulbs you select here will warm down with the screen on the bedtime ramp and return to neutral on the morning ramp."/>
+                        <!-- v0.6.48: lead with a clear opt-out so users
+                             without Hue gear know they can ignore this page. -->
+                        <TextBlock Margin="0,0,0,4"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource App.TextPrimary}"
+                                   Text="Connect a Philips Hue Bridge so your room lighting follows Underlit's circadian schedule."/>
+                        <TextBlock Margin="0,0,0,16"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Foreground="{DynamicResource App.TextSecondary}"
+                                   Text="Don't have Philips Hue? You can skip this entire page. Underlit isn't affiliated with Signify or Philips."/>
 
                         <!-- DISCONNECTED: discovery + manual IP entry -->
                         <StackPanel x:Name="HuePanelDisconnected" Visibility="Collapsed">

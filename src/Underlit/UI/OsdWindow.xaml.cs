@@ -640,6 +640,25 @@ public partial class OsdWindow : Window
         Flash();
     }
 
+    /// <summary>
+    /// v0.6.48: invalidate the OSD's live-glass capture. Called by the
+    /// host when Windows fires DisplaySettingsChanged (monitor connect /
+    /// disconnect / resolution change). The WGC capture item is pinned
+    /// to a specific HMONITOR, so a disconnected monitor leaves us
+    /// rendering frozen pixels. Tearing down here forces the next
+    /// Flash() to lazy-recreate against the current primary monitor.
+    /// </summary>
+    public void NotifyDisplaysChanged()
+    {
+        try
+        {
+            _liveGlass?.DisableLive();
+            _liveGlass?.Dispose();
+            _liveGlass = null;
+        }
+        catch (Exception ex) { Logger.Warn("Live-glass teardown on display change failed", ex); }
+    }
+
     private void SetMode(Mode m)
     {
         _mode = m;

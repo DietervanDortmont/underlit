@@ -51,6 +51,19 @@ public sealed class UnderlitEngine : IDisposable
     public bool Paused { get; private set; }
     public bool Boosted => _savedHardware is not null;
 
+    /// <summary>
+    /// v0.6.48: the user's INTENDED warmth — i.e. what the next ramp is
+    /// settling toward. Different from <see cref="CurrentWarmth"/>, which
+    /// tracks the live mid-ramp gamma value. The OSD warmth bar should
+    /// read TargetWarmth so a hotkey press snaps the bar to the new
+    /// value immediately while the screen smoothly catches up.
+    /// </summary>
+    public int TargetWarmth => _targetWarmth;
+
+    /// <summary>Same idea as <see cref="TargetWarmth"/> but for brightness.
+    /// Negative values represent extended-dim below the OS minimum.</summary>
+    public double TargetBrightness => _targetSignedLevel;
+
     // ---- Dependencies ----
     private readonly GammaRampApplier _gamma;
     private readonly OverlayManager _overlays;
@@ -131,6 +144,21 @@ public sealed class UnderlitEngine : IDisposable
         // _currentWarmthRendered = _targetWarmth, which interfered with
         // schedule-graph drag previews when a settings push happened
         // mid-drag.
+        ApplySoftwareNow();
+    }
+
+    /// <summary>
+    /// v0.6.48: re-assert the current target on the screen. Called after
+    /// the system wakes from sleep, where Windows blanks the gamma ramp
+    /// back to neutral. We snap to the current target (no ramp) so the
+    /// screen returns to what Underlit thinks should be on screen
+    /// without a 5 second visible fade on every wake.
+    /// </summary>
+    public void ReapplyAfterResume()
+    {
+        _currentSignedLevel = _targetSignedLevel;
+        _currentWarmthRendered = _targetWarmth;
+        WriteHardwareAsync(_hardwareLevel);
         ApplySoftwareNow();
     }
 

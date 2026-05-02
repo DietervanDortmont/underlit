@@ -268,6 +268,37 @@ public sealed class AppSettings
     private string? _hueGradientCool = "#FFFFFFFF";
     private string? _hueGradientWarm = "#FFB00010";
 
+    /// <summary>
+    /// v0.6.49: full multi-stop gradient. Photoshop-style — users can add as
+    /// many colour stops as they like along the kelvin axis. The Hue
+    /// controller maps the current kelvin to the two adjacent stops and
+    /// lerps in CIE xy space.
+    ///
+    /// Stops are stored in the order the user added them; the controller
+    /// sorts by kelvin at render time. The list always has at least two
+    /// stops (a cool and a warm endpoint). On load, an empty/null list is
+    /// migrated from the legacy <see cref="HueGradientCoolColor"/> +
+    /// <see cref="HueGradientWarmColor"/> fields so old settings.json files
+    /// still work without losing the user's customised endpoints.
+    /// </summary>
+    public List<HueGradientStop> HueGradientStops
+    {
+        get
+        {
+            if (_hueGradientStops is null || _hueGradientStops.Count < 2)
+            {
+                _hueGradientStops = new List<HueGradientStop>
+                {
+                    new HueGradientStop { Kelvin = 1500, Color = HueGradientWarmColor },
+                    new HueGradientStop { Kelvin = 6500, Color = HueGradientCoolColor },
+                };
+            }
+            return _hueGradientStops;
+        }
+        set => _hueGradientStops = value;
+    }
+    private List<HueGradientStop>? _hueGradientStops;
+
     /// <summary>Hue brightness in the bridge's native 1..254 range. Independent
     /// from the screen brightness — the user adjusts it via the Lights slider
     /// or the dedicated Hue brightness hotkeys.</summary>
@@ -637,4 +668,16 @@ public enum HueColorRangeMode
     Circadian     = 0,
     WhiteToRed    = 1,
     WarmWhiteOnly = 2,
+}
+
+/// <summary>
+/// One Photoshop-style stop in the multi-stop Hue gradient (v0.6.49).
+/// <see cref="Kelvin"/> is the position along the schedule's kelvin axis
+/// (1500..6500); <see cref="Color"/> is an sRGB hex string ("#FFRRGGBB")
+/// that the Hue controller converts to CIE xy at render time.
+/// </summary>
+public sealed class HueGradientStop
+{
+    public int Kelvin { get; set; } = 6500;
+    public string Color { get; set; } = "#FFFFFFFF";
 }

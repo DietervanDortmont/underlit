@@ -38,7 +38,7 @@ public sealed class HueController : IDisposable
     private readonly object _lock = new();
     private bool _writeInFlight;
     private (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
-             string GradientCool, string GradientWarm)? _pending;
+             List<HueGradientStop> Stops)? _pending;
 
     public HueController(UnderlitEngine engine, AppSettings settings)
     {
@@ -66,25 +66,42 @@ public sealed class HueController : IDisposable
     {
         if (_client == null) return;
         if (_settings.HueSelectedGroupIds.Count == 0) return;
+        // Boost ignore: while screen is boosted to neutral white, the
+        // bulbs stay at whatever value was last sent. Skipping the
+        // write (rather than e.g. overriding to last-known) means a
+        // boost during a schedule transition doesn't accidentally
+        // freeze the bulb at a stale mid-transition value either,
+        // because the next non-boost LevelChanged push will catch up.
         if (_engine.Boosted && _settings.HueIgnoreBoost) return;
 
-        int screenKelvin = _engine.CurrentWarmth;
+        // v0.6.49: read TargetWarmth, not CurrentWarmth. CurrentWarmth
+        // is the live mid-ramp gamma value — during a 5 s schedule
+        // ramp it bleeds intermediate kelvins to the bridge over many
+        // commands, which the rate-limited worker can't drain fast
+        // enough. TargetWarmth jumps cleanly to the final value once,
+        // and the bulb's own transitiontime fades on its end.
+        int screenKelvin = _engine.TargetWarmth;
         int hueKelvin = Math.Clamp(screenKelvin + _settings.HueWarmthOffsetKelvin, 1500, 6500);
         int hueBri    = Math.Clamp(_settings.HueBrightness, 1, 254);
+
+        // v0.6.49: pass a snapshot copy of the stops so the worker
+        // thread can't be tripped up by the user adding/removing a
+        // stop in the Settings UI mid-write.
+        var stopsSnapshot = _settings.HueGradientStops
+            .Select(s => new HueGradientStop { Kelvin = s.Kelvin, Color = s.Color })
+            .ToList();
 
         EnqueueWrite(hueKelvin, hueBri,
                      _settings.HueSelectedGroupIds.ToList(),
                      _settings.HueColorRange,
-                     _settings.HueGradientCoolColor ?? "#FFFFFFFF",
-                     _settings.HueGradientWarmColor ?? "#FFB00010");
+                     stopsSnapshot);
     }
 
     private void OnEngineLevelChanged(double brightness, int warmth)
     {
         // The brightness arg is the screen brightness — Hue brightness is
         // independent (driven by the user's HueBrightness slider/hotkey), so
-        // we ignore it. Only warmth changes make us push. We re-read CurrentWarmth
-        // through PushNow for consistency with hotkey-triggered pushes.
+        // we ignore it. Only warmth changes make us push.
         PushNow();
     }
 
@@ -107,21 +124,26 @@ public sealed class HueController : IDisposable
     }
 
     /// <summary>
-    /// Minimum interval between consecutive bridge writes, in ms. Prevents
-    /// the worker loop from saturating the Hue Bridge with HTTP traffic
-    /// when the user holds a hotkey or drags the slider fast. Each write
-    /// itself is parallelised across groups, so this is the rate-limit on
-    /// the LATEST-VALUE writes, not on individual groups. Hue Bridge v1
-    /// docs recommend ≤ 10 commands/s/light; ~150 ms keeps us well under.
+    /// Minimum interval between consecutive bridge writes, in ms. v0.6.49:
+    /// raised from 150 ms to 1000 ms. The Hue Bridge developer docs cap
+    /// /groups commands at <b>1 per second</b> (vs 10 per second on
+    /// individual /lights), because group updates fan out as expensive
+    /// broadcast messages internally. Sending faster than 1 Hz makes the
+    /// bridge queue commands and respond with multi-second delays — that
+    /// was the "5 second lag" users reported on rapid hotkey presses.
+    /// Latest-wins coalescing inside <see cref="EnqueueWrite"/> means a
+    /// flurry of presses still converges to the most recent target within
+    /// one second, which is well below the threshold of perception for
+    /// ambient lighting transitions.
     /// </summary>
-    private const int MinWriteIntervalMs = 150;
+    private const int MinWriteIntervalMs = 1000;
 
     /// <summary>Snappy 100 ms transitiontime on the bridge so a hotkey or
     /// slider drag visibly tracks instead of feeling like a laggy fade.</summary>
     private const int SnappyTransitionDeciseconds = 1;
 
     private void EnqueueWrite(int kelvin, int bri, List<string> groups, HueColorRangeMode range,
-                                string gradientCool, string gradientWarm)
+                                List<HueGradientStop> stops)
     {
         bool kickoff;
         lock (_lock)
@@ -130,7 +152,7 @@ public sealed class HueController : IDisposable
             // by the freshest one. The worker only ever picks up the most
             // recent state, so a flurry of hotkey presses converges to the
             // last value rather than playing each intermediate frame.
-            _pending = (kelvin, bri, groups, range, gradientCool, gradientWarm);
+            _pending = (kelvin, bri, groups, range, stops);
             kickoff = !_writeInFlight;
             if (kickoff) _writeInFlight = true;
         }
@@ -141,7 +163,7 @@ public sealed class HueController : IDisposable
             while (true)
             {
                 (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
-                 string GradientCool, string GradientWarm) work;
+                 List<HueGradientStop> Stops) work;
                 HueBridgeClient? client;
                 lock (_lock)
                 {
@@ -186,13 +208,13 @@ public sealed class HueController : IDisposable
     private static async Task PushColourState(
         HueBridgeClient client,
         (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
-         string GradientCool, string GradientWarm) work)
+         List<HueGradientStop> Stops) work)
     {
         var writes = new List<Task>(work.Groups.Count);
 
         if (work.Range == HueColorRangeMode.WhiteToRed)
         {
-            (double x, double y) = GradientXY(work.Kelvin, work.GradientCool, work.GradientWarm);
+            (double x, double y) = GradientXY(work.Kelvin, work.Stops);
             foreach (var groupId in work.Groups)
             {
                 writes.Add(WriteGroupColorSafeAsync(client, groupId, x, y,
@@ -220,20 +242,53 @@ public sealed class HueController : IDisposable
     }
 
     /// <summary>
-    /// v0.6.45: gradient between user-pickable cool and warm endpoints.
-    /// Both endpoints are sRGB hex strings ("#AARRGGBB"). At kelvin=6500
-    /// the bulb sits at the cool endpoint; at kelvin=1500 it sits at
-    /// the warm endpoint; linear lerp in CIE xy in between. Hue Bridge
-    /// accepts xy directly so we don't fight the bulb's colour gamut.
+    /// v0.6.49: multi-stop gradient. Sort the stops by kelvin, find the
+    /// adjacent pair that brackets the requested kelvin, and lerp in
+    /// CIE xy space between just those two endpoints. This is the same
+    /// behaviour Photoshop's gradient editor uses: only the two
+    /// neighbouring stops contribute at any point on the gradient.
+    ///
+    /// Edge cases: if kelvin is below the lowest stop, snap to the
+    /// lowest stop's colour; if above the highest, snap to the highest.
+    /// If for some reason fewer than two stops are present, fall back
+    /// to D65 white so the bulb at least lights up.
     /// </summary>
-    private static (double x, double y) GradientXY(int kelvin, string coolHex, string warmHex)
+    private static (double x, double y) GradientXY(int kelvin, List<HueGradientStop> stops)
     {
-        double t = (Math.Clamp(kelvin, 1500, 6500) - 1500) / 5000.0;  // 0 = warm, 1 = cool
-        var (xc, yc) = HexToXy(coolHex, fallback: (0.3128, 0.3290));  // D65 default
-        var (xw, yw) = HexToXy(warmHex, fallback: (0.6750, 0.3220));  // deep red default
-        double x = xw + (xc - xw) * t;
-        double y = yw + (yc - yw) * t;
-        return (x, y);
+        if (stops == null || stops.Count == 0)
+            return (0.3128, 0.3290); // D65 white fallback
+
+        var sorted = stops
+            .Where(s => s != null)
+            .OrderBy(s => s.Kelvin)
+            .ToList();
+
+        if (sorted.Count == 1)
+            return HexToXy(sorted[0].Color, fallback: (0.3128, 0.3290));
+
+        // Below the lowest stop → snap to the lowest stop.
+        if (kelvin <= sorted[0].Kelvin)
+            return HexToXy(sorted[0].Color, fallback: (0.6750, 0.3220));
+        // Above the highest stop → snap to the highest stop.
+        if (kelvin >= sorted[^1].Kelvin)
+            return HexToXy(sorted[^1].Color, fallback: (0.3128, 0.3290));
+
+        // Find the bracketing pair.
+        for (int i = 0; i < sorted.Count - 1; i++)
+        {
+            var a = sorted[i];
+            var b = sorted[i + 1];
+            if (kelvin >= a.Kelvin && kelvin <= b.Kelvin)
+            {
+                int span = b.Kelvin - a.Kelvin;
+                double t = span <= 0 ? 0.0 : (kelvin - a.Kelvin) / (double)span;
+                var (xa, ya) = HexToXy(a.Color, fallback: (0.6750, 0.3220));
+                var (xb, yb) = HexToXy(b.Color, fallback: (0.3128, 0.3290));
+                return (xa + (xb - xa) * t, ya + (yb - ya) * t);
+            }
+        }
+        // Defensive — should be unreachable given the bracket checks above.
+        return HexToXy(sorted[^1].Color, fallback: (0.3128, 0.3290));
     }
 
     /// <summary>Parse a "#AARRGGBB" hex string and return its CIE 1931

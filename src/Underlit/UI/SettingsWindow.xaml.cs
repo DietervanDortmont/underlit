@@ -76,6 +76,11 @@ public partial class SettingsWindow : Window
         LstMonitors.ItemsSource = _monRows;
         LstRunningApps.ItemsSource = _runningAppRows;
         BtnRefreshRunningApps.Click += (_, _) => RefreshRunningApps();
+        // v0.6.49: + button next to the Custom exclusions textbox opens
+        // an OpenFileDialog filtered to .exe files. We append the chosen
+        // executable's base name (no extension) to the textbox on a new
+        // line, dedupe on the way in, then push so the change is live.
+        BtnExclusionsBrowse.Click += (_, _) => OnBrowseExclusionExe();
 
         // Sidebar → page switching
         // Order MUST match the sidebar ListBoxItems in SettingsWindow.xaml.
@@ -1139,11 +1144,20 @@ public partial class SettingsWindow : Window
             PushSettings();
         };
 
-        // v0.6.45: gradient endpoint pickers, only shown when Custom
-        // gradient mode is selected. Click a swatch to open a colour
-        // picker; the resulting hex is stored on _snapshot and pushed.
-        BtnHueGradientCool.Click += (_, _) => PickHueGradientEndpoint(isCool: true);
-        BtnHueGradientWarm.Click += (_, _) => PickHueGradientEndpoint(isCool: false);
+        // v0.6.49: multi-stop gradient editor. Click on a marker to
+        // select it; drag a marker to move it; double-click on the bar
+        // to add a new stop; Edit colour / Remove act on the selected
+        // stop. The bar redraws itself on size change so it stays in
+        // sync with the markers when the window resizes.
+        HueGradientBar.SizeChanged              += (_, _) => RedrawHueGradient();
+        HueGradientMarkers.SizeChanged          += (_, _) => RedrawHueGradient();
+        HueGradientMarkers.MouseLeftButtonDown  += OnHueGradientMarkersMouseDown;
+        HueGradientMarkers.MouseMove            += OnHueGradientMarkersMouseMove;
+        HueGradientMarkers.MouseLeftButtonUp    += OnHueGradientMarkersMouseUp;
+        HueGradientMarkers.LostMouseCapture     += (_, _) => _hueGradientDragIndex = -1;
+        HueGradientBar.MouseLeftButtonDown      += OnHueGradientBarMouseDown;
+        BtnHueGradientEditStop.Click            += (_, _) => EditSelectedHueGradientStop();
+        BtnHueGradientRemoveStop.Click          += (_, _) => RemoveSelectedHueGradientStop();
 
         // Initial state.
         if (!string.IsNullOrEmpty(_snapshot.HueBridgeIp) && !string.IsNullOrEmpty(_snapshot.HueBridgeUsername))
@@ -1161,16 +1175,40 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>v0.6.45: show the gradient-endpoint picker row only when
-    /// Custom gradient mode is selected. Also refresh the swatch fills
-    /// from the saved hex strings.</summary>
+    // ---- Multi-stop Hue gradient editor (v0.6.49) -----------------------
+
+    /// <summary>
+    /// Index into <see cref="AppSettings.HueGradientStops"/> of the stop
+    /// currently selected in the editor. -1 = no selection. Selecting a
+    /// stop drives the swatch + label and enables the Edit/Remove pills.
+    /// </summary>
+    private int _hueGradientSelectedIndex = -1;
+    /// <summary>Index of the marker currently being dragged, or -1.</summary>
+    private int _hueGradientDragIndex = -1;
+    /// <summary>Track distinguishing "click without drag" from real drags
+    /// so a click selects without instantly snapping the kelvin to the
+    /// click x. We start a drag only after the mouse has moved more than
+    /// 3 px from the original press point.</summary>
+    private System.Windows.Point _hueGradientDragStart;
+    private bool _hueGradientDragMoved;
+
+    /// <summary>Visible kelvin range covered by the gradient bar; same
+    /// as the rest of the schedule UI.</summary>
+    private const int HueGradientMinK = 1500;
+    private const int HueGradientMaxK = 6500;
+
+    /// <summary>v0.6.49: show the gradient editor only when Custom
+    /// gradient mode is selected, then redraw the bar + markers from
+    /// the user's stored stops. Selection is reset every time so a
+    /// stale index from a previous snapshot can't point past the end
+    /// of the new stops list (e.g. after Restore defaults).</summary>
     private void UpdateHueGradientPanelVisibility()
     {
         bool show = _snapshot.HueColorRange == HueColorRangeMode.WhiteToRed;
         HueGradientPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
         HueGradientRow.Visibility   = show ? Visibility.Visible : Visibility.Collapsed;
-        HueGradientCoolSwatch.Background = HexToBrush(_snapshot.HueGradientCoolColor, fallback: Color.FromRgb(0xFF, 0xFF, 0xFF));
-        HueGradientWarmSwatch.Background = HexToBrush(_snapshot.HueGradientWarmColor, fallback: Color.FromRgb(0xB0, 0x00, 0x10));
+        _hueGradientSelectedIndex = -1;
+        if (show) RedrawHueGradient();
     }
 
     private static Brush HexToBrush(string? hex, Color fallback)
@@ -1187,15 +1225,298 @@ public partial class SettingsWindow : Window
         return new SolidColorBrush(fallback);
     }
 
-    /// <summary>Open a colour picker pre-filled with the current
-    /// gradient endpoint, save the result back to settings, and push.</summary>
-    private void PickHueGradientEndpoint(bool isCool)
+    private static Color HexToColor(string? hex, Color fallback)
     {
-        string current = isCool ? _snapshot.HueGradientCoolColor : _snapshot.HueGradientWarmColor;
-        Color seed;
-        try { seed = (Color)ColorConverter.ConvertFromString(current); }
-        catch { seed = isCool ? Color.FromRgb(0xFF, 0xFF, 0xFF) : Color.FromRgb(0xB0, 0x00, 0x10); }
+        if (!string.IsNullOrWhiteSpace(hex))
+        {
+            try { return (Color)ColorConverter.ConvertFromString(hex); }
+            catch { /* fall through */ }
+        }
+        return fallback;
+    }
 
+    /// <summary>Map a kelvin value (1500..6500) to an x-coordinate inside
+    /// the gradient bar's local space.</summary>
+    private double KelvinToX(int kelvin, double width)
+    {
+        double t = (Math.Clamp(kelvin, HueGradientMinK, HueGradientMaxK) - HueGradientMinK)
+                 / (double)(HueGradientMaxK - HueGradientMinK);
+        return t * width;
+    }
+
+    private int XToKelvin(double x, double width)
+    {
+        if (width <= 0) return HueGradientMinK;
+        double t = Math.Clamp(x / width, 0.0, 1.0);
+        return (int)Math.Round(HueGradientMinK + t * (HueGradientMaxK - HueGradientMinK));
+    }
+
+    /// <summary>
+    /// Rebuild the gradient bar's brush and the marker triangles from
+    /// the snapshot's stop list. Called after every edit, drag, add, or
+    /// remove, plus on size changes.
+    /// </summary>
+    private void RedrawHueGradient()
+    {
+        if (_snapshot is null) return;
+
+        // Always sort by kelvin so the brush gradient is monotonic, but
+        // keep the user's original list ordering in the snapshot — the
+        // editor remembers selection by index into the unsorted list, so
+        // we map between the two via the kelvin value.
+        var stops = _snapshot.HueGradientStops;
+        if (stops.Count < 2) return;
+
+        // 1) Build the LinearGradientBrush.
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new System.Windows.Point(0, 0.5),
+            EndPoint   = new System.Windows.Point(1, 0.5),
+        };
+        foreach (var s in stops.OrderBy(s => s.Kelvin))
+        {
+            double t = (Math.Clamp(s.Kelvin, HueGradientMinK, HueGradientMaxK) - HueGradientMinK)
+                     / (double)(HueGradientMaxK - HueGradientMinK);
+            brush.GradientStops.Add(new GradientStop(
+                HexToColor(s.Color, Color.FromRgb(0xFF, 0xFF, 0xFF)),
+                t));
+        }
+        HueGradientBar.Fill = brush;
+
+        // 2) Redraw the markers in the canvas. Each marker is a small
+        //    rounded rectangle filled with the stop's colour, with a
+        //    triangle "tail" pointing up at the bar.
+        HueGradientMarkers.Children.Clear();
+        double width = HueGradientMarkers.ActualWidth;
+        if (width <= 0) width = HueGradientBar.ActualWidth;
+        if (width <= 0) return;
+
+        for (int i = 0; i < stops.Count; i++)
+        {
+            var stop = stops[i];
+            double x = KelvinToX(stop.Kelvin, width);
+
+            var marker = BuildHueGradientMarker(stop, isSelected: i == _hueGradientSelectedIndex);
+            marker.Tag = i;
+            // Centre the 16-px marker on the kelvin's x.
+            Canvas.SetLeft(marker, x - 8);
+            Canvas.SetTop(marker, 0);
+            HueGradientMarkers.Children.Add(marker);
+        }
+
+        // 3) Sync the action row (swatch + label).
+        if (_hueGradientSelectedIndex >= 0
+            && _hueGradientSelectedIndex < stops.Count)
+        {
+            var sel = stops[_hueGradientSelectedIndex];
+            HueGradientSelectedSwatch.Background =
+                HexToBrush(sel.Color, Color.FromRgb(0xFF, 0xFF, 0xFF));
+            LblHueGradientSelected.Text = $"Stop at {sel.Kelvin} K";
+            BtnHueGradientEditStop.IsEnabled   = true;
+            BtnHueGradientRemoveStop.IsEnabled = stops.Count > 2;
+        }
+        else
+        {
+            HueGradientSelectedSwatch.Background =
+                new SolidColorBrush(Color.FromArgb(0x40, 0x80, 0x80, 0x80));
+            LblHueGradientSelected.Text = "Click a marker to select a stop";
+            BtnHueGradientEditStop.IsEnabled   = false;
+            BtnHueGradientRemoveStop.IsEnabled = false;
+        }
+    }
+
+    /// <summary>Build one marker visual: a small upward-pointing chevron
+    /// + colour-filled square, themed with a selection outline.</summary>
+    private FrameworkElement BuildHueGradientMarker(HueGradientStop stop, bool isSelected)
+    {
+        var fill   = HexToBrush(stop.Color, Color.FromRgb(0xFF, 0xFF, 0xFF));
+        var stroke = isSelected
+            ? ((Brush?)TryFindResource("App.Accent")
+                ?? new SolidColorBrush(Color.FromRgb(0x60, 0xCD, 0xFF)))
+            : ((Brush?)TryFindResource("App.TextSecondary")
+                ?? new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)));
+
+        var grid = new Grid
+        {
+            Width = 16,
+            Height = 22,
+            Cursor = System.Windows.Input.Cursors.Hand,
+        };
+
+        // The triangular pointer at the top — points up at the bar.
+        var triangle = new System.Windows.Shapes.Polygon
+        {
+            Points = new PointCollection
+            {
+                new System.Windows.Point(8, 0),
+                new System.Windows.Point(2, 6),
+                new System.Windows.Point(14, 6),
+            },
+            Fill            = stroke,
+            Stretch         = Stretch.None,
+            VerticalAlignment   = VerticalAlignment.Top,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        grid.Children.Add(triangle);
+
+        // The colour swatch body.
+        var body = new Border
+        {
+            Width = 14, Height = 14,
+            CornerRadius = new CornerRadius(2),
+            Background = fill,
+            BorderBrush = stroke,
+            BorderThickness = new Thickness(isSelected ? 2 : 1),
+            VerticalAlignment   = VerticalAlignment.Bottom,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        grid.Children.Add(body);
+
+        return grid;
+    }
+
+    /// <summary>Hit-test the marker canvas at point p and return the
+    /// stops index under it, or -1 if none.</summary>
+    private int HitTestHueGradientMarker(System.Windows.Point p)
+    {
+        // Walk in reverse so the topmost (last-added) marker wins on
+        // overlap.
+        for (int i = HueGradientMarkers.Children.Count - 1; i >= 0; i--)
+        {
+            if (HueGradientMarkers.Children[i] is FrameworkElement fe
+                && fe.Tag is int idx)
+            {
+                double left = Canvas.GetLeft(fe);
+                if (double.IsNaN(left)) continue;
+                if (p.X >= left && p.X <= left + fe.Width
+                    && p.Y >= 0 && p.Y <= fe.Height)
+                {
+                    return idx;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private void OnHueGradientMarkersMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        var p = e.GetPosition(HueGradientMarkers);
+        int idx = HitTestHueGradientMarker(p);
+        if (idx < 0) return;
+
+        _hueGradientSelectedIndex = idx;
+        _hueGradientDragIndex     = idx;
+        _hueGradientDragStart     = p;
+        _hueGradientDragMoved     = false;
+        HueGradientMarkers.CaptureMouse();
+        e.Handled = true;
+        RedrawHueGradient();
+    }
+
+    private void OnHueGradientMarkersMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_hueGradientDragIndex < 0) return;
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+
+        var p = e.GetPosition(HueGradientMarkers);
+        if (!_hueGradientDragMoved)
+        {
+            // Suppress micro-jitter from a click — only enter drag
+            // mode after a real movement.
+            if (Math.Abs(p.X - _hueGradientDragStart.X) < 3) return;
+            _hueGradientDragMoved = true;
+        }
+
+        var stops = _snapshot.HueGradientStops;
+        if (_hueGradientDragIndex >= stops.Count) return;
+
+        double width = HueGradientMarkers.ActualWidth;
+        if (width <= 0) width = HueGradientBar.ActualWidth;
+
+        int kelvin = XToKelvin(p.X, width);
+        if (stops[_hueGradientDragIndex].Kelvin == kelvin) return;
+        stops[_hueGradientDragIndex].Kelvin = kelvin;
+        RedrawHueGradient();
+        // Live push so the user's bulbs follow the drag.
+        PushSettings();
+    }
+
+    private void OnHueGradientMarkersMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (HueGradientMarkers.IsMouseCaptured) HueGradientMarkers.ReleaseMouseCapture();
+        _hueGradientDragIndex = -1;
+    }
+
+    /// <summary>Double-click on the bar adds a new stop at the click x
+    /// with the colour the gradient is currently showing at that
+    /// position. Single click on the bar deselects.</summary>
+    private void OnHueGradientBarMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount >= 2)
+        {
+            var p = e.GetPosition(HueGradientBar);
+            double width = HueGradientBar.ActualWidth;
+            int k = XToKelvin(p.X, width);
+
+            // Sample the existing brush at the same x to seed the new
+            // stop's colour. We do this in xy → not directly meaningful
+            // here, so just lerp between adjacent stop colours in sRGB.
+            string newHex = SampleGradientHex(k);
+
+            var stops = _snapshot.HueGradientStops;
+            stops.Add(new HueGradientStop { Kelvin = k, Color = newHex });
+            _hueGradientSelectedIndex = stops.Count - 1;
+            RedrawHueGradient();
+            PushSettings();
+            e.Handled = true;
+        }
+        else
+        {
+            // Plain click anywhere on the bar deselects (so the action
+            // row stops nagging the user about a stop that's no longer
+            // logically active).
+            _hueGradientSelectedIndex = -1;
+            RedrawHueGradient();
+        }
+    }
+
+    /// <summary>sRGB lerp between the bracketing stops at the given
+    /// kelvin. Used as the seed colour when the user adds a new stop
+    /// via double-click.</summary>
+    private string SampleGradientHex(int kelvin)
+    {
+        var stops = _snapshot.HueGradientStops.OrderBy(s => s.Kelvin).ToList();
+        if (stops.Count == 0) return "#FFFFFFFF";
+        if (kelvin <= stops[0].Kelvin) return stops[0].Color;
+        if (kelvin >= stops[^1].Kelvin) return stops[^1].Color;
+        for (int i = 0; i < stops.Count - 1; i++)
+        {
+            var a = stops[i];
+            var b = stops[i + 1];
+            if (kelvin >= a.Kelvin && kelvin <= b.Kelvin)
+            {
+                int span = b.Kelvin - a.Kelvin;
+                double t = span <= 0 ? 0.0 : (kelvin - a.Kelvin) / (double)span;
+                var ca = HexToColor(a.Color, Color.FromRgb(0xFF, 0xFF, 0xFF));
+                var cb = HexToColor(b.Color, Color.FromRgb(0xB0, 0x00, 0x10));
+                byte r = (byte)Math.Round(ca.R + (cb.R - ca.R) * t);
+                byte g = (byte)Math.Round(ca.G + (cb.G - ca.G) * t);
+                byte bC = (byte)Math.Round(ca.B + (cb.B - ca.B) * t);
+                return $"#FF{r:X2}{g:X2}{bC:X2}";
+            }
+        }
+        return stops[^1].Color;
+    }
+
+    /// <summary>Open the system colour picker for the currently-selected
+    /// stop and persist the change.</summary>
+    private void EditSelectedHueGradientStop()
+    {
+        var stops = _snapshot.HueGradientStops;
+        int idx = _hueGradientSelectedIndex;
+        if (idx < 0 || idx >= stops.Count) return;
+
+        var seed = HexToColor(stops[idx].Color, Color.FromRgb(0xFF, 0xFF, 0xFF));
         using var dlg = new System.Windows.Forms.ColorDialog
         {
             FullOpen = true,
@@ -1203,10 +1524,41 @@ public partial class SettingsWindow : Window
             Color = System.Drawing.Color.FromArgb(seed.R, seed.G, seed.B),
         };
         if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
         string hex = $"#FF{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
-        if (isCool) _snapshot.HueGradientCoolColor = hex;
-        else        _snapshot.HueGradientWarmColor = hex;
-        UpdateHueGradientPanelVisibility();
+        stops[idx].Color = hex;
+
+        // Mirror the change into the legacy two-endpoint fields so older
+        // settings.json readers, hotkey paths, and rollback codepaths
+        // still get a reasonable value when the user has a complex
+        // gradient. We pick the lowest-kelvin stop's colour as Warm and
+        // the highest-kelvin stop's colour as Cool.
+        var sorted = stops.OrderBy(s => s.Kelvin).ToList();
+        _snapshot.HueGradientWarmColor = sorted[0].Color;
+        _snapshot.HueGradientCoolColor = sorted[^1].Color;
+
+        RedrawHueGradient();
+        PushSettings();
+    }
+
+    /// <summary>Remove the selected stop. Refuses if only two stops
+    /// remain — the gradient needs both endpoints to interpolate.</summary>
+    private void RemoveSelectedHueGradientStop()
+    {
+        var stops = _snapshot.HueGradientStops;
+        int idx = _hueGradientSelectedIndex;
+        if (idx < 0 || idx >= stops.Count) return;
+        if (stops.Count <= 2) return;
+
+        stops.RemoveAt(idx);
+        _hueGradientSelectedIndex = -1;
+
+        // Keep the legacy endpoint fields in sync — see EditSelectedHueGradientStop.
+        var sorted = stops.OrderBy(s => s.Kelvin).ToList();
+        _snapshot.HueGradientWarmColor = sorted[0].Color;
+        _snapshot.HueGradientCoolColor = sorted[^1].Color;
+
+        RedrawHueGradient();
         PushSettings();
     }
 
@@ -1732,12 +2084,12 @@ public partial class SettingsWindow : Window
     /// <summary>Public-facing GitHub URL the About icon opens. Uses the
     /// releases page directly so the user lands on downloadable
     /// binaries, not the source root.</summary>
-    private const string GitHubReleasesUrl = "https://github.com/dieterdort/underlit/releases/latest";
+    private const string GitHubReleasesUrl = "https://github.com/DietervanDortmont/underlit/releases/latest";
 
     /// <summary>GitHub Releases API endpoint for the latest release.
     /// Returns JSON with a <c>tag_name</c> field which is what we
     /// compare against the running assembly version.</summary>
-    private const string GitHubReleasesApiUrl = "https://api.github.com/repos/dieterdort/underlit/releases/latest";
+    private const string GitHubReleasesApiUrl = "https://api.github.com/repos/DietervanDortmont/underlit/releases/latest";
 
     /// <summary>Where Logger writes daily logs. Surfaced in the About
     /// footer so users posting bug reports can find them.</summary>
@@ -2259,6 +2611,44 @@ public partial class SettingsWindow : Window
         // Reflect into the textarea (without re-firing PushSettings via
         // its LostFocus handler — we update the text directly).
         TxtExclusions.Text = string.Join(Environment.NewLine, list);
+        PushSettings();
+    }
+
+    /// <summary>
+    /// v0.6.49: open an OpenFileDialog filtered to executables and add
+    /// the chosen file's base name (no path, no .exe suffix) to the
+    /// Custom exclusions textbox. We dedupe case-insensitively against
+    /// existing lines so the same browse twice is a no-op.
+    /// </summary>
+    private void OnBrowseExclusionExe()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Choose an executable to exclude",
+            Filter = "Executables (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+            // Default to Program Files so the user lands somewhere
+            // useful instead of Documents.
+            InitialDirectory = Environment.GetFolderPath(
+                Environment.SpecialFolder.ProgramFiles)
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        string baseName = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName);
+        if (string.IsNullOrWhiteSpace(baseName)) return;
+
+        // Existing lines, trimmed and non-empty, used for dedupe.
+        var existing = (TxtExclusions.Text ?? string.Empty)
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList();
+        if (existing.Any(e => e.Equals(baseName, StringComparison.OrdinalIgnoreCase)))
+            return; // already there — silently skip
+
+        existing.Add(baseName);
+        TxtExclusions.Text = string.Join(Environment.NewLine, existing);
         PushSettings();
     }
 

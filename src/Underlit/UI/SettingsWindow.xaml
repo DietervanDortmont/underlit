@@ -633,11 +633,16 @@
             <Setter Property="Background" Value="{DynamicResource App.ButtonBg}"/>
             <Setter Property="Foreground" Value="{DynamicResource App.ButtonFg}"/>
             <Setter Property="BorderThickness" Value="0"/>
-            <!-- v0.6.48: tighter vertical padding (5 → 3) and smaller font
-                 (13 → 12) so action buttons feel like buttons, not banners. -->
-            <Setter Property="Padding" Value="14,3"/>
+            <!-- v0.6.49: clamp button height. WPF's default button measure
+                 takes whatever the parent grid row gives it (the Row style
+                 has MinHeight=48), which made our supposedly-short pills
+                 still render ~38 dip tall. Explicit Height=24 + tighter
+                 padding gets a true compact pill that doesn't grow. -->
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Padding" Value="12,0"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
@@ -1068,7 +1073,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Tint strength"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassTintStrength"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassTintStrength, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1080,7 +1085,7 @@
                                             Minimum="-180" Maximum="180"
                                             VerticalAlignment="Center"
                                             TickFrequency="15" IsSnapToTickEnabled="False"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassLightAngle, Path=Value, StringFormat={}{0:F0}°}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1090,7 +1095,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Light intensity"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassLightIntensity"
                                             Minimum="0" Maximum="200" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassLightIntensity, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1100,7 +1105,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Refraction"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassRefraction"
                                             Minimum="0" Maximum="30" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassRefraction, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1110,7 +1115,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Depth"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassDepth"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassDepth, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1120,7 +1125,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Dispersion"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassDispersion"
                                             Minimum="0" Maximum="10" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassDispersion, Path=Value, StringFormat={}{0:F1}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1130,7 +1135,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Frost"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassFrost"
                                             Minimum="0" Maximum="30" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassFrost, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1140,7 +1145,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Corner radius"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassCornerRadius"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassCornerRadius, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1150,7 +1155,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Bevel width"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassBevelWidth"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassBevelWidth, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1160,7 +1165,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Bevel depth"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassBevelDepth"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassBevelDepth, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1170,7 +1175,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Rim brightness"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassRimBrightness"
                                             Minimum="0" Maximum="300" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassRimBrightness, Path=Value, StringFormat={}{0:F0}}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1180,7 +1185,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Rim width"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassRimWidth"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassRimWidth, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1190,7 +1195,7 @@
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Rim secondary"/>
                                     <Slider Grid.Column="1" x:Name="SldGlassRimSecondary"
                                             Minimum="0" Maximum="100" VerticalAlignment="Center"/>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
                                                Text="{Binding ElementName=SldGlassRimSecondary, Path=Value, StringFormat={}{0:F0}%}"/>
                                 </Grid>
                             </StackPanel>
@@ -1677,7 +1682,7 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="How lights match the warmth schedule"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="Circadian: native colour temperature (subtle, recommended). Custom gradient: bulbs drift through any two colours you pick (dramatic). Warm white only: clamped 5000 to 2700 K range, gentlest."/>
+                                                   Text="Circadian: native colour temperature (subtle, recommended). Custom gradient: bulbs drift through any colours you pick along the warmth axis (dramatic). Warm white only: clamped 5000 to 2700 K range, gentlest."/>
                                     </StackPanel>
                                     <ComboBox Grid.Column="1" x:Name="CboHueColorRange"
                                               Margin="0,0,14,0" MinWidth="160" VerticalAlignment="Center">
@@ -1686,41 +1691,102 @@
                                         <ComboBoxItem Content="Warm white only"/>
                                     </ComboBox>
                                 </Grid>
-                                <!-- v0.6.45: gradient endpoints, only visible when
-                                     "Custom gradient" is selected. Click a swatch to pick. -->
+                                <!-- v0.6.49: multi-stop gradient editor, only visible
+                                     when "Custom gradient" is selected. Photoshop-
+                                     style: drag the marker triangles below the bar
+                                     to reposition stops, double-click the bar to
+                                     add a new stop, click a marker to select it,
+                                     then "Edit" / "Remove" act on the selected stop. -->
                                 <Border x:Name="HueGradientPanel"
                                         Style="{StaticResource RowDivider}"
                                         Visibility="Collapsed"/>
-                                <Grid x:Name="HueGradientRow"
-                                      Style="{StaticResource Row}"
-                                      Visibility="Collapsed">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Gradient endpoints"/>
-                                        <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="The lights smoothly transition from the cool colour at neutral daytime warmth (6500 K) to the warm colour at the deepest evening warmth (1500 K). Click a swatch to change it."/>
-                                    </StackPanel>
-                                    <Button Grid.Column="1" x:Name="BtnHueGradientCool"
-                                            Margin="0,0,8,0"
-                                            Style="{StaticResource IconButton}"
-                                            ToolTip="Cool end (daytime). Default: white.">
-                                        <Border x:Name="HueGradientCoolSwatch"
-                                                Width="36" Height="22" CornerRadius="4"
-                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
-                                    </Button>
-                                    <Button Grid.Column="2" x:Name="BtnHueGradientWarm"
-                                            Margin="0,0,14,0"
-                                            Style="{StaticResource IconButton}"
-                                            ToolTip="Warm end (deep evening). Default: deep red.">
-                                        <Border x:Name="HueGradientWarmSwatch"
-                                                Width="36" Height="22" CornerRadius="4"
-                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
-                                    </Button>
-                                </Grid>
+                                <StackPanel x:Name="HueGradientRow"
+                                            Margin="14,8,14,12"
+                                            Visibility="Collapsed">
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Custom gradient"
+                                               Margin="0,0,0,2"/>
+                                    <TextBlock Style="{StaticResource RowHint}"
+                                               Margin="0,0,0,10"
+                                               Text="Drag the markers under the bar to position colour stops along the warmth axis. Click a marker to select it, then Edit to change its colour or Remove to delete it. Double-click on the bar to add a new stop."/>
+
+                                    <!-- Kelvin axis labels above the bar. -->
+                                    <Grid Margin="0,0,0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="Warm (1500 K)"
+                                                   HorizontalAlignment="Left"/>
+                                        <TextBlock Grid.Column="1"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="Mid"
+                                                   HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="2"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="Cool (6500 K)"
+                                                   HorizontalAlignment="Right"/>
+                                    </Grid>
+
+                                    <!-- The gradient strip itself. Filled at runtime
+                                         from the user's stops. Has a 1 px border so
+                                         pure white stops are still visible against
+                                         the light theme background. -->
+                                    <Border CornerRadius="6"
+                                            BorderBrush="{DynamicResource App.CardBorder}"
+                                            BorderThickness="1"
+                                            ClipToBounds="True">
+                                        <Rectangle x:Name="HueGradientBar"
+                                                   Height="34"/>
+                                    </Border>
+
+                                    <!-- Marker track. Triangles are drawn into this
+                                         canvas at runtime; clicks/drags are handled
+                                         by the canvas itself so we don't have to
+                                         wire dozens of per-shape mouse events. -->
+                                    <Canvas x:Name="HueGradientMarkers"
+                                            Height="22"
+                                            Margin="0,2,0,0"
+                                            Background="Transparent"/>
+
+                                    <!-- Action row: shows the selected stop's kelvin
+                                         + colour swatch and the Edit/Remove pills. -->
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="HueGradientSelectedSwatch"
+                                                Grid.Column="0"
+                                                Width="22" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                                VerticalAlignment="Center"
+                                                Margin="0,0,8,0"/>
+                                        <TextBlock x:Name="LblHueGradientSelected"
+                                                   Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="No stop selected"/>
+                                        <Button Grid.Column="3"
+                                                x:Name="BtnHueGradientEditStop"
+                                                Style="{StaticResource PillButton}"
+                                                Margin="0,0,8,0"
+                                                Content="Edit colour"/>
+                                        <Button Grid.Column="4"
+                                                x:Name="BtnHueGradientRemoveStop"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Remove"/>
+                                    </Grid>
+                                </StackPanel>
                                 </StackPanel>
                             </Border>
 
@@ -1959,20 +2025,65 @@
                              extension. We auto-resolve them at runtime by
                              matching against the foreground process's name. -->
                         <TextBlock Style="{StaticResource CardCaption}" Text="CUSTOM"/>
-                        <Border Style="{StaticResource Card}" Padding="4">
+                        <Border Style="{StaticResource Card}" Padding="8">
                             <StackPanel>
-                                <TextBox x:Name="TxtExclusions"
-                                         Style="{StaticResource AppleTextBox}"
-                                         MinHeight="120"
-                                         HorizontalAlignment="Stretch"
-                                         Margin="0"
-                                         TextAlignment="Left"
-                                         HorizontalContentAlignment="Stretch"
-                                         FontFamily="Cascadia Mono, Consolas"
-                                         AcceptsReturn="True"
-                                         VerticalScrollBarVisibility="Auto"
-                                         TextWrapping="NoWrap"
-                                         ToolTip="One name per line. Leave off the .exe. We match against the foreground app's process name."/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Grid.Column="0">
+                                        <!-- Edit field for custom names. -->
+                                        <TextBox x:Name="TxtExclusions"
+                                                 Style="{StaticResource AppleTextBox}"
+                                                 MinHeight="120"
+                                                 HorizontalAlignment="Stretch"
+                                                 Margin="0"
+                                                 TextAlignment="Left"
+                                                 HorizontalContentAlignment="Stretch"
+                                                 FontFamily="Cascadia Mono, Consolas"
+                                                 AcceptsReturn="True"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 TextWrapping="NoWrap"/>
+                                        <!-- v0.6.49: placeholder shown only when
+                                             the textbox is empty. WPF has no
+                                             native placeholder; we layer a hit-
+                                             test-invisible TextBlock and bind
+                                             its Visibility to a DataTrigger on
+                                             TxtExclusions.Text == "". -->
+                                        <TextBlock x:Name="LblExclusionsPlaceholder"
+                                                   IsHitTestVisible="False"
+                                                   Margin="14,11,14,0"
+                                                   VerticalAlignment="Top"
+                                                   HorizontalAlignment="Left"
+                                                   FontSize="12"
+                                                   FontFamily="Segoe UI Variable, Segoe UI"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   TextWrapping="Wrap"
+                                                   Text="Type a process name (no .exe), one per line. Click + to browse for an executable on your computer.">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Text, ElementName=TxtExclusions}" Value="">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                    <Button Grid.Column="1" x:Name="BtnExclusionsBrowse"
+                                            Margin="8,0,4,0"
+                                            VerticalAlignment="Top"
+                                            Style="{StaticResource IconButton}"
+                                            ToolTip="Browse for an executable on this computer">
+                                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="15"
+                                                   Foreground="{DynamicResource App.TextPrimary}"
+                                                   Text="&#xE710;"/>
+                                    </Button>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </StackPanel>

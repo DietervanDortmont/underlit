@@ -51,15 +51,16 @@
             <TextBlock FontSize="22" FontWeight="SemiBold"
                        Foreground="White"
                        Text="Welcome to Underlit"/>
-            <TextBlock Margin="0,6,0,18"
+            <TextBlock Margin="0,12,0,24"
                        FontSize="13"
+                       LineHeight="20"
                        TextWrapping="Wrap"
                        Foreground="{StaticResource Intro.TextDim}"
                        Text="Underlit dims your screen below the OS minimum and shifts its warmth on a circadian schedule. Here's what you need to know to get going."/>
 
             <TextBlock FontSize="11" FontWeight="SemiBold"
                        Foreground="{StaticResource Intro.TextDim}"
-                       Margin="0,0,0,6"
+                       Margin="0,8,0,10"
                        Text="HOTKEYS"/>
             <Border Background="{StaticResource Intro.CardBg}"
                     BorderBrush="{StaticResource Intro.CardBorder}"
@@ -97,7 +98,7 @@
 
             <TextBlock FontSize="11" FontWeight="SemiBold"
                        Foreground="{StaticResource Intro.TextDim}"
-                       Margin="0,0,0,6"
+                       Margin="0,8,0,10"
                        Text="SETTINGS"/>
             <Border Background="{StaticResource Intro.CardBg}"
                     BorderBrush="{StaticResource Intro.CardBorder}"

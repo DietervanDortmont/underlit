@@ -43,7 +43,12 @@ public sealed class HueBridgeClient : IDisposable
     {
         BridgeIp = bridgeIp ?? throw new ArgumentNullException(nameof(bridgeIp));
         Username = string.IsNullOrEmpty(username) ? null : username;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        // v0.6.49: 5 s timeout was too long when the bridge becomes
+        // unreachable mid-session — a rapid hotkey press could stall
+        // the worker for 5 s before the next command went out, leaving
+        // the bulb visibly out of sync. 3 s is enough for a healthy
+        // bridge over LAN and surfaces dropouts faster.
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
     }
 
     /// <summary>

@@ -168,12 +168,13 @@ public sealed class HueBridgeClient : IDisposable
 
     /// <summary>
     /// Set the colour of a Hue group via CIE xy chromaticity. Use this when the
-    /// user has chosen a non-circadian colour range (e.g. white→red) where we
-    /// drive the bulb out of its colour-temperature range. Coordinates are CIE
-    /// 1931 xy, both 0..1.
+    /// user has chosen a non-circadian colour range (e.g. white to red) where
+    /// we drive the bulb out of its colour-temperature range. Coordinates are
+    /// CIE 1931 xy, both 0..1.
     /// </summary>
     public async Task<bool> SetGroupColorAsync(
         string groupId, double x, double y, int? brightness254,
+        int? transitionDeciseconds = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(Username)) throw new InvalidOperationException("Bridge not paired");
@@ -184,6 +185,8 @@ public sealed class HueBridgeClient : IDisposable
             { "xy", new double[] { Math.Clamp(x, 0, 1), Math.Clamp(y, 0, 1) } },
         };
         if (brightness254.HasValue) state["bri"] = Math.Clamp(brightness254.Value, 1, 254);
+        if (transitionDeciseconds.HasValue)
+            state["transitiontime"] = Math.Max(0, transitionDeciseconds.Value);
 
         return await PutGroupAction(groupId, state, ct);
     }

@@ -34,7 +34,35 @@ public partial class SettingsWindow : Window
         public int WarmthOffset { get; set; }
     }
 
+    /// <summary>
+    /// One running app's row in the Exclusions page. Bound to a
+    /// CheckBox via IsExcluded — toggling adds/removes the process
+    /// name from <see cref="AppSettings.ExcludedProcessNames"/>.
+    /// </summary>
+    public sealed class RunningAppRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string ProcessName { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+
+        private bool _isExcluded;
+        public bool IsExcluded
+        {
+            get => _isExcluded;
+            set
+            {
+                if (_isExcluded == value) return;
+                _isExcluded = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsExcluded)));
+                ExclusionToggled?.Invoke(this);
+            }
+        }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event Action<RunningAppRow>? ExclusionToggled;
+    }
+
     private readonly ObservableCollection<MonitorRow> _monRows = new();
+    private readonly ObservableCollection<RunningAppRow> _runningAppRows = new();
     private readonly FrameworkElement[] _pages;
     private readonly Action<bool> _themeHandler;
 
@@ -45,6 +73,8 @@ public partial class SettingsWindow : Window
         _displays = displays;
         _hardware = hardware;
         LstMonitors.ItemsSource = _monRows;
+        LstRunningApps.ItemsSource = _runningAppRows;
+        BtnRefreshRunningApps.Click += (_, _) => RefreshRunningApps();
 
         // Sidebar → page switching
         _pages = new FrameworkElement[] { PageGeneral, PageHotkeys, PageSchedule, PageLights, PageMonitors, PageExclusions };
@@ -104,8 +134,18 @@ public partial class SettingsWindow : Window
 
         // Hue brightness/warmth-offset sliders push settings live (so the
         // HueController in UnderlitHost picks up the new values immediately).
-        SldHueBrightness.ValueChanged   += (_, _) => { LblHueBrightness.Text   = ((int)SldHueBrightness.Value) + "%"; PushSettings(); };
-        SldHueWarmthOffset.ValueChanged += (_, _) => { LblHueWarmthOffset.Text = FormatKelvinOffset((int)SldHueWarmthOffset.Value); PushSettings(); };
+        SldHueBrightness.ValueChanged   += (_, _) =>
+        {
+            LblHueBrightness.Text = ((int)SldHueBrightness.Value) + "%";
+            if (_suppressHueSync) return;
+            PushSettings();
+        };
+        SldHueWarmthOffset.ValueChanged += (_, _) =>
+        {
+            LblHueWarmthOffset.Text = FormatKelvinOffset((int)SldHueWarmthOffset.Value);
+            if (_suppressHueSync) return;
+            PushSettings();
+        };
         ChkHueIgnoreBoost.Checked   += (_, _) => PushSettings();
         ChkHueIgnoreBoost.Unchecked += (_, _) => PushSettings();
 
@@ -456,6 +496,13 @@ public partial class SettingsWindow : Window
         int idx = NavList.SelectedIndex < 0 ? 0 : NavList.SelectedIndex;
         for (int i = 0; i < _pages.Length; i++)
             _pages[i].Visibility = i == idx ? Visibility.Visible : Visibility.Collapsed;
+
+        // Lazy-populate the running-apps list whenever the Exclusions
+        // page is shown so it reflects whatever is open right now.
+        if (idx >= 0 && idx < _pages.Length && ReferenceEquals(_pages[idx], PageExclusions))
+        {
+            RefreshRunningApps();
+        }
     }
 
     // ---- Theme ----
@@ -1640,6 +1687,98 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// v0.6.43: rebuild the Exclusions page's running-app list. Walks the
+    /// process table, keeps only processes that own a top-level window
+    /// (i.e. things the user can actually interact with), and matches
+    /// each one's checked state against the saved exclusion list.
+    /// Toggling a row mutates <see cref="AppSettings.ExcludedProcessNames"/>
+    /// directly and pushes — no save-on-close required.
+    /// </summary>
+    private void RefreshRunningApps()
+    {
+        // Snapshot current saved exclusions so we can mark new rows
+        // checked if the user has already excluded them by name.
+        var excluded = new HashSet<string>(
+            _snapshot.ExcludedProcessNames ?? new List<string>(),
+            StringComparer.OrdinalIgnoreCase);
+
+        // Group by process name to avoid duplicates (Chrome typically
+        // spawns ~20 processes; we only need one row per distinct name).
+        var seen = new Dictionary<string, RunningAppRow>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in System.Diagnostics.Process.GetProcesses())
+        {
+            try
+            {
+                if (p.MainWindowHandle == IntPtr.Zero) continue;  // headless / service
+                if (string.IsNullOrEmpty(p.ProcessName)) continue;
+                string key = p.ProcessName;
+                if (seen.ContainsKey(key)) continue;
+
+                string display;
+                try
+                {
+                    display = p.MainModule?.FileVersionInfo?.FileDescription ?? "";
+                    if (string.IsNullOrWhiteSpace(display))
+                        display = !string.IsNullOrWhiteSpace(p.MainWindowTitle)
+                            ? p.MainWindowTitle
+                            : p.ProcessName;
+                }
+                catch
+                {
+                    // MainModule access can throw on protected processes.
+                    display = !string.IsNullOrWhiteSpace(p.MainWindowTitle)
+                        ? p.MainWindowTitle
+                        : p.ProcessName;
+                }
+
+                var row = new RunningAppRow
+                {
+                    ProcessName = key,
+                    DisplayName = display,
+                    IsExcluded  = excluded.Contains(key),
+                };
+                row.ExclusionToggled += OnRunningAppExclusionToggled;
+                seen[key] = row;
+            }
+            catch
+            {
+                // Process may have exited mid-enumeration; skip.
+            }
+            finally { try { p.Dispose(); } catch { } }
+        }
+
+        // Sort alphabetically by display name so the list is scannable.
+        _runningAppRows.Clear();
+        foreach (var r in seen.Values.OrderBy(r => r.DisplayName, StringComparer.OrdinalIgnoreCase))
+            _runningAppRows.Add(r);
+    }
+
+    /// <summary>
+    /// One row's switch flipped. Update the snapshot's exclusion list and
+    /// also mirror the change into the Custom textbox below so power
+    /// users see what they've added without having to scroll back.
+    /// </summary>
+    private void OnRunningAppExclusionToggled(RunningAppRow row)
+    {
+        var list = _snapshot.ExcludedProcessNames ?? new List<string>();
+        if (row.IsExcluded)
+        {
+            if (!list.Any(n => n.Equals(row.ProcessName, StringComparison.OrdinalIgnoreCase)))
+                list.Add(row.ProcessName);
+        }
+        else
+        {
+            list.RemoveAll(n => n.Equals(row.ProcessName, StringComparison.OrdinalIgnoreCase));
+        }
+        _snapshot.ExcludedProcessNames = list;
+
+        // Reflect into the textarea (without re-firing PushSettings via
+        // its LostFocus handler — we update the text directly).
+        TxtExclusions.Text = string.Join(Environment.NewLine, list);
+        PushSettings();
+    }
+
     /// <summary>v0.6.42: Reset every monitor's per-monitor offsets to 0
     /// in one click. Mirrors the change into the sliders for the
     /// currently-selected row so the UI reflects the reset immediately.</summary>
@@ -1681,6 +1820,46 @@ public partial class SettingsWindow : Window
         > 0 => $"+{k} K",
         _   => $"{k} K",
     };
+
+    /// <summary>
+    /// v0.6.43: keep the Hue Brightness / Warmth offset sliders in sync with
+    /// the host's authoritative settings after a Hue hotkey was pressed.
+    /// Without this the open settings window kept showing whatever the
+    /// sliders were when the user last touched them, while the engine and
+    /// the bridge had moved on. We mirror the new values into _snapshot
+    /// AND into the slider visual state, suppressing PushSettings during
+    /// the assignment so we don't bounce a redundant Applied event back at
+    /// the host.
+    /// </summary>
+    public void SyncHueValuesFromHost(AppSettings authoritative)
+    {
+        _snapshot.HueBrightness         = authoritative.HueBrightness;
+        _snapshot.HueWarmthOffsetKelvin = authoritative.HueWarmthOffsetKelvin;
+
+        // Programmatic slider writes — the slider-loop's PushSettings
+        // handler would otherwise fire and round-trip the value back to
+        // the host. The _suppressHueSync flag makes those handlers no-op
+        // while we're loading.
+        _suppressHueSync = true;
+        try
+        {
+            SldHueBrightness.Value   = HueBriNativeToPercent(authoritative.HueBrightness);
+            SldHueWarmthOffset.Value = authoritative.HueWarmthOffsetKelvin;
+        }
+        finally
+        {
+            _suppressHueSync = false;
+        }
+        // Refresh the value chips so the user sees the new percentage / K.
+        LblHueBrightness.Text   = ((int)SldHueBrightness.Value) + "%";
+        LblHueWarmthOffset.Text = FormatKelvinOffset((int)SldHueWarmthOffset.Value);
+    }
+
+    /// <summary>True while <see cref="SyncHueValuesFromHost"/> is loading
+    /// values into the Hue sliders. Used by the slider's ValueChanged
+    /// handlers (which would otherwise call PushSettings) to no-op
+    /// during the programmatic update.</summary>
+    private bool _suppressHueSync;
 
     /// <summary>v0.6.31: convert the Hue brightness slider's 0..100 user value
     /// into the bridge's native 1..254 range. We never emit 0 because the

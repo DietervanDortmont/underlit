@@ -1729,18 +1729,94 @@
                     <!-- EXCLUSIONS -->
                     <StackPanel x:Name="PageExclusions" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Exclusions"/>
-                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
-                                   Text="When any of these apps is focused, Underlit suspends its dimming. Enter process names without the .exe, one per line."/>
+                        <TextBlock Margin="0,0,0,16"
+                                   Foreground="{DynamicResource App.TextSecondary}"
+                                   FontSize="12"
+                                   TextWrapping="Wrap"
+                                   Text="Underlit pauses its dimming whenever any app on this list is in the foreground. Toggle a running app from the list, or add a custom name below."/>
+
+                        <!-- Currently-running apps with toggle switches. The list
+                             refreshes when the page is shown; the user can also
+                             pull the latest with the Refresh button at the bottom. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="RUNNING APPS"/>
+                        <Border Style="{StaticResource Card}" Padding="0">
+                            <StackPanel>
+                                <ItemsControl x:Name="LstRunningApps" Margin="6,8,6,4"
+                                              MaxHeight="320">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.Template>
+                                        <ControlTemplate TargetType="ItemsControl">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsPresenter/>
+                                            </ScrollViewer>
+                                        </ControlTemplate>
+                                    </ItemsControl.Template>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="10,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               Foreground="{DynamicResource App.TextPrimary}"
+                                                               FontSize="13"/>
+                                                    <TextBlock Text="{Binding ProcessName}"
+                                                               Foreground="{DynamicResource App.TextSecondary}"
+                                                               FontSize="11"/>
+                                                </StackPanel>
+                                                <CheckBox Grid.Column="1"
+                                                          Style="{StaticResource ToggleSwitch}"
+                                                          Margin="0,0,4,0"
+                                                          IsChecked="{Binding IsExcluded, Mode=TwoWay}"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}"
+                                               Text="Re-scan running apps"/>
+                                    <Button Grid.Column="1" x:Name="BtnRefreshRunningApps"
+                                            Margin="0,0,16,0"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Refresh"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Custom names: power-user textbox for apps the user
+                             wants to exclude even when they aren't currently
+                             running, or that don't appear in the list (services,
+                             hidden processes, etc.). One name per line, no
+                             extension. We auto-resolve them at runtime by
+                             matching against the foreground process's name. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="CUSTOM"/>
                         <Border Style="{StaticResource Card}" Padding="4">
-                            <TextBox x:Name="TxtExclusions"
-                                     Style="{StaticResource AppleTextBox}"
-                                     MinHeight="240"
-                                     HorizontalAlignment="Stretch"
-                                     Margin="0"
-                                     FontFamily="Cascadia Mono, Consolas"
-                                     AcceptsReturn="True"
-                                     VerticalScrollBarVisibility="Auto"
-                                     TextWrapping="NoWrap"/>
+                            <StackPanel>
+                                <TextBox x:Name="TxtExclusions"
+                                         Style="{StaticResource AppleTextBox}"
+                                         MinHeight="120"
+                                         HorizontalAlignment="Stretch"
+                                         Margin="0"
+                                         TextAlignment="Left"
+                                         HorizontalContentAlignment="Stretch"
+                                         FontFamily="Cascadia Mono, Consolas"
+                                         AcceptsReturn="True"
+                                         VerticalScrollBarVisibility="Auto"
+                                         TextWrapping="NoWrap"
+                                         ToolTip="One name per line. Leave off the .exe. We match against the foreground app's process name."/>
+                            </StackPanel>
                         </Border>
                     </StackPanel>
                 </Grid>

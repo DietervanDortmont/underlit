@@ -195,7 +195,45 @@ public sealed class UnderlitEngine : IDisposable
         CommitBrightnessChange();
     }
 
-    public void StepWarmth(int deltaKelvin) => SetWarmth(_targetWarmth + deltaKelvin);
+    /// <summary>
+    /// User's persistent kelvin offset on top of the schedule baseline.
+    /// v0.6.43: when the schedule is enabled and the user nudges warmth
+    /// via hotkey, we accumulate the delta here instead of overwriting
+    /// <c>_targetWarmth</c> outright. The next scheduler tick takes
+    /// <c>scheduleBaseline + _userWarmthOffset</c>, so the user's nudge
+    /// survives instead of being reset back to the schedule's value
+    /// every 30 s. Reset to 0 when the user toggles the schedule off
+    /// (manual mode owns warmth) or explicitly resets.
+    /// </summary>
+    private int _userWarmthOffset;
+
+    /// <summary>The most recent schedule baseline (without user offset),
+    /// captured by <see cref="ApplyScheduleBaselineWarmth"/>. Used by
+    /// <see cref="StepWarmth"/> so a hotkey press in scheduled mode
+    /// recomputes the displayed warmth as <c>baseline + offset</c>.</summary>
+    private int _scheduleBaseline = 6500;
+
+    public void StepWarmth(int deltaKelvin)
+    {
+        if (_settings.ScheduleEnabled)
+        {
+            // Schedule mode: hotkey shifts the OFFSET, not the absolute
+            // warmth. Compute new total = baseline + new offset, clamped
+            // to the legal range, then back-solve the offset that
+            // actually fits so we don't accumulate offsets we couldn't
+            // apply (would surprise the user later when the baseline
+            // moved).
+            int proposed = Math.Clamp(_scheduleBaseline + _userWarmthOffset + deltaKelvin, 1500, 6500);
+            _userWarmthOffset = proposed - _scheduleBaseline;
+            SetWarmth(proposed);
+        }
+        else
+        {
+            // Manual mode: hotkey moves the absolute warmth, no offset
+            // tracking (the user OWNS the warmth value).
+            SetWarmth(_targetWarmth + deltaKelvin);
+        }
+    }
 
     public void SetWarmth(int kelvin)
     {
@@ -204,6 +242,11 @@ public sealed class UnderlitEngine : IDisposable
         StartRamp();
         LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
     }
+
+    /// <summary>Reset the persistent user warmth offset to zero. Called
+    /// when the user disables the schedule (manual mode owns warmth) or
+    /// from a Settings reset.</summary>
+    public void ResetUserWarmthOffset() => _userWarmthOffset = 0;
 
     /// <summary>Toggle — jumps to max and back.</summary>
     public void Boost()
@@ -272,7 +315,19 @@ public sealed class UnderlitEngine : IDisposable
     }
 
     /// <summary>Scheduler baseline — warmth only now.</summary>
-    public void ApplyScheduleBaselineWarmth(int warmth) => SetWarmth(warmth);
+    /// <summary>
+    /// Scheduler tick callback. v0.6.43: respects
+    /// <see cref="_userWarmthOffset"/> so a hotkey nudge in scheduled
+    /// mode persists instead of being snapped back to the curve's
+    /// current-time value every 30 seconds. The screen settles to
+    /// <c>scheduleBaseline + userOffset</c>.
+    /// </summary>
+    public void ApplyScheduleBaselineWarmth(int warmth)
+    {
+        _scheduleBaseline = warmth;
+        int target = Math.Clamp(_scheduleBaseline + _userWarmthOffset, 1500, 6500);
+        SetWarmth(target);
+    }
 
     /// <summary>Fixed ramp duration used by <see cref="PreviewWarmth"/>,
     /// independent of the user's <see cref="AppSettings.RampDurationMs"/>

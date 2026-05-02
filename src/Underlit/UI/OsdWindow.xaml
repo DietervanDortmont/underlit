@@ -79,11 +79,17 @@
                 IsHitTestVisible="False"
                 Visibility="Collapsed">
             <Border.Effect>
+                <!-- v0.6.43: stronger shadow so the pill reads clearly on
+                     bright backgrounds (white / pale wallpapers). 0.30
+                     opacity disappeared on white; 0.55 + a wider blur
+                     gives a clean caustic-ish halo without making the pill
+                     look heavy on dark backdrops (the existing rim/spec
+                     highlights still dominate there). -->
                 <DropShadowEffect Color="#FF000000"
-                                  BlurRadius="18"
-                                  ShadowDepth="3"
+                                  BlurRadius="28"
+                                  ShadowDepth="6"
                                   Direction="270"
-                                  Opacity="0.30"/>
+                                  Opacity="0.55"/>
             </Border.Effect>
             <Border.Background>
                 <ImageBrush x:Name="GlassBackdropBrush" Stretch="Fill"/>

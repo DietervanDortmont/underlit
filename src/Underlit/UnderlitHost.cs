@@ -233,21 +233,25 @@ public sealed class UnderlitHost : IDisposable
             case "hueBrDown":
                 _settings.HueBrightness = Math.Clamp(_settings.HueBrightness - _settings.HueBrightnessStep, 1, 254);
                 _hueController?.UpdateSettings(_settings);
+                _settingsWindow?.SyncHueValuesFromHost(_settings);
                 break;
             case "hueBrUp":
                 _settings.HueBrightness = Math.Clamp(_settings.HueBrightness + _settings.HueBrightnessStep, 1, 254);
                 _hueController?.UpdateSettings(_settings);
+                _settingsWindow?.SyncHueValuesFromHost(_settings);
                 break;
             case "hueWrDown":
                 // "Down" = warmer (lower kelvin) — match the screen warmth convention.
                 _settings.HueWarmthOffsetKelvin = Math.Clamp(
                     _settings.HueWarmthOffsetKelvin - _settings.HueWarmthStep, -3000, 3000);
                 _hueController?.UpdateSettings(_settings);
+                _settingsWindow?.SyncHueValuesFromHost(_settings);
                 break;
             case "hueWrUp":
                 _settings.HueWarmthOffsetKelvin = Math.Clamp(
                     _settings.HueWarmthOffsetKelvin + _settings.HueWarmthStep, -3000, 3000);
                 _hueController?.UpdateSettings(_settings);
+                _settingsWindow?.SyncHueValuesFromHost(_settings);
                 break;
         }
     }
@@ -289,10 +293,19 @@ public sealed class UnderlitHost : IDisposable
 
     private void ApplySettings(AppSettings next)
     {
+        bool wasScheduled = _settings.ScheduleEnabled;
         _settings = next;
         _engine?.UpdateSettings(next);
         _scheduler?.UpdateSettings(next);
         if (next.ScheduleEnabled) _scheduler?.Start(); else _scheduler?.Stop();
+        // v0.6.43: when the user TURNS OFF the schedule, drop any
+        // accumulated warmth offset — manual mode owns the warmth
+        // outright from here on, so a stale offset would just cause a
+        // surprising jump if they later re-enabled the schedule.
+        if (wasScheduled && !next.ScheduleEnabled)
+        {
+            _engine?.ResetUserWarmthOffset();
+        }
         _syncPoller?.UpdateInterval(next.ExternalSyncPollMs);
         _hueController?.UpdateSettings(next);
 

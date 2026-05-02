@@ -37,7 +37,8 @@ public sealed class HueController : IDisposable
 
     private readonly object _lock = new();
     private bool _writeInFlight;
-    private (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range)? _pending;
+    private (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
+             string GradientCool, string GradientWarm)? _pending;
 
     public HueController(UnderlitEngine engine, AppSettings settings)
     {
@@ -71,7 +72,11 @@ public sealed class HueController : IDisposable
         int hueKelvin = Math.Clamp(screenKelvin + _settings.HueWarmthOffsetKelvin, 1500, 6500);
         int hueBri    = Math.Clamp(_settings.HueBrightness, 1, 254);
 
-        EnqueueWrite(hueKelvin, hueBri, _settings.HueSelectedGroupIds.ToList(), _settings.HueColorRange);
+        EnqueueWrite(hueKelvin, hueBri,
+                     _settings.HueSelectedGroupIds.ToList(),
+                     _settings.HueColorRange,
+                     _settings.HueGradientCoolColor ?? "#FFFFFFFF",
+                     _settings.HueGradientWarmColor ?? "#FFB00010");
     }
 
     private void OnEngineLevelChanged(double brightness, int warmth)
@@ -115,7 +120,8 @@ public sealed class HueController : IDisposable
     /// slider drag visibly tracks instead of feeling like a laggy fade.</summary>
     private const int SnappyTransitionDeciseconds = 1;
 
-    private void EnqueueWrite(int kelvin, int bri, List<string> groups, HueColorRangeMode range)
+    private void EnqueueWrite(int kelvin, int bri, List<string> groups, HueColorRangeMode range,
+                                string gradientCool, string gradientWarm)
     {
         bool kickoff;
         lock (_lock)
@@ -124,7 +130,7 @@ public sealed class HueController : IDisposable
             // by the freshest one. The worker only ever picks up the most
             // recent state, so a flurry of hotkey presses converges to the
             // last value rather than playing each intermediate frame.
-            _pending = (kelvin, bri, groups, range);
+            _pending = (kelvin, bri, groups, range, gradientCool, gradientWarm);
             kickoff = !_writeInFlight;
             if (kickoff) _writeInFlight = true;
         }
@@ -134,7 +140,8 @@ public sealed class HueController : IDisposable
         {
             while (true)
             {
-                (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range) work;
+                (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
+                 string GradientCool, string GradientWarm) work;
                 HueBridgeClient? client;
                 lock (_lock)
                 {
@@ -178,13 +185,14 @@ public sealed class HueController : IDisposable
     /// </summary>
     private static async Task PushColourState(
         HueBridgeClient client,
-        (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range) work)
+        (int Kelvin, int Brightness, List<string> Groups, HueColorRangeMode Range,
+         string GradientCool, string GradientWarm) work)
     {
         var writes = new List<Task>(work.Groups.Count);
 
         if (work.Range == HueColorRangeMode.WhiteToRed)
         {
-            (double x, double y) = WhiteToRedXY(work.Kelvin);
+            (double x, double y) = GradientXY(work.Kelvin, work.GradientCool, work.GradientWarm);
             foreach (var groupId in work.Groups)
             {
                 writes.Add(WriteGroupColorSafeAsync(client, groupId, x, y,
@@ -212,23 +220,60 @@ public sealed class HueController : IDisposable
     }
 
     /// <summary>
-    /// Lerp CIE 1931 xy between D65 white (kelvin 6500) and deep red
-    /// (kelvin 1500). Linear interpolation in xy is good enough for an
-    /// ambient effect; perceptual gradient roughly matches what users
-    /// expect from "warm goes red".
+    /// v0.6.45: gradient between user-pickable cool and warm endpoints.
+    /// Both endpoints are sRGB hex strings ("#AARRGGBB"). At kelvin=6500
+    /// the bulb sits at the cool endpoint; at kelvin=1500 it sits at
+    /// the warm endpoint; linear lerp in CIE xy in between. Hue Bridge
+    /// accepts xy directly so we don't fight the bulb's colour gamut.
     /// </summary>
-    private static (double x, double y) WhiteToRedXY(int kelvin)
+    private static (double x, double y) GradientXY(int kelvin, string coolHex, string warmHex)
     {
-        double t = (Math.Clamp(kelvin, 1500, 6500) - 1500) / 5000.0;  // 0=red, 1=white
-        // D65 white point — the bulb's "neutral" colour.
-        const double xWhite = 0.3128, yWhite = 0.3290;
-        // Deep red, near-monochromatic ~700 nm. Inside Hue's sRGB-ish gamut
-        // so the bridge accepts it without major re-mapping.
-        const double xRed   = 0.6750, yRed   = 0.3220;
-        double x = xRed + (xWhite - xRed) * t;
-        double y = yRed + (yWhite - yRed) * t;
+        double t = (Math.Clamp(kelvin, 1500, 6500) - 1500) / 5000.0;  // 0 = warm, 1 = cool
+        var (xc, yc) = HexToXy(coolHex, fallback: (0.3128, 0.3290));  // D65 default
+        var (xw, yw) = HexToXy(warmHex, fallback: (0.6750, 0.3220));  // deep red default
+        double x = xw + (xc - xw) * t;
+        double y = yw + (yc - yw) * t;
         return (x, y);
     }
+
+    /// <summary>Parse a "#AARRGGBB" hex string and return its CIE 1931
+    /// xy chromaticity. Falls back if the parse fails.</summary>
+    private static (double x, double y) HexToXy(string hex, (double x, double y) fallback)
+    {
+        if (string.IsNullOrEmpty(hex) || hex[0] != '#') return fallback;
+        try
+        {
+            // Skip alpha if present.
+            int off = hex.Length == 9 ? 3 : 1;
+            byte r = Convert.ToByte(hex.Substring(off, 2), 16);
+            byte g = Convert.ToByte(hex.Substring(off + 2, 2), 16);
+            byte b = Convert.ToByte(hex.Substring(off + 4, 2), 16);
+            return SrgbToXy(r, g, b);
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    /// <summary>sRGB to CIE 1931 xy via the standard sRGB → linear → XYZ
+    /// pipeline. Used to map the user's picked colour swatch to a Hue
+    /// Bridge xy command.</summary>
+    private static (double x, double y) SrgbToXy(byte r, byte g, byte b)
+    {
+        double rL = SrgbDecode(r / 255.0);
+        double gL = SrgbDecode(g / 255.0);
+        double bL = SrgbDecode(b / 255.0);
+        double X = 0.4124 * rL + 0.3576 * gL + 0.1805 * bL;
+        double Y = 0.2126 * rL + 0.7152 * gL + 0.0722 * bL;
+        double Z = 0.0193 * rL + 0.1192 * gL + 0.9505 * bL;
+        double sum = X + Y + Z;
+        if (sum < 1e-9) return (0.3128, 0.3290);
+        return (X / sum, Y / sum);
+    }
+
+    private static double SrgbDecode(double c) =>
+        c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
 
     private static async Task WriteGroupCtSafeAsync(HueBridgeClient client, string groupId,
                                                       int mireds, int brightness,

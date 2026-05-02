@@ -326,8 +326,54 @@ public sealed class UnderlitEngine : IDisposable
     {
         _scheduleBaseline = warmth;
         int target = Math.Clamp(_scheduleBaseline + _userWarmthOffset, 1500, 6500);
-        SetWarmth(target);
+        // v0.6.45: schedule baseline transitions use a long, dedicated
+        // ramp so the eye doesn't notice the per-tick warmth shift. The
+        // user's RampDurationMs setting is used for hotkey-driven
+        // transitions where they ARE expected to see the change.
+        _targetWarmth = target;
+        _settings.WarmthKelvin = _targetWarmth;
+        StartRampWithDuration(ScheduleRampDurationMs);
+        LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
     }
+
+    /// <summary>Long, gentle ramp duration used by schedule baseline
+    /// transitions. Five seconds is shorter than the 30 s scheduler tick
+    /// (so the screen settles long before the next tick) but long enough
+    /// that the colour shift reads as gradual rather than a discrete
+    /// jump every 30 s.</summary>
+    private const int ScheduleRampDurationMs = 5000;
+
+    /// <summary>Start a ramp using a caller-specified duration instead
+    /// of <see cref="AppSettings.RampDurationMs"/>. Used for schedule
+    /// baseline transitions, which want a long fade independent of the
+    /// user's hotkey ramp setting.</summary>
+    private void StartRampWithDuration(int durationMs)
+    {
+        if (durationMs <= 10)
+        {
+            _currentSignedLevel = _targetSignedLevel;
+            _currentWarmthRendered = _targetWarmth;
+            ApplySoftwareNow();
+            return;
+        }
+        _rampStartLevel  = _currentSignedLevel;
+        _rampStartWarmth = _currentWarmthRendered;
+        _rampStart       = DateTime.UtcNow;
+        _isPreviewRamping = false;
+        _explicitRampDurationMs = durationMs;
+        if (_rampTimer == null)
+        {
+            _rampTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(50),
+                DispatcherPriority.Render, OnRampTick, _dispatcher);
+        }
+        _rampTimer.Start();
+    }
+
+    /// <summary>If non-zero, OnRampTick uses this duration instead of
+    /// <see cref="AppSettings.RampDurationMs"/>. Set by
+    /// <see cref="StartRampWithDuration"/>; cleared once the ramp
+    /// completes.</summary>
+    private int _explicitRampDurationMs;
 
     /// <summary>Fixed ramp duration used by <see cref="PreviewWarmth"/>,
     /// independent of the user's <see cref="AppSettings.RampDurationMs"/>
@@ -439,12 +485,17 @@ public sealed class UnderlitEngine : IDisposable
     private void OnRampTick(object? sender, EventArgs e)
     {
         var elapsed = (DateTime.UtcNow - _rampStart).TotalMilliseconds;
-        // Preview ramps use a fixed short duration so drag-tracking stays
-        // responsive even when the user has set a long schedule-ramp
-        // duration in settings.
-        int durationMs = _isPreviewRamping
-            ? PreviewRampMs
-            : Math.Max(1, _settings.RampDurationMs);
+        // Three duration sources, in priority:
+        //  1. Schedule baseline ramp (long, ~5 s) sets _explicitRampDurationMs.
+        //  2. Drag preview (short, ~90 ms) sets _isPreviewRamping.
+        //  3. Default — user's hotkey RampDurationMs setting.
+        int durationMs;
+        if (_explicitRampDurationMs > 0)
+            durationMs = _explicitRampDurationMs;
+        else if (_isPreviewRamping)
+            durationMs = PreviewRampMs;
+        else
+            durationMs = Math.Max(1, _settings.RampDurationMs);
         var t = Math.Clamp(elapsed / durationMs, 0, 1);
         t = 1 - (1 - t) * (1 - t); // ease-out quad
 
@@ -457,6 +508,7 @@ public sealed class UnderlitEngine : IDisposable
         {
             _rampTimer?.Stop();
             _isPreviewRamping = false;
+            _explicitRampDurationMs = 0;
         }
     }
 

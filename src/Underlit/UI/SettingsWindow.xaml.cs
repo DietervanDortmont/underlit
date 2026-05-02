@@ -155,6 +155,12 @@ public partial class SettingsWindow : Window
         SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
         BtnResetMonitors.Click += OnResetAllMonitorOffsets;
 
+        // v0.6.45: chip drag + double-click. Each chip carries its
+        // associated slider via a Tag set in WireValueChipDragAndEdit
+        // so the handler knows which slider to nudge.
+        WireValueChipDragAndEdit(LblMonBr, SldMonBrOffset, scalePerPixel: 0.20);
+        WireValueChipDragAndEdit(LblMonWr, SldMonWrOffset, scalePerPixel: 8.0);
+
         BtnPickAccent.Click += OnPickAccent;
         BtnPickTint.Click   += OnPickTint;
         BtnPickHighColor.Click  += OnPickHighColor;
@@ -227,6 +233,12 @@ public partial class SettingsWindow : Window
         };
         foreach (var tb in new[] { TxtBedtimeStart, TxtBedtime, TxtWakeupStart, TxtWakeTime })
             tb.LostFocus += (_, _) => RedrawScheduleGraph();
+
+        // v0.6.45: when the user edits Bedtime or WakeTime on the
+        // Recommended profile, the derived ramp-onset times need to
+        // refresh in their (read-only) text boxes too.
+        TxtBedtime.LostFocus  += (_, _) => RefreshDerivedTimesIfBuiltIn();
+        TxtWakeTime.LostFocus += (_, _) => RefreshDerivedTimesIfBuiltIn();
 
         // Graph drag — the four anchor points (BedtimeStart, BedtimeEnd,
         // WakeupStart, WakeupEnd) are click-and-drag editable. PreviewMouse*
@@ -533,6 +545,9 @@ public partial class SettingsWindow : Window
             r["App.TrackBg"]       = Brush(0x26FFFFFF);
             r["App.InputBg"]       = Brush(0xFF2C2C2F);
             r["App.ToggleTrackOff"]= Brush(0x33FFFFFF);
+            // Buttons stand out by being lighter than the dark surface.
+            r["App.ButtonBg"]      = Brush(0xFFE5E5EA);
+            r["App.ButtonFg"]      = Brush(0xFF1A1A1C);
         }
         else
         {
@@ -549,6 +564,9 @@ public partial class SettingsWindow : Window
             r["App.TrackBg"]       = Brush(0x1A000000);
             r["App.InputBg"]       = Brush(0xFFFFFFFF);
             r["App.ToggleTrackOff"]= Brush(0x29000000);
+            // Buttons stand out by being darker than the light surface.
+            r["App.ButtonBg"]      = Brush(0xFF1A1A1C);
+            r["App.ButtonFg"]      = Brush(0xFFFFFFFF);
         }
     }
 
@@ -760,16 +778,19 @@ public partial class SettingsWindow : Window
             pts.Add(new Point(x, y));
         }
 
-        // v0.6.42: theme-aware curve stroke. White-on-white was invisible
-        // when the settings window switched to the light palette.
-        var curveBrush = (Brush?)TryFindResource("App.TextPrimary")
-                         ?? new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+        // v0.6.45: dark-orange curve. Reads as "warmth" against the cool-
+        // to-warm gradient backdrop and is visible in both light and dark
+        // mode without depending on theme primary text colour.
+        var curveBrush = new SolidColorBrush(Color.FromRgb(0xCC, 0x5A, 0x10));
+        curveBrush.Freeze();
         var line = new System.Windows.Shapes.Polyline
         {
             Points = pts,
             Stroke = curveBrush,
-            StrokeThickness = 2.4,
+            StrokeThickness = 2.6,
             StrokeLineJoin = PenLineJoin.Round,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap   = PenLineCap.Round,
         };
         ScheduleGraph.Children.Add(line);
 
@@ -780,18 +801,35 @@ public partial class SettingsWindow : Window
         DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, curveLeft, curveTop, curveW, curveH);
         DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   curveLeft, curveTop, curveW, curveH);
 
-        // "Now" indicator — a vertical line at the current time so the user can
-        // read off "what kelvin am I targeting right now" at a glance.
+        // "Now" indicator — a vertical accent line at the current time so
+        // the user can read off "what kelvin am I targeting right now"
+        // at a glance. v0.6.45: bumped from a faint white dotted line to
+        // the app accent colour, thicker, and with a label so it reads
+        // clearly in both light and dark mode.
         DateTime now = DateTime.Now;
         double nowX = curveLeft + (now.Hour + now.Minute / 60.0) / 24.0 * curveW;
+        var nowAccent = (Brush?)TryFindResource("App.Accent")
+                        ?? new SolidColorBrush(Color.FromRgb(0x60, 0xCD, 0xFF));
         var nowLine = new System.Windows.Shapes.Line
         {
             X1 = nowX, Y1 = curveTop, X2 = nowX, Y2 = curveTop + curveH,
-            Stroke = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)),
-            StrokeThickness = 1.5,
-            StrokeDashArray = new System.Windows.Media.DoubleCollection(new[] { 3.0, 3.0 }),
+            Stroke = nowAccent,
+            StrokeThickness = 2.0,
+            StrokeDashArray = new System.Windows.Media.DoubleCollection(new[] { 4.0, 3.0 }),
         };
         ScheduleGraph.Children.Add(nowLine);
+
+        var nowLabel = new TextBlock
+        {
+            Text = "now",
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = nowAccent,
+        };
+        nowLabel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(nowLabel, Math.Max(0, Math.Min(w - nowLabel.DesiredSize.Width, nowX + 4)));
+        Canvas.SetTop(nowLabel, Math.Max(0, curveTop - 1));
+        ScheduleGraph.Children.Add(nowLabel);
     }
 
     /// <summary>Render one of the four draggable anchor markers at (timeOfDay, kelvin).
@@ -939,19 +977,22 @@ public partial class SettingsWindow : Window
         kelvin = Math.Clamp(kelvin, 1500, 6500);
 
         var p = _snapshot.ActiveProfile();
-        // v0.6.36: the built-in "Recommended" profile is locked on kelvin —
-        // the curated 6500/2700 K shape is the whole point of the preset.
-        // Vertical drag still moves the visual dot during the gesture (so
-        // the user gets feedback), but the kelvin write is skipped, so the
-        // dot snaps back to its locked y position on release. Times are
-        // freely editable via either text fields or horizontal drag.
+        // v0.6.45: built-in "Recommended" profile is fully science-locked.
+        // Only Bedtime, WakeTime, and the night-warmth slider are user-
+        // editable. Drag on BedtimeStart / WakeupStart anchors is a no-op
+        // (their times are derived from Bedtime/WakeTime ± science offsets
+        // in SaveFieldsIntoActiveProfile). Drag on BedtimeEnd / WakeupEnd
+        // updates the time only — kelvins stay at their curated values.
         bool locked = p.IsBuiltIn;
         switch (id)
         {
             case SchedulePointId.BedtimeStart:
-                p.BedtimeStart       = t;
-                if (!locked) p.BedtimeStartKelvin = kelvin;
-                TxtBedtimeStart.Text = Fmt(t);
+                if (!locked)
+                {
+                    p.BedtimeStart       = t;
+                    p.BedtimeStartKelvin = kelvin;
+                    TxtBedtimeStart.Text = Fmt(t);
+                }
                 break;
             case SchedulePointId.BedtimeEnd:
                 p.Bedtime       = t;
@@ -969,14 +1010,13 @@ public partial class SettingsWindow : Window
                 TxtBedtime.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupStart:
-                p.WakeupStart       = t;
                 if (!locked)
                 {
-                    // Mirror of the BedtimeEnd case — see comment there.
+                    p.WakeupStart       = t;
                     p.WakeupStartKelvin = kelvin;
                     p.BedtimeKelvin     = kelvin;
+                    TxtWakeupStart.Text = Fmt(t);
                 }
-                TxtWakeupStart.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupEnd:
                 p.WakeTime       = t;
@@ -1073,21 +1113,79 @@ public partial class SettingsWindow : Window
         {
             int idx = Math.Max(0, CboHueColorRange.SelectedIndex);
             _snapshot.HueColorRange = (HueColorRangeMode)idx;
+            UpdateHueGradientPanelVisibility();
             PushSettings();
         };
+
+        // v0.6.45: gradient endpoint pickers, only shown when Custom
+        // gradient mode is selected. Click a swatch to open a colour
+        // picker; the resulting hex is stored on _snapshot and pushed.
+        BtnHueGradientCool.Click += (_, _) => PickHueGradientEndpoint(isCool: true);
+        BtnHueGradientWarm.Click += (_, _) => PickHueGradientEndpoint(isCool: false);
 
         // Initial state.
         if (!string.IsNullOrEmpty(_snapshot.HueBridgeIp) && !string.IsNullOrEmpty(_snapshot.HueBridgeUsername))
         {
             _hueClient = new HueBridgeClient(_snapshot.HueBridgeIp!, _snapshot.HueBridgeUsername);
             CboHueColorRange.SelectedIndex = (int)_snapshot.HueColorRange;
+            UpdateHueGradientPanelVisibility();
             SetHueUiState(HueUiState.Connected);
             _ = LoadHueGroupsAsync();
         }
         else
         {
+            UpdateHueGradientPanelVisibility();
             SetHueUiState(HueUiState.Disconnected);
         }
+    }
+
+    /// <summary>v0.6.45: show the gradient-endpoint picker row only when
+    /// Custom gradient mode is selected. Also refresh the swatch fills
+    /// from the saved hex strings.</summary>
+    private void UpdateHueGradientPanelVisibility()
+    {
+        bool show = _snapshot.HueColorRange == HueColorRangeMode.WhiteToRed;
+        HueGradientPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        HueGradientRow.Visibility   = show ? Visibility.Visible : Visibility.Collapsed;
+        HueGradientCoolSwatch.Background = HexToBrush(_snapshot.HueGradientCoolColor, fallback: Color.FromRgb(0xFF, 0xFF, 0xFF));
+        HueGradientWarmSwatch.Background = HexToBrush(_snapshot.HueGradientWarmColor, fallback: Color.FromRgb(0xB0, 0x00, 0x10));
+    }
+
+    private static Brush HexToBrush(string? hex, Color fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(hex))
+        {
+            try
+            {
+                var c = (Color)ColorConverter.ConvertFromString(hex);
+                return new SolidColorBrush(c);
+            }
+            catch { /* fall through */ }
+        }
+        return new SolidColorBrush(fallback);
+    }
+
+    /// <summary>Open a colour picker pre-filled with the current
+    /// gradient endpoint, save the result back to settings, and push.</summary>
+    private void PickHueGradientEndpoint(bool isCool)
+    {
+        string current = isCool ? _snapshot.HueGradientCoolColor : _snapshot.HueGradientWarmColor;
+        Color seed;
+        try { seed = (Color)ColorConverter.ConvertFromString(current); }
+        catch { seed = isCool ? Color.FromRgb(0xFF, 0xFF, 0xFF) : Color.FromRgb(0xB0, 0x00, 0x10); }
+
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+            Color = System.Drawing.Color.FromArgb(seed.R, seed.G, seed.B),
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        string hex = $"#FF{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
+        if (isCool) _snapshot.HueGradientCoolColor = hex;
+        else        _snapshot.HueGradientWarmColor = hex;
+        UpdateHueGradientPanelVisibility();
+        PushSettings();
     }
 
     private void SetHueUiState(HueUiState s)
@@ -1393,6 +1491,13 @@ public partial class SettingsWindow : Window
         TxtWakeupStart.Text  = Fmt(active.WakeupStart);
         TxtWakeTime.Text     = Fmt(active.WakeTime);
 
+        // v0.6.45: built-in Recommended is science-locked on the ramp
+        // onsets — disable the text fields so the user can't try to
+        // edit them. The fields stay visible (greyed) so the user sees
+        // the derived values for reference.
+        TxtBedtimeStart.IsEnabled = !active.IsBuiltIn;
+        TxtWakeupStart.IsEnabled  = !active.IsBuiltIn;
+
         // Programmatic slider update — the handler gates the per-anchor
         // write on _nightSliderUserActive / IsKeyboardFocusWithin, both of
         // which are false here, so nothing gets stomped.
@@ -1410,10 +1515,180 @@ public partial class SettingsWindow : Window
     {
         var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
         if (active == null) return;
-        active.BedtimeStart = ParseTime(TxtBedtimeStart.Text, active.BedtimeStart);
-        active.Bedtime      = ParseTime(TxtBedtime.Text,      active.Bedtime);
-        active.WakeupStart  = ParseTime(TxtWakeupStart.Text,  active.WakeupStart);
-        active.WakeTime     = ParseTime(TxtWakeTime.Text,     active.WakeTime);
+        active.Bedtime  = ParseTime(TxtBedtime.Text,  active.Bedtime);
+        active.WakeTime = ParseTime(TxtWakeTime.Text, active.WakeTime);
+
+        if (active.IsBuiltIn)
+        {
+            // v0.6.45: Recommended profile is science-locked on the ramp
+            // onsets. Bedtime/WakeTime drive the curve shape; the user's
+            // typed onset values (if they typed any) are ignored here so
+            // the curated 2.5h / 0.75h offsets are always preserved.
+            active.BedtimeStart = ShiftHours(active.Bedtime,  -2.5);
+            active.WakeupStart  = ShiftHours(active.WakeTime, -0.75);
+            active.BedtimeStartKelvin = 6500;
+            active.WakeTimeKelvin     = 6500;
+            int deep = Math.Clamp(active.NightWarmthKelvin, 1500, 6500);
+            active.BedtimeKelvin     = deep;
+            active.WakeupStartKelvin = deep;
+        }
+        else
+        {
+            active.BedtimeStart = ParseTime(TxtBedtimeStart.Text, active.BedtimeStart);
+            active.WakeupStart  = ParseTime(TxtWakeupStart.Text,  active.WakeupStart);
+        }
+    }
+
+    /// <summary>
+    /// v0.6.45: make a value-chip TextBlock draggable to adjust its
+    /// associated slider, and double-clickable to type a value
+    /// directly. The chip stays a TextBlock for layout simplicity; on
+    /// double-click we overlay an in-place TextBox in the same Grid
+    /// cell, focus it, and commit on Enter / LostFocus.
+    /// </summary>
+    private void WireValueChipDragAndEdit(TextBlock chip, Slider slider, double scalePerPixel)
+    {
+        Point dragOrigin = default;
+        double dragStartValue = 0;
+        bool dragging = false;
+
+        chip.MouseLeftButtonDown += (s, e) =>
+        {
+            if (e.ClickCount >= 2) return;  // double-click handled separately
+            dragOrigin = e.GetPosition(this);
+            dragStartValue = slider.Value;
+            dragging = true;
+            chip.CaptureMouse();
+            e.Handled = true;
+        };
+        chip.MouseMove += (s, e) =>
+        {
+            if (!dragging) return;
+            double dx = e.GetPosition(this).X - dragOrigin.X;
+            double newValue = dragStartValue + dx * scalePerPixel;
+            // The slider has Minimum/Maximum/IsSnapToTickEnabled set;
+            // assigning Value lets WPF coerce + round for us.
+            slider.Value = newValue;
+        };
+        chip.MouseLeftButtonUp += (s, e) =>
+        {
+            if (!dragging) return;
+            dragging = false;
+            chip.ReleaseMouseCapture();
+            e.Handled = true;
+        };
+        chip.MouseDoubleClick += (s, e) =>
+        {
+            BeginValueChipEdit(chip, slider);
+            e.Handled = true;
+        };
+    }
+
+    /// <summary>Show an inline TextBox over the chip, pre-filled with the
+    /// current slider value, focus it, and commit on Enter or
+    /// LostFocus. Escape cancels.</summary>
+    private void BeginValueChipEdit(TextBlock chip, Slider slider)
+    {
+        if (chip.Parent is not Grid parent) return;
+
+        var editor = new TextBox
+        {
+            Text = ((int)Math.Round(slider.Value)).ToString(),
+            Style = (Style?)TryFindResource("AppleTextBox"),
+            Margin = chip.Margin,
+            Width = Math.Max(72, chip.ActualWidth + 12),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(editor, Grid.GetColumn(chip));
+        Grid.SetColumnSpan(editor, Grid.GetColumnSpan(chip));
+        Grid.SetRow(editor, Grid.GetRow(chip));
+
+        chip.Visibility = Visibility.Collapsed;
+        parent.Children.Add(editor);
+        editor.Focus();
+        editor.SelectAll();
+
+        void Close(bool commit)
+        {
+            if (commit && double.TryParse(editor.Text.Trim(),
+                System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowThousands,
+                System.Globalization.CultureInfo.CurrentCulture, out var parsed))
+            {
+                slider.Value = parsed;
+            }
+            parent.Children.Remove(editor);
+            chip.Visibility = Visibility.Visible;
+        }
+
+        editor.KeyDown += (s, e) =>
+        {
+            if (e.Key == Key.Enter)  { Close(commit: true);  e.Handled = true; }
+            if (e.Key == Key.Escape) { Close(commit: false); e.Handled = true; }
+        };
+        editor.LostFocus += (s, e) => Close(commit: true);
+    }
+
+    /// <summary>
+    /// v0.6.45: dampen mouse-wheel scrolling on the settings panes so a
+    /// trackpad's high-frequency low-delta wheel events don't fling the
+    /// page or the running-apps list. Default WPF treats every wheel
+    /// event as ~3 lines of scroll regardless of delta magnitude;
+    /// trackpads can fire 30+ events per second on a fast swipe, which
+    /// reads as "twitchy". We override with a delta-proportional offset
+    /// so trackpad inertia translates to a soft, mouse-comparable scroll.
+    /// </summary>
+    private void OnSmoothScroll(object sender, MouseWheelEventArgs e)
+    {
+        ScrollViewer? sv = sender as ScrollViewer;
+        if (sv == null && sender is DependencyObject d)
+        {
+            // The handler may be attached to a child of the ScrollViewer
+            // that owns the wheel routing. Walk up.
+            for (var p = d; p != null; p = VisualTreeHelper.GetParent(p))
+            {
+                if (p is ScrollViewer match) { sv = match; break; }
+            }
+        }
+        if (sv == null) return;
+
+        // 0.35 was tuned by hand against an Apple-style trackpad — a
+        // deliberate swipe scrolls the visible card area in roughly two
+        // seconds, which feels controlled rather than flicked.
+        double delta = e.Delta * 0.35;
+        sv.ScrollToVerticalOffset(sv.VerticalOffset - delta);
+        e.Handled = true;
+    }
+
+    /// <summary>v0.6.45: when the active profile is built-in (Recommended),
+    /// the BedtimeStart and WakeupStart text fields show derived values
+    /// (Bedtime - 2.5h, WakeTime - 0.75h). After the user edits Bedtime
+    /// or WakeTime those derived fields are stale, so re-render them
+    /// from the active profile. No-op for custom profiles.</summary>
+    private void RefreshDerivedTimesIfBuiltIn()
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null || !active.IsBuiltIn) return;
+        active.Bedtime  = ParseTime(TxtBedtime.Text,  active.Bedtime);
+        active.WakeTime = ParseTime(TxtWakeTime.Text, active.WakeTime);
+        active.BedtimeStart = ShiftHours(active.Bedtime,  -2.5);
+        active.WakeupStart  = ShiftHours(active.WakeTime, -0.75);
+        TxtBedtimeStart.Text = Fmt(active.BedtimeStart);
+        TxtWakeupStart.Text  = Fmt(active.WakeupStart);
+    }
+
+    /// <summary>Shift a TimeOfDay by a fractional number of hours, wrapping
+    /// across midnight. Mirror of <c>AppSettings.ShiftHours</c>; duplicated
+    /// here so the settings UI doesn't need to expose the private helper.</summary>
+    private static TimeOfDay ShiftHours(TimeOfDay t, double hours)
+    {
+        double h = t.AsHourFractional + hours;
+        while (h < 0)  h += 24;
+        while (h >= 24) h -= 24;
+        int hh = (int)Math.Floor(h);
+        int mm = (int)Math.Round((h - hh) * 60);
+        if (mm >= 60) { hh = (hh + 1) % 24; mm = 0; }
+        return new TimeOfDay(hh, mm);
     }
 
     private void OnProfileSelectionChanged(object sender, SelectionChangedEventArgs e)

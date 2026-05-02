@@ -249,23 +249,26 @@ public partial class HotkeyField : UserControl
             KbdGlyph.Visibility    = Visibility.Visible;
             ClearButton.Visibility = Visibility.Collapsed;
             FadeAccentRing(toOpacity: 1.0);
-            FieldBorder.BorderBrush = (Brush?)TryFindResource("App.CardBg")
-                                     ?? new SolidColorBrush(Color.FromArgb(0, 0, 0, 0));
+            // Border disappears (matches card bg) so the accent ring
+            // takes over the visual outline during listening.
+            FieldBorder.SetResourceReference(Border.BorderBrushProperty, "App.CardBg");
         }
         else
         {
             HintText.Visibility    = Visibility.Collapsed;
             KbdGlyph.Visibility    = Visibility.Collapsed;
             FadeAccentRing(toOpacity: 0.0);
-            FieldBorder.BorderBrush = (Brush?)TryFindResource("App.CardBorder")
-                                     ?? new SolidColorBrush(Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
+            FieldBorder.SetResourceReference(Border.BorderBrushProperty, "App.CardBorder");
 
             if (string.IsNullOrEmpty(Value))
             {
                 ValueText.Visibility   = Visibility.Visible;
                 ValueText.Text         = "(none, click to set)";
-                ValueText.Foreground   = (Brush?)TryFindResource("App.TextSecondary")
-                                        ?? Brushes.Gray;
+                // v0.6.45: SetResourceReference instead of TryFindResource
+                // so the foreground tracks theme changes (Windows
+                // dark/light flip) live, instead of being snapshotted to
+                // whichever brush was current at last UpdateVisuals call.
+                ValueText.SetResourceReference(TextBlock.ForegroundProperty, "App.TextSecondary");
                 ValueText.FontStyle    = FontStyles.Italic;
                 ClearButton.Visibility = Visibility.Collapsed;
             }
@@ -273,8 +276,7 @@ public partial class HotkeyField : UserControl
             {
                 ValueText.Visibility   = Visibility.Visible;
                 ValueText.Text         = Value;
-                ValueText.Foreground   = (Brush?)TryFindResource("App.TextPrimary")
-                                        ?? Brushes.White;
+                ValueText.SetResourceReference(TextBlock.ForegroundProperty, "App.TextPrimary");
                 ValueText.FontStyle    = FontStyles.Normal;
                 ClearButton.Visibility = Visibility.Visible;
             }

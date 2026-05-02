@@ -624,26 +624,26 @@
         </Style>
 
         <!-- ===== Pill action button =====
-             For visible buttons like Unpair / Refresh / Test / Discover.
-             Subtle pill shape, faint border, fills with a soft accent on
-             hover and presses with a slightly darker version. Distinctly
-             buttony without the chunky default WPF chrome. -->
+             v0.6.45: shorter (5 px vertical padding), high-contrast
+             background (App.ButtonBg = dark in light mode, light in dark
+             mode), no border, hover = scale-up bounce only (no colour
+             shift / no border highlight). Reads as a real button against
+             the surrounding card without the chunky WPF default chrome. -->
         <Style x:Key="PillButton" TargetType="Button">
-            <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
-            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="16,7"/>
+            <Setter Property="Background" Value="{DynamicResource App.ButtonBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.ButtonFg}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="14,5"/>
             <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Bd"
-                                CornerRadius="14"
+                                CornerRadius="10"
                                 Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
+                                BorderThickness="0"
                                 Padding="{TemplateBinding Padding}"
                                 RenderTransformOrigin="0.5,0.5">
                             <Border.RenderTransform>
@@ -654,8 +654,38 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.HoverBg}"/>
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource App.Accent}"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1.04" Duration="0:0:0.16">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1.04" Duration="0:0:0.16">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.14"/>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.14"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Trigger.EnterActions>
@@ -670,18 +700,6 @@
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard>
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="Scale"
-                                                             Storyboard.TargetProperty="ScaleX"
-                                                             To="1" Duration="0:0:0.12"/>
-                                            <DoubleAnimation Storyboard.TargetName="Scale"
-                                                             Storyboard.TargetProperty="ScaleY"
-                                                             To="1" Duration="0:0:0.12"/>
-                                        </Storyboard>
-                                    </BeginStoryboard>
-                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Bd" Property="Opacity" Value="0.4"/>
@@ -733,8 +751,10 @@
 
         <!-- Content -->
         <Grid Grid.Column="1">
-            <ScrollViewer VerticalScrollBarVisibility="Auto"
+            <ScrollViewer x:Name="MainContentScrollViewer"
+                          VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
+                          PreviewMouseWheel="OnSmoothScroll"
                           Padding="32,28,32,32">
                 <Grid>
                     <!-- GENERAL -->
@@ -1566,9 +1586,44 @@
                                     <ComboBox Grid.Column="1" x:Name="CboHueColorRange"
                                               Margin="0,0,14,0" MinWidth="160" VerticalAlignment="Center">
                                         <ComboBoxItem Content="Circadian (recommended)"/>
-                                        <ComboBoxItem Content="White → red"/>
+                                        <ComboBoxItem Content="Custom gradient"/>
                                         <ComboBoxItem Content="Warm white only"/>
                                     </ComboBox>
+                                </Grid>
+                                <!-- v0.6.45: gradient endpoints, only visible when
+                                     "Custom gradient" is selected. Click a swatch to pick. -->
+                                <Border x:Name="HueGradientPanel"
+                                        Style="{StaticResource RowDivider}"
+                                        Visibility="Collapsed"/>
+                                <Grid x:Name="HueGradientRow"
+                                      Style="{StaticResource Row}"
+                                      Visibility="Collapsed">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Gradient endpoints"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="The lights smoothly transition from the cool colour at neutral daytime warmth (6500 K) to the warm colour at the deepest evening warmth (1500 K). Click a swatch to change it."/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnHueGradientCool"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource IconButton}"
+                                            ToolTip="Cool end (daytime). Default: white.">
+                                        <Border x:Name="HueGradientCoolSwatch"
+                                                Width="36" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                    </Button>
+                                    <Button Grid.Column="2" x:Name="BtnHueGradientWarm"
+                                            Margin="0,0,14,0"
+                                            Style="{StaticResource IconButton}"
+                                            ToolTip="Warm end (deep evening). Default: deep red.">
+                                        <Border x:Name="HueGradientWarmSwatch"
+                                                Width="36" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                    </Button>
                                 </Grid>
                             </Border>
 
@@ -1678,9 +1733,9 @@
                                                 </Setter>
                                             </Style>
                                         </GridView.ColumnHeaderContainerStyle>
-                                        <GridViewColumn Header="Display" Width="280" DisplayMemberBinding="{Binding DeviceName}"/>
-                                        <GridViewColumn Header="Brightness offset" Width="160" DisplayMemberBinding="{Binding BrightnessOffset, StringFormat={}{0:+0;-0;0}}"/>
-                                        <GridViewColumn Header="Warmth offset (K)" Width="160" DisplayMemberBinding="{Binding WarmthOffset, StringFormat={}{0:+0;-0;0} K}"/>
+                                        <GridViewColumn Header="Display" Width="220" DisplayMemberBinding="{Binding DeviceName}"/>
+                                        <GridViewColumn Header="Brightness" Width="120" DisplayMemberBinding="{Binding BrightnessOffset, StringFormat={}{0:+0;-0;0}}"/>
+                                        <GridViewColumn Header="Warmth (K)" Width="120" DisplayMemberBinding="{Binding WarmthOffset, StringFormat={}{0:+0;-0;0} K}"/>
                                     </GridView>
                                 </ListView.View>
                             </ListView>
@@ -1697,7 +1752,9 @@
                                             Minimum="-50" Maximum="50"
                                             TickFrequency="1"
                                             IsSnapToTickEnabled="True"/>
-                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonBr"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonBr"
+                                               Cursor="SizeWE"
+                                               ToolTip="Drag horizontally to adjust. Double-click to type a value."/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
@@ -1709,7 +1766,9 @@
                                             Minimum="-2000" Maximum="0"
                                             TickFrequency="50"
                                             IsSnapToTickEnabled="True"/>
-                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonWr"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonWr"
+                                               Cursor="SizeWE"
+                                               ToolTip="Drag horizontally to adjust. Double-click to type a value."/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
@@ -1751,7 +1810,8 @@
                                     <ItemsControl.Template>
                                         <ControlTemplate TargetType="ItemsControl">
                                             <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                                          HorizontalScrollBarVisibility="Disabled">
+                                                          HorizontalScrollBarVisibility="Disabled"
+                                                          PreviewMouseWheel="OnSmoothScroll">
                                                 <ItemsPresenter/>
                                             </ScrollViewer>
                                         </ControlTemplate>

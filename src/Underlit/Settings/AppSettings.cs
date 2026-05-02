@@ -230,6 +230,14 @@ public sealed class AppSettings
     /// stronger evening cues.</summary>
     public HueColorRangeMode HueColorRange { get; set; } = HueColorRangeMode.Circadian;
 
+    /// <summary>v0.6.45: gradient endpoints for the WhiteToRed color range.
+    /// Stored as ARGB hex strings; defaults match the previous hard-coded
+    /// behaviour (D65 white at 6500 K, deep red at 1500 K). Users can pick
+    /// their own endpoints from the Lights settings page when WhiteToRed
+    /// is selected.</summary>
+    public string HueGradientCoolColor { get; set; } = "#FFFFFFFF";
+    public string HueGradientWarmColor { get; set; } = "#FFB00010";
+
     /// <summary>Hue brightness in the bridge's native 1..254 range. Independent
     /// from the screen brightness — the user adjusts it via the Lights slider
     /// or the dedicated Hue brightness hotkeys.</summary>
@@ -344,6 +352,24 @@ public sealed class AppSettings
         {
             if (p.BedtimeStart == default) p.BedtimeStart = ShiftHours(p.Bedtime, -2.5);
             if (p.WakeupStart  == default) p.WakeupStart  = ShiftHours(p.WakeTime, -0.75);
+
+            // v0.6.45: the built-in Recommended profile is fully science-
+            // locked. The ONLY user-editable fields are Bedtime, WakeTime,
+            // and NightWarmthKelvin. The ramp onset times and per-anchor
+            // kelvins are always derived from those three so the curve
+            // shape is the curated circadian one regardless of any drift
+            // from earlier versions or hand-edits to settings.json.
+            if (p.IsBuiltIn)
+            {
+                p.BedtimeStart        = ShiftHours(p.Bedtime,  -2.5);
+                p.WakeupStart         = ShiftHours(p.WakeTime, -0.75);
+                p.BedtimeStartKelvin  = 6500;
+                p.WakeTimeKelvin      = 6500;
+                int deepClamped = Math.Clamp(p.NightWarmthKelvin, 1500, 6500);
+                p.BedtimeKelvin       = deepClamped;
+                p.WakeupStartKelvin   = deepClamped;
+                p.NightWarmthKelvin   = deepClamped;
+            }
 
             // Per-point kelvin migration (v0.6.24 → v0.6.25).
             // Older profiles only had NightWarmthKelvin; the four per-anchor

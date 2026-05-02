@@ -35,6 +35,7 @@ public sealed class UnderlitHost : IDisposable
     private SettingsWindow? _settingsWindow;
     private ForegroundAppWatcher? _fgWatcher;
     private BrightnessSyncPoller? _syncPoller;
+    private Underlit.Hue.HueController? _hueController;
 
     public UnderlitHost()
     {
@@ -65,6 +66,11 @@ public sealed class UnderlitHost : IDisposable
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
         _engine.LevelChanged += OnEngineLevelChanged;
         _engine.RefreshDisplays(DisplayManager.Enumerate());
+
+        // Philips Hue controller — listens to engine.LevelChanged and pushes the
+        // screen warmth (+ user offset, +/- boost handling) to the user's
+        // selected Hue groups. Only does anything once a bridge is paired.
+        _hueController = new Underlit.Hue.HueController(_engine, _settings);
 
         // Mouse-drag from the OSD: the OSD raises BrightnessSetRequested with a
         // signed level (-100..+100) computed from the mouse X position; the engine
@@ -218,6 +224,30 @@ public sealed class UnderlitHost : IDisposable
                 _engine.TogglePaused();
                 _osd?.ShowPaused(_engine.Paused);
                 break;
+
+            // ---- Hue-specific (Phase 3+) ----
+            // These adjust the Hue settings only — the screen state is unchanged.
+            // After the setting tweak we PushNow() so the bridge update doesn't
+            // wait for the next engine LevelChanged.
+            case "hueBrDown":
+                _settings.HueBrightness = Math.Clamp(_settings.HueBrightness - _settings.HueBrightnessStep, 1, 254);
+                _hueController?.UpdateSettings(_settings);
+                break;
+            case "hueBrUp":
+                _settings.HueBrightness = Math.Clamp(_settings.HueBrightness + _settings.HueBrightnessStep, 1, 254);
+                _hueController?.UpdateSettings(_settings);
+                break;
+            case "hueWrDown":
+                // "Down" = warmer (lower kelvin) — match the screen warmth convention.
+                _settings.HueWarmthOffsetKelvin = Math.Clamp(
+                    _settings.HueWarmthOffsetKelvin - _settings.HueWarmthStep, -3000, 3000);
+                _hueController?.UpdateSettings(_settings);
+                break;
+            case "hueWrUp":
+                _settings.HueWarmthOffsetKelvin = Math.Clamp(
+                    _settings.HueWarmthOffsetKelvin + _settings.HueWarmthStep, -3000, 3000);
+                _hueController?.UpdateSettings(_settings);
+                break;
         }
     }
 
@@ -263,6 +293,7 @@ public sealed class UnderlitHost : IDisposable
         _scheduler?.UpdateSettings(next);
         if (next.ScheduleEnabled) _scheduler?.Start(); else _scheduler?.Stop();
         _syncPoller?.UpdateInterval(next.ExternalSyncPollMs);
+        _hueController?.UpdateSettings(next);
 
         // Hotkey re-registration
         if (_hotkeys != null) RegisterAllHotkeys();
@@ -345,6 +376,12 @@ public sealed class UnderlitHost : IDisposable
         TryRegister("brUp",   _settings.HotkeyBrightnessUp,   allowRepeat: true);
         TryRegister("wrDown", _settings.HotkeyWarmthDown,     allowRepeat: true);
         TryRegister("wrUp",   _settings.HotkeyWarmthUp,       allowRepeat: true);
+        // Hue-specific hotkeys — adjust HueBrightness or HueWarmthOffsetKelvin
+        // independently of the screen.
+        TryRegister("hueBrDown", _settings.HotkeyHueBrightnessDown, allowRepeat: true);
+        TryRegister("hueBrUp",   _settings.HotkeyHueBrightnessUp,   allowRepeat: true);
+        TryRegister("hueWrDown", _settings.HotkeyHueWarmthDown,     allowRepeat: true);
+        TryRegister("hueWrUp",   _settings.HotkeyHueWarmthUp,       allowRepeat: true);
         // Toggles must NOT repeat — a second fire within ~500 ms flips the state back, undoing the user's press.
         TryRegister("boost",  _settings.HotkeyBoost,          allowRepeat: false);
         TryRegister("toggle", _settings.HotkeyToggle,         allowRepeat: false);
@@ -374,6 +411,7 @@ public sealed class UnderlitHost : IDisposable
         _hotkeys?.Dispose();
         _tray?.Dispose();
         _scheduler?.Dispose();
+        _hueController?.Dispose();
         _engine?.Dispose();
         _overlays.Dispose();
         _gamma.Dispose();      // restores original gamma ramps

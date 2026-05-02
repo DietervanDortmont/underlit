@@ -616,6 +616,38 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Style="{StaticResource CardCaption}" Text="PHILIPS HUE"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Hue brightness down"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkHueBrDown" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Hue brightness up"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkHueBrUp" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Hue warmer"/>
+                                        <TextBlock Style="{StaticResource RowHint}" Text="Subtracts from the warmth offset (lights drift toward warmer)."/>
+                                    </StackPanel>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkHueWrDown" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Hue cooler"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkHueWrUp" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Style="{StaticResource CardCaption}" Text="OTHER"/>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -984,6 +1016,52 @@
                                         <ComboBoxItem Content="Warm white only"/>
                                     </ComboBox>
                                 </Grid>
+                            </Border>
+
+                            <TextBlock Style="{StaticResource CardCaption}" Text="ADJUSTMENT"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource RowLabel}" Text="Brightness"/>
+                                            <TextBlock Style="{StaticResource RowHint}"
+                                                       Text="How bright the selected groups should be. Independent of screen brightness."/>
+                                        </StackPanel>
+                                        <Slider Grid.Column="1" x:Name="SldHueBrightness" Style="{StaticResource AppleSlider}"
+                                                Minimum="1" Maximum="254" TickFrequency="10"/>
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblHueBrightness"/>
+                                    </Grid>
+                                    <Border Style="{StaticResource RowDivider}"/>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource RowLabel}" Text="Warmth offset (K)"/>
+                                            <TextBlock Style="{StaticResource RowHint}"
+                                                       Text="Added to the screen's warmth. Negative = warmer than the screen, positive = cooler."/>
+                                        </StackPanel>
+                                        <Slider Grid.Column="1" x:Name="SldHueWarmthOffset" Style="{StaticResource AppleSlider}"
+                                                Minimum="-3000" Maximum="3000" TickFrequency="100"/>
+                                        <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblHueWarmthOffset"/>
+                                    </Grid>
+                                    <Border Style="{StaticResource RowDivider}"/>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Style="{StaticResource RowLabel}" Text="Ignore screen warmth boost"/>
+                                            <TextBlock Style="{StaticResource RowHint}"
+                                                       Text="When you boost the screen to neutral white temporarily (focus mode), don't blast Hue lights to white too. Recommended on."/>
+                                        </StackPanel>
+                                        <CheckBox Grid.Column="1" x:Name="ChkHueIgnoreBoost" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
                     </StackPanel>

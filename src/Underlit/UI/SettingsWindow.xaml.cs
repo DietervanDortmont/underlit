@@ -95,10 +95,19 @@ public partial class SettingsWindow : Window
         }
         // HotkeyField raises ValueChanged whenever the user captures, clears, or
         // commits a new binding via the listen-to-bind UI. Bridge straight to PushSettings.
-        foreach (var hk in new HotkeyField[] { TxtHkBrDown, TxtHkBrUp, TxtHkWrDown, TxtHkWrUp, TxtHkBoost, TxtHkToggle })
+        foreach (var hk in new HotkeyField[] {
+            TxtHkBrDown, TxtHkBrUp, TxtHkWrDown, TxtHkWrUp, TxtHkBoost, TxtHkToggle,
+            TxtHkHueBrDown, TxtHkHueBrUp, TxtHkHueWrDown, TxtHkHueWrUp })
         {
             hk.ValueChanged += _ => PushSettings();
         }
+
+        // Hue brightness/warmth-offset sliders push settings live (so the
+        // HueController in UnderlitHost picks up the new values immediately).
+        SldHueBrightness.ValueChanged   += (_, _) => { LblHueBrightness.Text   = ((int)SldHueBrightness.Value).ToString(); PushSettings(); };
+        SldHueWarmthOffset.ValueChanged += (_, _) => { LblHueWarmthOffset.Text = FormatKelvinOffset((int)SldHueWarmthOffset.Value); PushSettings(); };
+        ChkHueIgnoreBoost.Checked   += (_, _) => PushSettings();
+        ChkHueIgnoreBoost.Unchecked += (_, _) => PushSettings();
 
         LstMonitors.SelectionChanged += OnMonitorSelected;
         SldMonBrOffset.ValueChanged += OnMonitorOffsetChanged;
@@ -1274,6 +1283,17 @@ public partial class SettingsWindow : Window
         TxtHkBoost.Value  = _snapshot.HotkeyBoost          ?? string.Empty;
         TxtHkToggle.Value = _snapshot.HotkeyToggle         ?? string.Empty;
 
+        // Hue Phase 3: brightness slider, warmth-offset slider, ignore-boost toggle, four hotkeys.
+        SldHueBrightness.Value          = _snapshot.HueBrightness;
+        SldHueWarmthOffset.Value        = _snapshot.HueWarmthOffsetKelvin;
+        ChkHueIgnoreBoost.IsChecked     = _snapshot.HueIgnoreBoost;
+        LblHueBrightness.Text           = ((int)SldHueBrightness.Value).ToString();
+        LblHueWarmthOffset.Text         = FormatKelvinOffset((int)SldHueWarmthOffset.Value);
+        TxtHkHueBrDown.Value = _snapshot.HotkeyHueBrightnessDown ?? string.Empty;
+        TxtHkHueBrUp.Value   = _snapshot.HotkeyHueBrightnessUp   ?? string.Empty;
+        TxtHkHueWrDown.Value = _snapshot.HotkeyHueWarmthDown     ?? string.Empty;
+        TxtHkHueWrUp.Value   = _snapshot.HotkeyHueWarmthUp       ?? string.Empty;
+
         // Bedtime + wake time are now per-profile. Make sure the profile list is
         // initialised, then populate the dropdown and the active profile's fields.
         _snapshot.EnsureProfilesInitialized();
@@ -1323,6 +1343,16 @@ public partial class SettingsWindow : Window
 
     private static string Fmt(TimeOfDay t) => $"{t.Hour:D2}:{t.Minute:D2}";
 
+    /// <summary>Format a kelvin offset (positive or negative integer) for the
+    /// Hue warmth-offset value chip. "0 K" for neutral, "+500 K" for cooler,
+    /// "-1200 K" for warmer.</summary>
+    private static string FormatKelvinOffset(int k) => k switch
+    {
+        0   => "0 K",
+        > 0 => $"+{k} K",
+        _   => $"{k} K",
+    };
+
     private static TimeOfDay ParseTime(string? s, TimeOfDay fallback)
     {
         if (string.IsNullOrWhiteSpace(s)) return fallback;
@@ -1370,6 +1400,15 @@ public partial class SettingsWindow : Window
         _snapshot.HotkeyWarmthUp       = TxtHkWrUp.Value.Trim();
         _snapshot.HotkeyBoost          = TxtHkBoost.Value.Trim();
         _snapshot.HotkeyToggle         = TxtHkToggle.Value.Trim();
+
+        // Hue Phase 3: live-pushed sliders + ignore-boost toggle + four hotkeys.
+        _snapshot.HueBrightness            = (int)SldHueBrightness.Value;
+        _snapshot.HueWarmthOffsetKelvin    = (int)SldHueWarmthOffset.Value;
+        _snapshot.HueIgnoreBoost           = ChkHueIgnoreBoost.IsChecked == true;
+        _snapshot.HotkeyHueBrightnessDown  = TxtHkHueBrDown.Value.Trim();
+        _snapshot.HotkeyHueBrightnessUp    = TxtHkHueBrUp.Value.Trim();
+        _snapshot.HotkeyHueWarmthDown      = TxtHkHueWrDown.Value.Trim();
+        _snapshot.HotkeyHueWarmthUp        = TxtHkHueWrUp.Value.Trim();
 
         // Bedtime/wake go to the active profile, then we mirror them to the
         // top-level Bedtime/WakeTime fields and re-derive the legacy ramp window

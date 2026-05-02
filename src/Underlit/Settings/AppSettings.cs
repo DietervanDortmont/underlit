@@ -222,6 +222,34 @@ public sealed class AppSettings
     /// stronger evening cues.</summary>
     public HueColorRangeMode HueColorRange { get; set; } = HueColorRangeMode.Circadian;
 
+    /// <summary>Hue brightness in the bridge's native 1..254 range. Independent
+    /// from the screen brightness — the user adjusts it via the Lights slider
+    /// or the dedicated Hue brightness hotkeys.</summary>
+    public int HueBrightness { get; set; } = 200;
+
+    /// <summary>Kelvin offset added to the screen's current warmth before
+    /// sending to Hue. Negative = Hue warmer than screen; positive = cooler.
+    /// Useful for "screen at neutral, lamps slightly warmer" workflows.</summary>
+    public int HueWarmthOffsetKelvin { get; set; } = 0;
+
+    /// <summary>When true, Hue ignores temporary boost (when the screen jumps
+    /// to full neutral white) so the room lights don't flash bright every
+    /// time the user presses Boost. Default true — matches the user's stated
+    /// preference. They can opt in to "follow boost" by turning it off.</summary>
+    public bool HueIgnoreBoost { get; set; } = true;
+
+    public string HotkeyHueBrightnessDown { get; set; } = "";
+    public string HotkeyHueBrightnessUp   { get; set; } = "";
+    public string HotkeyHueWarmthDown     { get; set; } = "";
+    public string HotkeyHueWarmthUp       { get; set; } = "";
+
+    /// <summary>How much HueBrightness changes per hotkey press (1..254 range,
+    /// default 25 ≈ 10% per press). Independent of the screen brightness step.</summary>
+    public int HueBrightnessStep { get; set; } = 25;
+    /// <summary>How much HueWarmthOffsetKelvin changes per hotkey press.
+    /// Defaults to 200 K to match the screen warmth step.</summary>
+    public int HueWarmthStep { get; set; } = 200;
+
     // ---- Schedule helpers ----
 
     /// <summary>

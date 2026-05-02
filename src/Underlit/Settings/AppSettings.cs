@@ -155,13 +155,104 @@ public sealed class AppSettings
     // ---- Schedule (optional baseline curve) ----
 
     public bool ScheduleEnabled { get; set; } = false;
-    public TimeOfDay BedtimeStart { get; set; } = new(21, 30);  // starts warming at 9:30pm
-    public TimeOfDay BedtimeEnd   { get; set; } = new(23, 30);  // reaches the night warmth floor by 11:30pm
-    public TimeOfDay WakeupStart  { get; set; } = new(6, 30);   // starts un-warming at 6:30am
-    public TimeOfDay WakeupEnd    { get; set; } = new(8, 00);   // fully neutral by 8am
+
+    /// <summary>
+    /// New (v0.6.23) simplified schedule input — the user gives us the two
+    /// times that matter: when they go to bed and when they wake up. The
+    /// circadian-derived ramp shapes (BedtimeStart, BedtimeEnd, WakeupStart,
+    /// WakeupEnd below) are computed from these two values plus a typical
+    /// physiology model. The legacy four-field set is kept derivable so
+    /// <see cref="Underlit.Core.Scheduler.ComputeWarmth"/> keeps working
+    /// unchanged.
+    /// </summary>
+    public TimeOfDay Bedtime  { get; set; } = new(23, 30);
+    public TimeOfDay WakeTime { get; set; } = new(7, 30);
+
+    /// <summary>
+    /// Named warmth schedule profiles. One built-in "Recommended" profile is
+    /// guaranteed; the user can add more (e.g. "Weekday", "Weekend") via the
+    /// + button in Settings. Each profile holds its own Bedtime/WakeTime/Night
+    /// values so swapping profiles instantly retargets the schedule curve.
+    /// <see cref="ActiveProfileName"/> selects which one is in effect.
+    /// </summary>
+    public List<WarmthProfile> WarmthProfiles { get; set; } = new();
+    public string ActiveProfileName { get; set; } = "Recommended";
+
+    // Legacy 4-field schedule curve. Derived from Bedtime/WakeTime via
+    // EnsureScheduleCurveDerived(); persisted for back-compat with existing
+    // settings.json files and to keep Scheduler.ComputeWarmth's logic intact.
+    public TimeOfDay BedtimeStart { get; set; } = new(21, 0);   // bed - 2.5 h
+    public TimeOfDay BedtimeEnd   { get; set; } = new(23, 30);  // == Bedtime
+    public TimeOfDay WakeupStart  { get; set; } = new(6, 45);   // wake - 0.75 h
+    public TimeOfDay WakeupEnd    { get; set; } = new(7, 30);   // == WakeTime
     /// <summary>Night-floor warmth in K. Brightness is intentionally NOT on a schedule —
     /// sudden brightness changes during the day felt disorienting.</summary>
-    public int NightWarmthKelvin { get; set; } = 3400;
+    public int NightWarmthKelvin { get; set; } = 2700;
+
+    // ---- Schedule helpers ----
+
+    /// <summary>
+    /// Recompute the legacy four-field ramp window from Bedtime/WakeTime using
+    /// the same circadian-physiology model the "Apply" preset used:
+    ///   • BedtimeEnd   = Bedtime
+    ///   • BedtimeStart = Bedtime − 2.5 h   (start of evening ramp)
+    ///   • WakeupEnd    = WakeTime
+    ///   • WakeupStart  = WakeTime − 0.75 h (start of morning ramp)
+    /// All wrap around midnight via mod 24. Call this whenever Bedtime,
+    /// WakeTime, or the active profile changes.
+    /// </summary>
+    public void EnsureScheduleCurveDerived()
+    {
+        BedtimeEnd   = Bedtime;
+        BedtimeStart = ShiftHours(Bedtime, -2.5);
+        WakeupEnd    = WakeTime;
+        WakeupStart  = ShiftHours(WakeTime, -0.75);
+    }
+
+    private static TimeOfDay ShiftHours(TimeOfDay t, double hours)
+    {
+        double h = t.AsHourFractional + hours;
+        while (h < 0)  h += 24;
+        while (h >= 24) h -= 24;
+        int hh = (int)Math.Floor(h);
+        int mm = (int)Math.Round((h - hh) * 60);
+        if (mm >= 60) { hh = (hh + 1) % 24; mm = 0; }
+        return new TimeOfDay(hh, mm);
+    }
+
+    /// <summary>
+    /// Make sure the profile list contains the built-in "Recommended" entry and
+    /// that <see cref="ActiveProfileName"/> resolves to a profile that exists.
+    /// Safe to call repeatedly — idempotent.
+    /// </summary>
+    public void EnsureProfilesInitialized()
+    {
+        if (WarmthProfiles.Count == 0
+            || !WarmthProfiles.Any(p => p.IsBuiltIn && p.Name == "Recommended"))
+        {
+            WarmthProfiles.Insert(0, new WarmthProfile
+            {
+                Name = "Recommended",
+                IsBuiltIn = true,
+                Bedtime  = new TimeOfDay(23, 30),
+                WakeTime = new TimeOfDay(7, 30),
+                NightWarmthKelvin = 2700,
+            });
+        }
+
+        if (string.IsNullOrEmpty(ActiveProfileName)
+            || WarmthProfiles.All(p => p.Name != ActiveProfileName))
+        {
+            ActiveProfileName = WarmthProfiles[0].Name;
+        }
+    }
+
+    /// <summary>The currently-active profile, never null after EnsureProfilesInitialized.</summary>
+    public WarmthProfile ActiveProfile()
+    {
+        EnsureProfilesInitialized();
+        return WarmthProfiles.First(p => p.Name == ActiveProfileName);
+    }
 
     // ---- Per-monitor offsets ----
 
@@ -197,14 +288,34 @@ public sealed class AppSettings
             {
                 var json = File.ReadAllText(SettingsPath);
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, _jsonOpts);
-                if (loaded != null) return loaded;
+                if (loaded != null)
+                {
+                    // Migration v0.6.22 → v0.6.23: pre-upgrade settings only stored
+                    // the legacy four-field ramp window (BedtimeStart/End,
+                    // WakeupStart/End). The new model exposes Bedtime + WakeTime
+                    // as the user-facing inputs and derives the ramp from them.
+                    // If the legacy fields disagree with the (initializer-default)
+                    // new fields, treat that as a sign the user customised their
+                    // schedule and migrate Bedtime ← BedtimeEnd, WakeTime ← WakeupEnd.
+                    if (Math.Abs(loaded.Bedtime.AsHourFractional - loaded.BedtimeEnd.AsHourFractional) > 0.01)
+                        loaded.Bedtime = loaded.BedtimeEnd;
+                    if (Math.Abs(loaded.WakeTime.AsHourFractional - loaded.WakeupEnd.AsHourFractional) > 0.01)
+                        loaded.WakeTime = loaded.WakeupEnd;
+
+                    loaded.EnsureProfilesInitialized();
+                    loaded.EnsureScheduleCurveDerived();
+                    return loaded;
+                }
             }
         }
         catch (Exception ex)
         {
             Logger.Warn("Settings load failed, using defaults", ex);
         }
-        return new AppSettings();
+        var fresh = new AppSettings();
+        fresh.EnsureProfilesInitialized();
+        fresh.EnsureScheduleCurveDerived();
+        return fresh;
     }
 
     public void Save()
@@ -230,6 +341,30 @@ public sealed class PerMonitor
 public readonly record struct TimeOfDay(int Hour, int Minute)
 {
     public double AsHourFractional => Hour + Minute / 60.0;
+}
+
+/// <summary>
+/// A named warmth-schedule profile. The user picks one from the dropdown in
+/// Settings → Schedule; that profile's Bedtime/WakeTime/NightK gets pushed to
+/// the active <see cref="AppSettings"/> fields and the curve is recomputed.
+///
+/// "Recommended" is a built-in profile that ships with the app and can't be
+/// deleted (only modified). Subsequent profiles are user-added — clones from
+/// whichever profile was active when the user clicked the + button.
+/// </summary>
+public sealed class WarmthProfile
+{
+    public string Name { get; set; } = "Profile";
+    public TimeOfDay Bedtime  { get; set; } = new(23, 30);
+    public TimeOfDay WakeTime { get; set; } = new(7, 30);
+    public int NightWarmthKelvin { get; set; } = 2700;
+
+    /// <summary>
+    /// True for the "Recommended" preset that ships with the app — it can't be
+    /// deleted via the − button. The user can still modify its values; if they
+    /// ever want a clean slate they can clone it (+) and reset.
+    /// </summary>
+    public bool IsBuiltIn { get; set; }
 }
 
 public enum TransparencyMode

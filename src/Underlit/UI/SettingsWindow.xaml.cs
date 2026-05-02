@@ -77,7 +77,7 @@ public partial class SettingsWindow : Window
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
         // Schedule/exclusion textboxes still commit on lost-focus.
-        foreach (var tb in new TextBox[] { TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd, TxtExclusions })
+        foreach (var tb in new TextBox[] { TxtBedtime, TxtWakeTime, TxtExclusions })
         {
             tb.LostFocus += (_, _) => PushSettings();
         }
@@ -96,7 +96,12 @@ public partial class SettingsWindow : Window
         BtnPickTint.Click   += OnPickTint;
         BtnPickHighColor.Click  += OnPickHighColor;
         BtnResetHighColor.Click += OnResetHighColor;
-        BtnApplyCircadian.Click += OnApplyCircadian;
+
+        // Profile management buttons.
+        BtnAddProfile.Click    += OnAddProfile;
+        BtnRemoveProfile.Click += OnRemoveProfile;
+        BtnRenameProfile.Click += OnRenameProfile;
+        CboProfile.SelectionChanged += OnProfileSelectionChanged;
 
         // Schedule graph redraws on any input that changes the curve. We hook
         // these in addition to the existing PushSettings hooks so the redraw is
@@ -105,7 +110,7 @@ public partial class SettingsWindow : Window
         ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
         SldNightWarmth.ValueChanged += (_, _) => RedrawScheduleGraph();
-        foreach (var tb in new[] { TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd })
+        foreach (var tb in new[] { TxtBedtime, TxtWakeTime })
             tb.LostFocus += (_, _) => RedrawScheduleGraph();
         CboTransparency.SelectionChanged += (_, _) =>
         {
@@ -509,44 +514,17 @@ public partial class SettingsWindow : Window
 
     /// <summary>Build a transient AppSettings from the schedule UI fields so the
     /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>
-    private AppSettings SnapshotForSchedule() => new()
+    private AppSettings SnapshotForSchedule()
     {
-        BedtimeStart = ParseTime(TxtBedStart.Text, _snapshot.BedtimeStart),
-        BedtimeEnd   = ParseTime(TxtBedEnd.Text,   _snapshot.BedtimeEnd),
-        WakeupStart  = ParseTime(TxtWakeStart.Text, _snapshot.WakeupStart),
-        WakeupEnd    = ParseTime(TxtWakeEnd.Text,   _snapshot.WakeupEnd),
-        NightWarmthKelvin = (int)SldNightWarmth.Value,
-        ScheduleEnabled   = true,  // graph always shows the curve as if active
-    };
-
-    /// <summary>
-    /// Apply a circadian-physiology default schedule derived from the user's wake time:
-    ///   • WakeupEnd     — kept (the user's wake time, the anchor).
-    ///   • WakeupStart   — wake − 45 min (start neutralising warmth before fully awake).
-    ///   • BedtimeEnd    — wake + 14h (deep-warmth phase aligns with melatonin onset
-    ///                     for a typical 8-hour sleep).
-    ///   • BedtimeStart  — bedEnd − 2.5h (gentle 2.5h ramp into deep warmth).
-    ///   • NightK        — 2700 K (a calmer warm than the previous 3400 default; in
-    ///                     line with circadian-friendly evening light recommendations).
-    /// All times wrap around midnight via mod 24. Doesn't touch the user's actual
-    /// wake time — we read whatever's currently in TxtWakeEnd.
-    /// </summary>
-    private void OnApplyCircadian(object sender, RoutedEventArgs e)
-    {
-        var wake = ParseTime(TxtWakeEnd.Text, _snapshot.WakeupEnd);
-        double wakeH = wake.AsHourFractional;
-        double wakeStartH = (wakeH - 0.75 + 24) % 24;
-        double bedEndH    = (wakeH + 14)        % 24;
-        double bedStartH  = (bedEndH - 2.5 + 24) % 24;
-
-        TxtWakeStart.Text = ToHHMM(wakeStartH);
-        TxtBedEnd.Text    = ToHHMM(bedEndH);
-        TxtBedStart.Text  = ToHHMM(bedStartH);
-        SldNightWarmth.Value = 2700;
-
-        PushSettings();
-        UpdateAllValueChips();
-        RedrawScheduleGraph();
+        var s = new AppSettings
+        {
+            Bedtime  = ParseTime(TxtBedtime.Text,  _snapshot.Bedtime),
+            WakeTime = ParseTime(TxtWakeTime.Text, _snapshot.WakeTime),
+            NightWarmthKelvin = (int)SldNightWarmth.Value,
+            ScheduleEnabled   = true,  // graph always shows the curve as if active
+        };
+        s.EnsureScheduleCurveDerived();  // populate the legacy 4-field window from Bedtime/WakeTime
+        return s;
     }
 
     private static string ToHHMM(double hours)
@@ -555,6 +533,146 @@ public partial class SettingsWindow : Window
         int min  = (int)Math.Round((hours - hour) * 60);
         if (min >= 60) { hour = (hour + 1) % 24; min = 0; }
         return $"{hour:D2}:{min:D2}";
+    }
+
+    // ---- Profile management ----
+
+    private bool _suppressProfileSelectionEvents;
+
+    /// <summary>Repopulate the profile dropdown from <c>_snapshot.WarmthProfiles</c>.
+    /// Keeps the active selection on whichever profile name matches
+    /// <c>_snapshot.ActiveProfileName</c>. Fires no SelectionChanged events
+    /// while we're rebuilding (suppression flag).</summary>
+    private void RefreshProfileDropdown()
+    {
+        _suppressProfileSelectionEvents = true;
+        try
+        {
+            CboProfile.Items.Clear();
+            foreach (var p in _snapshot.WarmthProfiles)
+            {
+                CboProfile.Items.Add(new ComboBoxItem { Content = p.Name, Tag = p.Name });
+            }
+            // Restore active selection.
+            for (int i = 0; i < CboProfile.Items.Count; i++)
+            {
+                if (((ComboBoxItem)CboProfile.Items[i]!).Tag is string n && n == _snapshot.ActiveProfileName)
+                {
+                    CboProfile.SelectedIndex = i;
+                    break;
+                }
+            }
+            // The − button is disabled for the built-in "Recommended" profile.
+            var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+            BtnRemoveProfile.IsEnabled = active != null && !active.IsBuiltIn;
+        }
+        finally
+        {
+            _suppressProfileSelectionEvents = false;
+        }
+    }
+
+    /// <summary>Mirror the active profile's Bedtime/WakeTime/NightK into the UI
+    /// fields, so when the user picks a different profile the inputs reflect it.</summary>
+    private void LoadActiveProfileIntoFields()
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null) return;
+        TxtBedtime.Text   = Fmt(active.Bedtime);
+        TxtWakeTime.Text  = Fmt(active.WakeTime);
+        SldNightWarmth.Value = active.NightWarmthKelvin;
+    }
+
+    /// <summary>Push the current UI field values back into the active profile
+    /// object, so user edits to Bedtime/WakeTime/NightK persist with that profile.</summary>
+    private void SaveFieldsIntoActiveProfile()
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null) return;
+        active.Bedtime  = ParseTime(TxtBedtime.Text,  active.Bedtime);
+        active.WakeTime = ParseTime(TxtWakeTime.Text, active.WakeTime);
+        active.NightWarmthKelvin = (int)SldNightWarmth.Value;
+    }
+
+    private void OnProfileSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressProfileSelectionEvents) return;
+        if (CboProfile.SelectedItem is not ComboBoxItem item) return;
+        if (item.Tag is not string newName) return;
+        // Save current field values into the OLD active profile before switching.
+        SaveFieldsIntoActiveProfile();
+        _snapshot.ActiveProfileName = newName;
+        LoadActiveProfileIntoFields();
+        UpdateAllValueChips();
+        RefreshProfileDropdown();   // refresh − button enable state
+        PushSettings();
+        RedrawScheduleGraph();
+    }
+
+    private void OnAddProfile(object sender, RoutedEventArgs e)
+    {
+        // Clone the current active profile so the user starts from familiar values.
+        var src = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName)
+                  ?? _snapshot.WarmthProfiles[0];
+        // Find a non-colliding name.
+        string baseName = "My profile";
+        string name = baseName;
+        for (int i = 2; _snapshot.WarmthProfiles.Any(p => p.Name == name); i++)
+            name = $"{baseName} {i}";
+
+        SaveFieldsIntoActiveProfile();   // freeze in any pending edits to the previous profile
+        _snapshot.WarmthProfiles.Add(new WarmthProfile
+        {
+            Name = name,
+            IsBuiltIn = false,
+            Bedtime = src.Bedtime,
+            WakeTime = src.WakeTime,
+            NightWarmthKelvin = src.NightWarmthKelvin,
+        });
+        _snapshot.ActiveProfileName = name;
+        RefreshProfileDropdown();
+        LoadActiveProfileIntoFields();
+        UpdateAllValueChips();
+        PushSettings();
+        RedrawScheduleGraph();
+
+        // Immediately drop the user into rename mode so they can name the profile.
+        OnRenameProfile(this, new RoutedEventArgs());
+    }
+
+    private void OnRemoveProfile(object sender, RoutedEventArgs e)
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null || active.IsBuiltIn) return;   // can't delete the recommended preset
+
+        _snapshot.WarmthProfiles.Remove(active);
+        _snapshot.ActiveProfileName = _snapshot.WarmthProfiles[0].Name;
+        RefreshProfileDropdown();
+        LoadActiveProfileIntoFields();
+        UpdateAllValueChips();
+        PushSettings();
+        RedrawScheduleGraph();
+    }
+
+    private void OnRenameProfile(object sender, RoutedEventArgs e)
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null) return;
+
+        // Lightweight in-place rename — a small input prompt window.
+        var dlg = new ProfileRenameDialog(active.Name, _snapshot.WarmthProfiles
+            .Where(p => p != active).Select(p => p.Name))
+        {
+            Owner = this,
+        };
+        if (dlg.ShowDialog() != true) return;
+        var newName = dlg.NewName.Trim();
+        if (string.IsNullOrEmpty(newName) || newName == active.Name) return;
+
+        active.Name = newName;
+        _snapshot.ActiveProfileName = newName;
+        RefreshProfileDropdown();
+        PushSettings();
     }
 
     // ---- Settings load/save ----
@@ -609,10 +727,13 @@ public partial class SettingsWindow : Window
         TxtHkBoost.Value  = _snapshot.HotkeyBoost          ?? string.Empty;
         TxtHkToggle.Value = _snapshot.HotkeyToggle         ?? string.Empty;
 
-        TxtBedStart.Text  = Fmt(_snapshot.BedtimeStart);
-        TxtBedEnd.Text    = Fmt(_snapshot.BedtimeEnd);
-        TxtWakeStart.Text = Fmt(_snapshot.WakeupStart);
-        TxtWakeEnd.Text   = Fmt(_snapshot.WakeupEnd);
+        // Bedtime + wake time are now per-profile. Make sure the profile list is
+        // initialised, then populate the dropdown and the active profile's fields.
+        _snapshot.EnsureProfilesInitialized();
+        RefreshProfileDropdown();
+        LoadActiveProfileIntoFields();
+        TxtBedtime.Text  = Fmt(_snapshot.Bedtime);
+        TxtWakeTime.Text = Fmt(_snapshot.WakeTime);
 
         TxtExclusions.Text = string.Join(Environment.NewLine, _snapshot.ExcludedProcessNames);
 
@@ -703,10 +824,13 @@ public partial class SettingsWindow : Window
         _snapshot.HotkeyBoost          = TxtHkBoost.Value.Trim();
         _snapshot.HotkeyToggle         = TxtHkToggle.Value.Trim();
 
-        _snapshot.BedtimeStart = ParseTime(TxtBedStart.Text, _snapshot.BedtimeStart);
-        _snapshot.BedtimeEnd   = ParseTime(TxtBedEnd.Text, _snapshot.BedtimeEnd);
-        _snapshot.WakeupStart  = ParseTime(TxtWakeStart.Text, _snapshot.WakeupStart);
-        _snapshot.WakeupEnd    = ParseTime(TxtWakeEnd.Text, _snapshot.WakeupEnd);
+        // Bedtime/wake go to the active profile, then we mirror them to the
+        // top-level Bedtime/WakeTime fields and re-derive the legacy ramp window
+        // that Scheduler.ComputeWarmth still reads.
+        _snapshot.Bedtime  = ParseTime(TxtBedtime.Text,  _snapshot.Bedtime);
+        _snapshot.WakeTime = ParseTime(TxtWakeTime.Text, _snapshot.WakeTime);
+        SaveFieldsIntoActiveProfile();
+        _snapshot.EnsureScheduleCurveDerived();
 
         _snapshot.ExcludedProcessNames = TxtExclusions.Text
             .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

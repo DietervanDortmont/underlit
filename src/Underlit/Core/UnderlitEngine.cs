@@ -361,8 +361,30 @@ public sealed class UnderlitEngine : IDisposable
         ApplyOverlayToAll(overlay);
     }
 
+    // Coalesced hardware-write state.
+    //
+    // Background — when the OSD's mouse-drag fired a fresh Task.Run for every
+    // mouse-move, a half-second of fast scrubbing queued ~30 tasks all blocking
+    // on WMI/DDC writes (each ~50–100 ms). The user released the mouse and then
+    // watched the hardware brightness slowly walk through the drag history for
+    // a few seconds because all those queued tasks were still draining.
+    //
+    // Fix: at most one worker in flight. Callers update _pendingHwWrite with
+    // the latest desired write (percent + the per-call snapshots that the
+    // worker needs). The worker loops, picks up the latest pending value,
+    // writes hardware, then re-checks. Intermediate values during a fast drag
+    // get dropped — only the LAST one the user ended on is committed.
+    private readonly object _hwLock = new();
+    private bool _hwWriteInFlight;
+    private (int Percent,
+             List<DisplayInfo> Displays,
+             Dictionary<string, double> PerMonOffsets,
+             Dictionary<string, int> LastAppliedSnapshot)? _pendingHwWrite;
+
     private void WriteHardwareAsync(int percent)
     {
+        // Snapshot the inputs at the call site so the worker doesn't read
+        // _displays / _settings / _lastAppliedHardwarePct from another thread.
         var snapshot = _displays.ToList();
         var perMon = new Dictionary<string, double>(
             _settings.PerMonitor.ToDictionary(
@@ -372,22 +394,52 @@ public sealed class UnderlitEngine : IDisposable
             StringComparer.OrdinalIgnoreCase);
         var lastSnap = new Dictionary<string, int>(_lastAppliedHardwarePct, StringComparer.OrdinalIgnoreCase);
 
+        bool kickoff;
+        lock (_hwLock)
+        {
+            // Replace any previously-pending write — we don't care about
+            // intermediate values during a fast drag.
+            _pendingHwWrite = (percent, snapshot, perMon, lastSnap);
+            kickoff = !_hwWriteInFlight;
+            if (kickoff) _hwWriteInFlight = true;
+        }
+        if (!kickoff) return;  // existing worker will pick up the latest pending value
+
         Task.Run(() =>
         {
-            foreach (var d in snapshot)
+            while (true)
             {
-                double adj = percent;
-                if (perMon.TryGetValue(d.StableId, out var off))
-                    adj = Math.Clamp(percent + off, 0, 100);
-                int target = (int)Math.Round(adj);
+                (int Percent,
+                 List<DisplayInfo> Displays,
+                 Dictionary<string, double> PerMonOffsets,
+                 Dictionary<string, int> LastAppliedSnapshot) work;
 
-                if (lastSnap.TryGetValue(d.StableId, out int last) && last == target)
-                    continue;
-
-                if (_hardware.TrySet(d, target))
+                lock (_hwLock)
                 {
-                    _dispatcher.BeginInvoke((Action)(() =>
-                        _lastAppliedHardwarePct[d.StableId] = target), DispatcherPriority.Background);
+                    if (_pendingHwWrite is null)
+                    {
+                        _hwWriteInFlight = false;
+                        return;
+                    }
+                    work = _pendingHwWrite.Value;
+                    _pendingHwWrite = null;
+                }
+
+                foreach (var d in work.Displays)
+                {
+                    double adj = work.Percent;
+                    if (work.PerMonOffsets.TryGetValue(d.StableId, out var off))
+                        adj = Math.Clamp(work.Percent + off, 0, 100);
+                    int target = (int)Math.Round(adj);
+
+                    if (work.LastAppliedSnapshot.TryGetValue(d.StableId, out int last) && last == target)
+                        continue;
+
+                    if (_hardware.TrySet(d, target))
+                    {
+                        _dispatcher.BeginInvoke((Action)(() =>
+                            _lastAppliedHardwarePct[d.StableId] = target), DispatcherPriority.Background);
+                    }
                 }
             }
         });

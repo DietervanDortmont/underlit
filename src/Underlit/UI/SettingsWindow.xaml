@@ -673,64 +673,100 @@
                                 </Style>
                             </StackPanel.Style>
 
-                        <!-- 24-hour warmth curve preview, redrawn whenever any of the schedule
-                             fields change. Read-only for now (drag-to-edit with bezier handles
-                             will land in a follow-up); the "Apply" button below loads a
-                             circadian-physiology recommendation derived from the user's wake
-                             time. -->
+                        <!-- ====== PROFILE PICKER ======
+                             Apple-style: a thin pill row with the active profile in a dropdown,
+                             flanked by + (clone current → new profile) and − (delete; disabled
+                             on the built-in "Recommended" profile). The profile drives the
+                             Bedtime / WakeTime / Night warmth values below. Switching profiles
+                             instantly retargets the curve. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="PROFILE"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="CboProfile"
+                                              Margin="14,0,8,0"
+                                              VerticalAlignment="Center"
+                                              MinWidth="200"
+                                              IsEditable="False"/>
+                                    <Button Grid.Column="1" x:Name="BtnRenameProfile"
+                                            Margin="0,0,4,0" Padding="6,4"
+                                            Cursor="Hand" Background="Transparent"
+                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            ToolTip="Rename this profile">
+                                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="14"
+                                                   Foreground="{DynamicResource App.TextPrimary}"
+                                                   Text="&#xE70F;"/>
+                                    </Button>
+                                    <Button Grid.Column="2" x:Name="BtnAddProfile"
+                                            Margin="0,0,4,0" Padding="6,4"
+                                            Cursor="Hand" Background="Transparent"
+                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            ToolTip="Clone current profile to a new one">
+                                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="14"
+                                                   Foreground="{DynamicResource App.TextPrimary}"
+                                                   Text="&#xE710;"/>
+                                    </Button>
+                                    <Button Grid.Column="3" x:Name="BtnRemoveProfile"
+                                            Margin="0,0,14,0" Padding="6,4"
+                                            Cursor="Hand" Background="Transparent"
+                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            ToolTip="Delete this profile (disabled for Recommended)">
+                                        <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="14"
+                                                   Foreground="{DynamicResource App.TextPrimary}"
+                                                   Text="&#xE738;"/>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- ====== DAY/NIGHT CURVE (read-only graph, derived from Bedtime + WakeTime) ======
+                             Drag-to-edit landed in v0.6.23+ as a planned follow-up; for now the
+                             curve is auto-derived from the active profile's two anchor times via
+                             the circadian-physiology model. -->
                         <TextBlock Style="{StaticResource CardCaption}" Text="DAY/NIGHT CURVE"/>
                         <Border Style="{StaticResource Card}" Padding="0">
                             <StackPanel>
                                 <Grid Margin="14,12,14,8" Height="120">
                                     <Canvas x:Name="ScheduleGraph" ClipToBounds="True"/>
                                 </Grid>
-                                <Border Style="{StaticResource RowDivider}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- ====== BEDTIME + WAKE TIME ======
+                             The two anchor times that drive the entire schedule curve.
+                             Internally we expand them into the legacy 4-field ramp window
+                             (BedtimeStart = Bed − 2.5h, WakeupStart = Wake − 0.75h, etc.)
+                             so Scheduler.ComputeWarmth keeps working without changes. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="TIMES"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
                                 <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Use circadian recommendation"/>
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Bedtime"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="Loads bedtime / wakeup ramps based on your wake time and a typical circadian-phase model: warmth deepens ~14h after wake, ramp begins ~2.5h before that, ramp back up starts ~45min before wake. No location data is used — purely your wake time."/>
+                                                   Text="Underlit reaches deep warmth by this time. Evening ramp starts ~2.5 h earlier."/>
                                     </StackPanel>
-                                    <Button Grid.Column="1" x:Name="BtnApplyCircadian" Margin="0,0,14,0"
-                                            Content="Apply" Padding="14,6" Cursor="Hand"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <TextBlock Style="{StaticResource CardCaption}" Text="BEDTIME RAMP"/>
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Ramp starts"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtBedStart" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtBedtime" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Reaches night warmth by"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtBedEnd" Style="{StaticResource AppleTextBox}" Width="80"/>
-                                </Grid>
-                            </StackPanel>
-                        </Border>
-
-                        <TextBlock Style="{StaticResource CardCaption}" Text="WAKEUP RAMP"/>
-                        <Border Style="{StaticResource Card}">
-                            <StackPanel>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Ramp starts"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtWakeStart" Style="{StaticResource AppleTextBox}" Width="80"/>
-                                </Grid>
-                                <Border Style="{StaticResource RowDivider}"/>
-                                <Grid Style="{StaticResource Row}">
-                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Fully daytime by"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtWakeEnd" Style="{StaticResource AppleTextBox}" Width="80"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Wake time"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Underlit returns to neutral by this time. Morning ramp starts ~45 min earlier."/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" x:Name="TxtWakeTime" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

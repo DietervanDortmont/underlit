@@ -1,0 +1,67 @@
+<Window x:Class="Underlit.UI.ProfileRenameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Rename profile"
+        Width="360" Height="170"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="{DynamicResource App.WindowBg}"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        FontSize="13">
+    <!-- Apple-style modal: a sheet-y feel, soft border, OK is the default. -->
+    <Border Padding="20"
+            Background="{DynamicResource App.CardBg}"
+            BorderBrush="{DynamicResource App.CardBorder}"
+            BorderThickness="1"
+            CornerRadius="8"
+            Margin="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Text="Profile name"
+                       FontSize="14"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource App.TextPrimary}"
+                       Margin="0,0,0,8"/>
+
+            <TextBox x:Name="TxtName" Grid.Row="1"
+                     Padding="8,6" FontSize="13"
+                     Foreground="{DynamicResource App.TextPrimary}"
+                     Background="{DynamicResource App.WindowBg}"
+                     BorderBrush="{DynamicResource App.CardBorder}"
+                     BorderThickness="1"/>
+
+            <TextBlock x:Name="LblWarning"
+                       Grid.Row="2"
+                       Margin="0,8,0,0"
+                       FontSize="11"
+                       Foreground="#FFE89090"
+                       Visibility="Collapsed"/>
+
+            <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                <Button x:Name="BtnCancel"
+                        Content="Cancel"
+                        IsCancel="True"
+                        Padding="14,5" Margin="0,0,8,0"
+                        Cursor="Hand"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                        Foreground="{DynamicResource App.TextPrimary}"/>
+                <Button x:Name="BtnOk"
+                        Content="OK"
+                        IsDefault="True"
+                        Padding="18,5"
+                        Cursor="Hand"
+                        Background="{DynamicResource App.Accent}"
+                        BorderThickness="0"
+                        Foreground="White"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

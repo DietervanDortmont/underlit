@@ -8,7 +8,6 @@
         ShowInTaskbar="False"
         ShowActivated="False"
         Focusable="False"
-        IsHitTestVisible="False"
         ResizeMode="NoResize"
         Width="300"
         Height="66"
@@ -137,8 +136,11 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
+                <!-- v0.6.19: same 0..100 grow-from-left logic as the thin bar.
+                     SolidFillNeg is the dim-shade half, SolidFillPos is the accent
+                     half. Both anchored Left, growing rightward into their column. -->
                 <Border Grid.Column="0" x:Name="SolidFillNeg"
-                        HorizontalAlignment="Right" Width="0"
+                        HorizontalAlignment="Left" Width="0"
                         Background="#FFE5B675"/>
                 <Border Grid.Column="1" x:Name="SolidFillPos"
                         HorizontalAlignment="Left" Width="0"
@@ -212,8 +214,14 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Border x:Name="TrackLeft"  Grid.Column="0" CornerRadius="2,0,0,2" Background="#33FFFFFF"/>
+                    <!-- v0.6.19: bar grows from LEFT edge as a 0..100 indicator. The two
+                         fills now sit side by side (both anchored Left): FillLeft is the
+                         "below 50" / sub-Windows-native dim half (darker shade), FillRight
+                         is the "above 50" / Windows-native half (accent). The split at the
+                         50 mark gives a hard colour transition that signals "you're below
+                         the OS minimum" without animating per-step. -->
                     <Border Grid.Column="0" x:Name="FillLeft"
-                            HorizontalAlignment="Right" CornerRadius="2,0,0,2"
+                            HorizontalAlignment="Left" CornerRadius="2,0,0,2"
                             Background="#FFE5B675" Width="0"/>
                     <Border x:Name="TrackRight" Grid.Column="1" CornerRadius="0,2,2,0" Background="#33FFFFFF"/>
                     <Border Grid.Column="1" x:Name="FillRight"

@@ -168,6 +168,27 @@ public sealed class UnderlitEngine : IDisposable
         CommitBrightnessChange();
     }
 
+    /// <summary>
+    /// Absolute brightness setter — used by the OSD's mouse-drag handler to jump
+    /// the slider to wherever the user dropped it. Same engine state model as
+    /// StepBrightness: positive maps to hardware level, negative to extended dim.
+    /// </summary>
+    public void SetSignedBrightness(double signedLevel)
+    {
+        int level = (int)Math.Round(Math.Clamp(signedLevel, -100, 100));
+        if (level >= 0)
+        {
+            _hardwareLevel = level;
+            _extendedDim   = 0;
+        }
+        else
+        {
+            _hardwareLevel = 0;
+            _extendedDim   = -level;
+        }
+        CommitBrightnessChange();
+    }
+
     public void StepWarmth(int deltaKelvin) => SetWarmth(_targetWarmth + deltaKelvin);
 
     public void SetWarmth(int kelvin)

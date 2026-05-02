@@ -89,6 +89,17 @@ public partial class SettingsWindow : Window
         BtnPickTint.Click   += OnPickTint;
         BtnPickHighColor.Click  += OnPickHighColor;
         BtnResetHighColor.Click += OnResetHighColor;
+        BtnApplyCircadian.Click += OnApplyCircadian;
+
+        // Schedule graph redraws on any input that changes the curve. We hook
+        // these in addition to the existing PushSettings hooks so the redraw is
+        // immediate (PushSettings updates _snapshot, the graph re-samples it).
+        ScheduleGraph.SizeChanged += (_, _) => RedrawScheduleGraph();
+        ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
+        ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
+        SldNightWarmth.ValueChanged += (_, _) => RedrawScheduleGraph();
+        foreach (var tb in new[] { TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd })
+            tb.LostFocus += (_, _) => RedrawScheduleGraph();
         CboTransparency.SelectionChanged += (_, _) =>
         {
             PushSettings();
@@ -390,6 +401,153 @@ public partial class SettingsWindow : Window
         LblNightWarmth.Text    = ((int)SldNightWarmth.Value) + " K";
         LblMonBr.Text          = ((int)SldMonBrOffset.Value >= 0 ? "+" : "") + (int)SldMonBrOffset.Value;
         LblMonWr.Text          = ((int)SldMonWrOffset.Value) + " K";
+
+        // Live preview swatch for the night-warmth slider — same gamma → RGB
+        // multipliers the engine applies, so the swatch is colour-accurate.
+        if (NightWarmthPreview != null)
+        {
+            int k = (int)SldNightWarmth.Value;
+            var (r, g, b) = Underlit.Display.GammaRampApplier.KelvinToRgbMultipliers(k);
+            NightWarmthPreview.Background = new SolidColorBrush(Color.FromRgb(
+                (byte)(r * 255), (byte)(g * 255), (byte)(b * 255)));
+        }
+    }
+
+    // ---- Schedule graph + circadian recommendation ----
+
+    /// <summary>
+    /// Redraw the 24-hour warmth-curve preview using the values currently in the
+    /// schedule UI fields (bedtime/wakeup textboxes + night-warmth slider).
+    ///   X axis = time of day, 0..24h, left → right.
+    ///   Y axis = kelvin, 1500..6500, bottom → top (so bedtime warmth dips low and
+    ///            daytime neutral sits at the top).
+    /// We sample <c>Scheduler.ComputeWarmth</c> every 10 minutes (144 samples) and
+    /// draw the result as a Polyline. A subtle gradient stripe behind the line
+    /// fades from cool (top, daytime) to warm (bottom, night) so the curve reads
+    /// at a glance even without axis labels.
+    /// </summary>
+    private void RedrawScheduleGraph()
+    {
+        if (ScheduleGraph == null) return;
+        double w = ScheduleGraph.ActualWidth;
+        double h = ScheduleGraph.ActualHeight;
+        if (w <= 1 || h <= 1) return;
+
+        ScheduleGraph.Children.Clear();
+
+        // Background: vertical gradient from cool→warm to suggest "lower kelvin = warmer light".
+        var bg = new System.Windows.Shapes.Rectangle
+        {
+            Width = w, Height = h,
+            RadiusX = 6, RadiusY = 6,
+            Fill = new LinearGradientBrush(
+                Color.FromArgb(0x18, 0xA8, 0xC8, 0xFF),  // cool wash at top
+                Color.FromArgb(0x28, 0xFF, 0xA0, 0x50),  // warm wash at bottom
+                90),
+        };
+        Canvas.SetLeft(bg, 0); Canvas.SetTop(bg, 0);
+        ScheduleGraph.Children.Add(bg);
+
+        // Hour markers — faint vertical lines at 6, 12, 18.
+        foreach (int hour in new[] { 6, 12, 18 })
+        {
+            double x = hour / 24.0 * w;
+            var marker = new System.Windows.Shapes.Line
+            {
+                X1 = x, Y1 = 0, X2 = x, Y2 = h,
+                Stroke = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)),
+                StrokeThickness = 1,
+            };
+            ScheduleGraph.Children.Add(marker);
+        }
+
+        // Build a temporary AppSettings from the live UI values so the graph
+        // tracks edits without first persisting them through PushSettings.
+        var s = SnapshotForSchedule();
+
+        var pts = new System.Windows.Media.PointCollection();
+        const int samples = 144;
+        for (int i = 0; i <= samples; i++)
+        {
+            double hour = i / (double)samples * 24.0;
+            DateTime t = DateTime.Today.AddHours(hour);
+            int k = Underlit.Core.Scheduler.ComputeWarmth(t, s);
+            double x = hour / 24.0 * w;
+            double y = h - ((k - 1500) / 5000.0) * h;
+            pts.Add(new Point(x, y));
+        }
+
+        var line = new System.Windows.Shapes.Polyline
+        {
+            Points = pts,
+            Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 2,
+            StrokeLineJoin = PenLineJoin.Round,
+        };
+        ScheduleGraph.Children.Add(line);
+
+        // "Now" indicator — a vertical line at the current time so the user can
+        // read off "what kelvin am I targeting right now" at a glance.
+        DateTime now = DateTime.Now;
+        double nowX = (now.Hour + now.Minute / 60.0) / 24.0 * w;
+        var nowLine = new System.Windows.Shapes.Line
+        {
+            X1 = nowX, Y1 = 0, X2 = nowX, Y2 = h,
+            Stroke = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 1.5,
+            StrokeDashArray = new System.Windows.Media.DoubleCollection(new[] { 3.0, 3.0 }),
+        };
+        ScheduleGraph.Children.Add(nowLine);
+    }
+
+    /// <summary>Build a transient AppSettings from the schedule UI fields so the
+    /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>
+    private AppSettings SnapshotForSchedule() => new()
+    {
+        BedtimeStart = ParseTime(TxtBedStart.Text, _snapshot.BedtimeStart),
+        BedtimeEnd   = ParseTime(TxtBedEnd.Text,   _snapshot.BedtimeEnd),
+        WakeupStart  = ParseTime(TxtWakeStart.Text, _snapshot.WakeupStart),
+        WakeupEnd    = ParseTime(TxtWakeEnd.Text,   _snapshot.WakeupEnd),
+        NightWarmthKelvin = (int)SldNightWarmth.Value,
+        ScheduleEnabled   = true,  // graph always shows the curve as if active
+    };
+
+    /// <summary>
+    /// Apply a circadian-physiology default schedule derived from the user's wake time:
+    ///   • WakeupEnd     — kept (the user's wake time, the anchor).
+    ///   • WakeupStart   — wake − 45 min (start neutralising warmth before fully awake).
+    ///   • BedtimeEnd    — wake + 14h (deep-warmth phase aligns with melatonin onset
+    ///                     for a typical 8-hour sleep).
+    ///   • BedtimeStart  — bedEnd − 2.5h (gentle 2.5h ramp into deep warmth).
+    ///   • NightK        — 2700 K (a calmer warm than the previous 3400 default; in
+    ///                     line with circadian-friendly evening light recommendations).
+    /// All times wrap around midnight via mod 24. Doesn't touch the user's actual
+    /// wake time — we read whatever's currently in TxtWakeEnd.
+    /// </summary>
+    private void OnApplyCircadian(object sender, RoutedEventArgs e)
+    {
+        var wake = ParseTime(TxtWakeEnd.Text, _snapshot.WakeupEnd);
+        double wakeH = wake.AsHourFractional;
+        double wakeStartH = (wakeH - 0.75 + 24) % 24;
+        double bedEndH    = (wakeH + 14)        % 24;
+        double bedStartH  = (bedEndH - 2.5 + 24) % 24;
+
+        TxtWakeStart.Text = ToHHMM(wakeStartH);
+        TxtBedEnd.Text    = ToHHMM(bedEndH);
+        TxtBedStart.Text  = ToHHMM(bedStartH);
+        SldNightWarmth.Value = 2700;
+
+        PushSettings();
+        UpdateAllValueChips();
+        RedrawScheduleGraph();
+    }
+
+    private static string ToHHMM(double hours)
+    {
+        int hour = (int)Math.Floor(hours);
+        int min  = (int)Math.Round((hours - hour) * 60);
+        if (min >= 60) { hour = (hour + 1) % 24; min = 0; }
+        return $"{hour:D2}:{min:D2}";
     }
 
     // ---- Settings load/save ----
@@ -433,6 +591,9 @@ public partial class SettingsWindow : Window
         SldGlassTintStrength.Value   = _snapshot.GlassTintStrength;
         RefreshTintSwatch();
         RefreshHighColorSwatch();
+        // Schedule graph: redraw with the just-loaded values. The Canvas may not
+        // be measured yet (hidden page), so SizeChanged will also fire it.
+        Dispatcher.BeginInvoke((Action)RedrawScheduleGraph, DispatcherPriority.Loaded);
 
         TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
         TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;

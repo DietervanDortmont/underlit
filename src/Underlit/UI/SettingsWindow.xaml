@@ -371,12 +371,12 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- BAR COLOUR — gradient between accent and a "high brightness" shade -->
+                        <!-- BAR COLOUR — split at the 50 mark: accent above, dim shade below. -->
                         <TextBlock Style="{StaticResource CardCaption}" Text="BAR COLOUR"/>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
-                                           Text="The brightness fill starts in your Windows accent (or the custom accent above) and gradually transitions to a deeper shade as you push past 50% — visualising 'more brightness = stronger colour'. Choose the shade or let it auto-derive from your accent."/>
+                                           Text="The brightness bar runs 0..100. The right half (50–100) uses your Windows accent — that's where the OS's own brightness slider lives. The left half (0–50) shifts to a darker shade so you get a clear visual cue when you're pushing brightness BELOW the OS minimum, into Underlit's extended-dim range. There's a single transition at the 50 mark — not a per-step gradient. Choose the dim shade or let it auto-derive from your accent."/>
 
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>
@@ -385,13 +385,13 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="High brightness color"/>
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Sub-OS-min colour"/>
                                         <TextBlock x:Name="LblHighColorMode" Style="{StaticResource RowHint}"
-                                                   Text="Auto — derived from your accent."/>
+                                                   Text="Auto — darkened from your accent."/>
                                     </StackPanel>
                                     <Button Grid.Column="1" x:Name="BtnPickHighColor" Margin="0,0,8,0" Padding="6"
                                             Cursor="Hand" Background="Transparent" BorderThickness="0"
-                                            ToolTip="Pick a custom 'high brightness' colour">
+                                            ToolTip="Pick a custom colour for the sub-OS-min half (0–50)">
                                         <Border x:Name="HighColorSwatch"
                                                 Width="32" Height="22" CornerRadius="4"
                                                 BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
@@ -672,6 +672,34 @@
                                 </Style>
                             </StackPanel.Style>
 
+                        <!-- 24-hour warmth curve preview, redrawn whenever any of the schedule
+                             fields change. Read-only for now (drag-to-edit with bezier handles
+                             will land in a follow-up); the "Apply" button below loads a
+                             circadian-physiology recommendation derived from the user's wake
+                             time. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="DAY/NIGHT CURVE"/>
+                        <Border Style="{StaticResource Card}" Padding="0">
+                            <StackPanel>
+                                <Grid Margin="14,12,14,8" Height="120">
+                                    <Canvas x:Name="ScheduleGraph" ClipToBounds="True"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Use circadian recommendation"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Loads bedtime / wakeup ramps based on your wake time and a typical circadian-phase model: warmth deepens ~14h after wake, ramp begins ~2.5h before that, ramp back up starts ~45min before wake. No location data is used — purely your wake time."/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnApplyCircadian" Margin="0,0,14,0"
+                                            Content="Apply" Padding="14,6" Cursor="Hand"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Style="{StaticResource CardCaption}" Text="BEDTIME RAMP"/>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -711,12 +739,18 @@
                             <StackPanel>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="48"/><ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Warmth at night (K)"/>
                                     <Slider Grid.Column="1" x:Name="SldNightWarmth" Style="{StaticResource AppleSlider}"
                                             Minimum="1500" Maximum="6500" TickFrequency="100" IsSnapToTickEnabled="True"/>
-                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblNightWarmth"/>
+                                    <!-- Live preview: shows the actual screen tint produced at the
+                                         selected kelvin, updated as the user drags the slider. -->
+                                    <Border Grid.Column="2" x:Name="NightWarmthPreview"
+                                            Margin="8,0,8,0" Width="32" Height="22" CornerRadius="4"
+                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            ToolTip="Preview of the screen tint at this kelvin"/>
+                                    <TextBlock Grid.Column="3" Style="{StaticResource ValueChip}" x:Name="LblNightWarmth"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

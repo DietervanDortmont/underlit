@@ -148,8 +148,14 @@ public partial class OsdWindow : Window
     private bool _glassLiveCapture = true;
     /// <summary>Which bar style the OSD draws — Bar (thin slider) vs SolidFill (tall pill fill).</summary>
     private OsdBarStyle _barStyle = OsdBarStyle.Bar;
-    /// <summary>"auto" or hex string — color the brightness fill transitions to past 50%.</summary>
+    /// <summary>"auto" or hex string — colour for the dim sub-OS-min half of the brightness bar.</summary>
     private string _brightnessHighColor = "auto";
+
+    // ---- Mouse drag interaction (v0.6.19) ----
+    /// <summary>Raised while the user is dragging the OSD's brightness slider with the
+    /// mouse. The argument is a signed level in the engine's -100..+100 space.</summary>
+    public event Action<double>? BrightnessSetRequested;
+    private bool _dragging;
     /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
     private double _lastBrightness;
     private int _lastWarmth = 6500;
@@ -185,6 +191,13 @@ public partial class OsdWindow : Window
             ApplyPillRegion();
         };
         DpiChanged += (_, _) => ApplyPillRegion();
+
+        // Mouse-drag brightness adjustment. Bind to Preview* so we beat any
+        // descendant — there are no descendants that want the events anyway,
+        // but Preview gives us the deterministic root-tunneled handler.
+        WindowRoot.PreviewMouseLeftButtonDown += OnPillMouseDown;
+        WindowRoot.PreviewMouseMove           += OnPillMouseMove;
+        WindowRoot.PreviewMouseLeftButtonUp   += OnPillMouseUp;
 
         _themeHandler = isDark => Dispatcher.BeginInvoke(() =>
         {
@@ -414,13 +427,27 @@ public partial class OsdWindow : Window
 
     // ---- Bar drawing ----
 
+    /// <summary>
+    /// Brightness bar update — v0.6.19 model.
+    ///
+    /// The bar represents a 0..100 indicator that grows from the LEFT edge as the
+    /// engine's signed -100..+100 level goes from -100 (extended-dim max) to +100
+    /// (hardware max). Mapping: displayValue = (signedLevel + 100) / 2.
+    ///
+    /// The fill is split into two coloured halves whose widths are independent:
+    ///   • FillLeft  — covers 0..50 of the bar. Anchored at the LEFT edge.
+    ///                 Width = min(displayValue, 50) / 50 × halfBar.
+    ///                 Colour = "low" / dim shade (signals "below Windows native min").
+    ///   • FillRight — covers 50..100 of the bar. Anchored at the LEFT edge of the
+    ///                 right column.
+    ///                 Width = max(displayValue - 50, 0) / 50 × halfBar.
+    ///                 Colour = accent (Windows native brightness range).
+    /// At exactly 50, FillLeft is full and FillRight is empty — the user sees the
+    /// dim shade fill exactly half the bar with a visible (hard) edge at the
+    /// transition. As they brighten further, the accent extends rightward.
+    /// </summary>
     private void UpdateBrightnessBar(double levelSigned)
     {
-        // The width source depends on the active style:
-        //   • Bar       — the thin BarRoot, sitting in the column AFTER the icon.
-        //                  brightness=0 anchors at the centre of THAT column.
-        //   • SolidFill — the full pill width (SolidFillRoot is 280dp wide), with
-        //                  brightness=0 anchored at the geometric centre of the pill.
         bool solid = _barStyle == OsdBarStyle.SolidFill;
         double total = solid ? Math.Max(0, SolidFillRoot.ActualWidth)
                              : Math.Max(0, BarRoot.ActualWidth);
@@ -432,54 +459,25 @@ public partial class OsdWindow : Window
 
         double half = total / 2.0;
         double clamped = Math.Clamp(levelSigned, -100, 100);
-        double posWidth = clamped >= 0 ?  clamped / 100.0 * half : 0;
-        double negWidth = clamped <  0 ? -clamped / 100.0 * half : 0;
-
-        // Recompute the positive-fill colour against the current brightness so
-        // it picks up the accent → "high" colour gradient as the value approaches
-        // 100. Below the transition midpoint (50) it stays pure accent.
-        if (clamped > 0)
-        {
-            Color fill = ComputeBrightnessFillColor(clamped);
-            if (solid) SolidFillPos.Background = new SolidColorBrush(WithAlpha(fill, 0xC0));
-            else        FillRight.Background  = new SolidColorBrush(fill);
-        }
+        double display = (clamped + 100.0) / 2.0;            // map -100..+100 → 0..100
+        double leftWidth  = Math.Min(display, 50.0) / 50.0 * half;
+        double rightWidth = Math.Max(0, display - 50.0) / 50.0 * half;
 
         if (solid)
         {
-            SolidFillPos.Width = posWidth;
-            SolidFillNeg.Width = negWidth;
+            SolidFillNeg.Width = leftWidth;
+            SolidFillPos.Width = rightWidth;
         }
         else
         {
-            FillRight.Width = posWidth;
-            FillLeft.Width  = negWidth;
+            FillLeft.Width  = leftWidth;
+            FillRight.Width = rightWidth;
         }
     }
 
-    /// <summary>
-    /// Brightness fill colour as a function of level (expects 0..100):
-    ///   • level ≤ 50 → pure accent.
-    ///   • 50 &lt; level ≤ 100 → linear lerp from accent toward the configured
-    ///                            "high" colour, reaching it fully at 100.
-    ///
-    /// "High" colour is the user setting. When set to "auto" we derive it from
-    /// the accent (RGB ×0.55) so the user gets a sensible default that tracks
-    /// their Windows accent colour automatically.
-    /// </summary>
-    private Color ComputeBrightnessFillColor(double level)
-    {
-        Color baseColor = CurrentAccent();
-        if (level <= 50) return baseColor;
-
-        Color high = ResolveBrightnessHighColor(baseColor);
-        double t = Math.Clamp((level - 50.0) / 50.0, 0, 1);
-        return LerpColor(baseColor, high, t);
-    }
-
-    /// <summary>Resolve the user's "high brightness" colour preference into a Color.
+    /// <summary>Resolve the user's "low brightness" colour preference into a Color.
     /// Auto-mode derives from the supplied accent so the gradient still tracks Windows.</summary>
-    private Color ResolveBrightnessHighColor(Color accent)
+    private Color ResolveBrightnessLowColor(Color accent)
     {
         if (string.IsNullOrWhiteSpace(_brightnessHighColor)
             || _brightnessHighColor.Equals("auto", StringComparison.OrdinalIgnoreCase))
@@ -650,7 +648,11 @@ public partial class OsdWindow : Window
         // Bar elements
         TrackLeft.Background   = new SolidColorBrush(p.Track);
         TrackRight.Background  = new SolidColorBrush(p.Track);
-        FillLeft.Background    = new SolidColorBrush(p.FillNegative);
+        // v0.6.19: brightness fill split at the 50% mark.
+        //   FillLeft  = dim shade (signals "below Windows native min").
+        //   FillRight = accent (Windows native brightness range).
+        // Both anchored to the bar's left edge — see UpdateBrightnessBar.
+        FillLeft.Background    = new SolidColorBrush(ResolveBrightnessLowColor(CurrentAccent()));
         FillRight.Background   = new SolidColorBrush(CurrentAccent());
         MidMarker.Background   = new SolidColorBrush(p.MidMarker);
         IconText.Foreground    = new SolidColorBrush(p.Icon);
@@ -661,7 +663,9 @@ public partial class OsdWindow : Window
         // Solid-fill layer brushes — same colour scheme as the thin bar but
         // applied to the full-pill-width fills. Slight alpha reduction so the
         // live glass refraction (or Subtle blur) is still visible underneath.
-        SolidFillNeg.Background       = new SolidColorBrush(WithAlpha(p.FillNegative, 0xC0));
+        // Same dim/accent split as the thin bar, but at 75% alpha so the live
+        // glass refraction underneath still shows through.
+        SolidFillNeg.Background       = new SolidColorBrush(WithAlpha(ResolveBrightnessLowColor(CurrentAccent()), 0xC0));
         SolidFillPos.Background       = new SolidColorBrush(WithAlpha(CurrentAccent(), 0xC0));
         SolidFillWarmthStartStop.Color = p.WarmthStart;
         // Warmth end stop is set per-frame from BlendKelvin in UpdateWarmthBar.
@@ -803,6 +807,81 @@ public partial class OsdWindow : Window
         CandleIcon.Fill     = new SolidColorBrush(iconColor);
         MidMarker.Background = new SolidColorBrush(
             Color.FromArgb(0xA8, channel, channel, channel));
+    }
+
+    // ---- Mouse drag (brightness slider) ----
+
+    /// <summary>
+    /// Mouse-down on the OSD's pill area starts a brightness drag. We use the
+    /// pill rectangle (10..290 in WindowRoot dip space — i.e. the bar's full
+    /// horizontal extent in SolidFill mode, or the BarRoot column in Bar mode)
+    /// to map mouse X → 0..100 displayValue → engine signed level.
+    /// </summary>
+    private void OnPillMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_mode != Mode.Brightness) return;   // mouse drag only for brightness
+        if (!IsBrightnessDragHit(e, out double signed)) return;
+        _dragging = true;
+        WindowRoot.CaptureMouse();
+        ApplyDragLevel(signed);
+    }
+
+    private void OnPillMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragging) return;
+        if (!IsBrightnessDragHit(e, out double signed)) return;
+        ApplyDragLevel(signed);
+    }
+
+    /// <summary>Called on every mouse-drag tick: notify host (which writes to the
+    /// engine) AND update the local bar visual immediately so the slider tracks
+    /// the cursor with no perceptible lag — the engine's gamma/hardware ramp
+    /// happens behind the scenes asynchronously.</summary>
+    private void ApplyDragLevel(double signed)
+    {
+        _lastBrightness = signed;
+        UpdateBrightnessBar(signed);
+        BrightnessSetRequested?.Invoke(signed);
+        KeepAliveOsd();
+    }
+
+    private void OnPillMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        WindowRoot.ReleaseMouseCapture();
+        KeepAliveOsd();
+    }
+
+    /// <summary>
+    /// Compute the engine-signed brightness from the current mouse position.
+    /// Returns false if the mouse is outside the bar's horizontal extent.
+    /// In Bar mode the source rect is BarRoot's column; in SolidFill mode it's
+    /// SolidFillRoot (the full pill width). Either way the mapping is:
+    ///   displayValue = mouseX / barWidth × 100  (0..100)
+    ///   signedLevel  = displayValue × 2 − 100   (-100..+100, engine space)
+    /// </summary>
+    private bool IsBrightnessDragHit(MouseEventArgs e, out double signedLevel)
+    {
+        signedLevel = 0;
+        FrameworkElement? bar = _barStyle == OsdBarStyle.SolidFill
+            ? (FrameworkElement)SolidFillRoot
+            : BarRoot;
+        if (bar == null || bar.ActualWidth <= 0) return false;
+        var p = e.GetPosition(bar);
+        if (p.X < -8 || p.X > bar.ActualWidth + 8) return false;  // small slack
+        double display = Math.Clamp(p.X / bar.ActualWidth, 0, 1) * 100.0;
+        signedLevel = display * 2.0 - 100.0;
+        return true;
+    }
+
+    /// <summary>Restart the auto-hide timer so the OSD stays visible while the user
+    /// is interacting. The 1.3 s grace period restarts on every mouse event.</summary>
+    private void KeepAliveOsd()
+    {
+        if (_hideTimer == null) return;
+        _hideTimer.Stop();
+        _hideTimer.Start();
     }
 
     // ---- Animation ----

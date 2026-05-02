@@ -66,6 +66,12 @@ public sealed class UnderlitHost : IDisposable
         _engine.LevelChanged += OnEngineLevelChanged;
         _engine.RefreshDisplays(DisplayManager.Enumerate());
 
+        // Mouse-drag from the OSD: the OSD raises BrightnessSetRequested with a
+        // signed level (-100..+100) computed from the mouse X position; the engine
+        // jumps to that value and the LevelChanged event flows back to update the
+        // OSD bar in the same render pass.
+        _osd.BrightnessSetRequested += signed => _engine.SetSignedBrightness(signed);
+
         // Seed from Windows' current brightness so our level matches the Quick Settings slider.
         // Only applies if a WMI-controllable panel exists and we're currently in (or above)
         // the positive range. If the user has us at a negative level (extended dim), leave it.

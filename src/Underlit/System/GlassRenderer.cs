@@ -40,6 +40,12 @@ public static class GlassRenderer
     public const float  FresnelExp    = 5.0f;
     public const float  RimIntensity  = 0.55f;
 
+    // Rim Phong shininess — separately tuned from SpecShininess. Lower = softer
+    // gradient around the rim, so the lit-side and opposing-side highlights
+    // blend smoothly into the rest of the rim line instead of being two
+    // pinpoint dots.
+    public const float  RimShininess  = 6f;
+
     public const float  VibrancyStartLum = 0.78f;
     public const float  VibrancyMaxDark  = 0.15f;
 
@@ -149,7 +155,7 @@ public static class GlassRenderer
                            halfVec, (float)p.IntensityMul(),
                            (float)p.Refraction, (float)p.BevelDepth(), (float)p.BevelWidthPx(dmap.PillH),
                            (float)p.Dispersion,
-                           (float)p.RimBrightnessMul(), (float)p.RimWidthExponent(),
+                           (float)p.RimBrightnessMul(), (float)p.RimBandWidthPx(),
                            (float)p.SecondaryRimMul());
 
         return true;
@@ -161,7 +167,7 @@ public static class GlassRenderer
                                            float intensityMul,
                                            float refraction, float bevelDepth, float bevelWidthPx,
                                            float dispersion,
-                                           float rimBrightnessMul, float rimWidthExponent,
+                                           float rimBrightnessMul, float rimBandWidthPx,
                                            float secondaryRimMul)
     {
         float[] sdf = dmap.Sdf;
@@ -241,36 +247,34 @@ public static class GlassRenderer
                 if (NdotH < 0f) NdotH = 0f;
                 float spec = MathF.Pow(NdotH, SpecShininess) * SpecIntensity * intensityMul;
 
-                // Rim highlight — Phong specular masked to a thin rim band.
-                //   • Mask peak SHIFTED INWARD by the AA width so the brightest band
-                //     lands on the visible edge (otherwise the peak is hidden behind
-                //     AA-fade transparency).
-                //   • Symmetric: a primary highlight at NdotH (lit-side rim) AND a
-                //     secondary one at NdotH_inv (opposite-side rim) using a flipped
-                //     half-vector. RimSecondary slider weights the secondary.
-                //   • Width-compensated brightness: thin bands get a small boost so
-                //     perceived brightness doesn't fall off as the user narrows it.
-                //   • Independent of intensityMul (light-intensity slider) so user can
-                //     disable the bevel and keep the rim glowing.
+                // Rim highlight (v0.6.26 rewrite) — a thin line at the SILHOUETTE
+                // of the pill, decoupled from the bevel zone.
+                //
+                //   • Position: peak at sdf = EdgeAaWidth (the last fully-opaque
+                //     ring of pixels before the AA fade), decaying inward over
+                //     rimBandWidthPx pixels. Independent of bevelWidthPx, so the
+                //     bevel can be wide while the rim stays a hairline.
+                //   • Lighting dynamics: Phong from the primary half-vector (lit-
+                //     side bright) plus a secondary Phong from the inverted half-
+                //     vector (opposing-side bright). RimShininess is much lower
+                //     than SpecShininess so the bright/dim gradient around the
+                //     rim is gradual rather than two pinpoints.
+                //   • Always-on baseline comes from the Fresnel term below — that
+                //     keeps the whole rim faintly lit even on the back side, with
+                //     these Phong terms adding the directional brightness on top.
                 float adjustedSdf = pixSdf - EdgeAaWidth;
                 if (adjustedSdf < 0) adjustedSdf = 0;
-                float adjustedBevel = bevelWidthPx - EdgeAaWidth;
-                if (adjustedBevel < 1f) adjustedBevel = 1f;
-                float edgeShifted = 1f - Smoothstep(0f, adjustedBevel, adjustedSdf);
-                float rimMask = MathF.Pow(edgeShifted, rimWidthExponent);
+                if (rimBandWidthPx < 0.5f) rimBandWidthPx = 0.5f;
+                float rimMask = 1f - Smoothstep(0f, rimBandWidthPx, adjustedSdf);
 
                 // Inverted half-vector for the opposing-corner highlight (flip xy, keep z).
                 float NdotH_inv = -nx * halfVec.x - ny * halfVec.y + nz * halfVec.z;
                 if (NdotH_inv < 0f) NdotH_inv = 0f;
 
-                float rimPhong1 = MathF.Pow(NdotH, SpecShininess);
-                float rimPhong2 = MathF.Pow(NdotH_inv, SpecShininess) * secondaryRimMul;
+                float rimPhong1 = MathF.Pow(NdotH,     RimShininess);
+                float rimPhong2 = MathF.Pow(NdotH_inv, RimShininess) * secondaryRimMul;
 
-                // Compensate so per-pixel peak brightness stays ~constant when the
-                // user changes Rim width. (Higher exponent = thinner band = less area;
-                // bump per-pixel intensity to keep total visible energy steady.)
-                float widthComp = MathF.Pow((rimWidthExponent + 1f) / 14f, 0.5f);
-                float thinRim = rimMask * (rimPhong1 + rimPhong2) * rimBrightnessMul * widthComp;
+                float thinRim = rimMask * (rimPhong1 + rimPhong2) * rimBrightnessMul;
                 spec += thinRim;
 
                 float NdotV = nz; if (NdotV < 0f) NdotV = 0f;

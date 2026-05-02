@@ -69,10 +69,22 @@ public sealed class GlassParams
     /// <summary>Rim-highlight intensity multiplier (0..3.0).</summary>
     public double RimBrightnessMul() => Math.Clamp(RimBrightness, 0, 300) / 100.0;
 
-    /// <summary>Rim-highlight band exponent: lower = wider band, higher = thinner.
-    /// Slider 0..100 → 24..2. At slider=50 (default) exponent≈13, which gives a
-    /// visibly thick ring (about 1/8 of the bevel zone deep).</summary>
+    /// <summary>Rim-highlight band exponent — kept for back-compat, no longer
+    /// drives the renderer. Use <see cref="RimBandWidthPx"/> instead.</summary>
     public double RimWidthExponent() => 24.0 - Math.Clamp(RimWidth, 0, 100) / 100.0 * 22.0;
+
+    /// <summary>
+    /// Width of the rim-highlight band in pixels — independent of BevelWidth.
+    /// The rim sits right at the silhouette of the pill (last visible pixels
+    /// before the AA fade) and decays inward over this many pixels. Before
+    /// v0.6.26 the rim borrowed the bevel zone width and spread across the
+    /// inner curvature; now it's a thin line at the outer edge regardless of
+    /// the bevel.
+    ///
+    /// Slider 0 → 1 px (single-pixel hairline), 100 → 10 px (soft halo).
+    /// Default RimWidth = 50 → 5.5 px band.
+    /// </summary>
+    public double RimBandWidthPx() => 1.0 + Math.Clamp(RimWidth, 0, 100) / 100.0 * 9.0;
 
     public (float x, float y, float z) LightDirection()
     {

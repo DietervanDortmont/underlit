@@ -207,23 +207,94 @@ public partial class SettingsWindow : Window
 
         // Lights / Hue page wiring.
         WireHuePage();
+
+        // v0.6.40: every inline RowHint TextBlock turns into a hover
+        // tooltip on the closest interactive control in its row, so the
+        // settings UI looks like a flat list of controls rather than a
+        // wall of small explanatory text. Done at Loaded so the visual
+        // tree is fully populated.
+        Loaded += (_, _) => MigrateRowHintsToTooltips();
+    }
+
+    /// <summary>
+    /// Walk the visual tree and convert every <c>TextBlock</c> using the
+    /// <c>RowHint</c> style into a tooltip on the nearest interactive
+    /// control in the same row. Em-dashes and en-dashes in the hint text
+    /// are normalised to ASCII so the tooltip reads clean.
+    /// </summary>
+    private void MigrateRowHintsToTooltips()
+    {
+        var hintStyle = TryFindResource("RowHint") as Style;
+        if (hintStyle == null) return;
+
+        foreach (var hint in EnumerateVisualDescendants(this).OfType<TextBlock>())
+        {
+            if (!ReferenceEquals(hint.Style, hintStyle)) continue;
+            string text = NormaliseTooltipText(hint.Text);
+            if (string.IsNullOrWhiteSpace(text)) continue;
+
+            // Find the row Grid (the closest ancestor with the Row style).
+            var row = FindAncestor<Grid>(hint, g => g.Style == TryFindResource("Row") as Style);
+            DependencyObject? scope = row;
+            scope ??= FindAncestor<StackPanel>(hint, _ => true);
+            scope ??= VisualTreeHelper.GetParent(hint);
+            if (scope == null) continue;
+
+            var target = EnumerateVisualDescendants(scope).FirstOrDefault(IsInteractiveControl);
+            if (target is FrameworkElement fe && fe.ToolTip == null)
+            {
+                fe.ToolTip = text;
+                ToolTipService.SetInitialShowDelay(fe, 350);
+                ToolTipService.SetBetweenShowDelay(fe, 250);
+                ToolTipService.SetShowDuration(fe, 12_000);
+            }
+        }
+    }
+
+    private static string NormaliseTooltipText(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        return raw
+            .Replace("—", ", ")  // em dash
+            .Replace("–", "-")   // en dash
+            .Replace("  ", " ")
+            .Trim();
+    }
+
+    private static bool IsInteractiveControl(DependencyObject d) =>
+        d is CheckBox || d is Slider || d is ComboBox || d is TextBox || d is Button
+        || d is HotkeyField || d is ListBox;
+
+    private static IEnumerable<DependencyObject> EnumerateVisualDescendants(DependencyObject root)
+    {
+        int n = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            yield return c;
+            foreach (var x in EnumerateVisualDescendants(c)) yield return x;
+        }
+    }
+
+    private static T? FindAncestor<T>(DependencyObject d, Func<T, bool> predicate) where T : DependencyObject
+    {
+        var p = VisualTreeHelper.GetParent(d);
+        while (p != null)
+        {
+            if (p is T t && predicate(t)) return t;
+            p = VisualTreeHelper.GetParent(p);
+        }
+        return null;
     }
 
     private void ApplyBackdropToWindow()
     {
+        // v0.6.40: settings window is now a flat themed surface (Apple-style),
+        // no DWM acrylic. The OSD's backdrop preference still drives the
+        // pill itself, but it should no longer reach into the settings UI.
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd == IntPtr.Zero) return;
-
-        bool useTransparency = _snapshot.TransparencyEffects switch
-        {
-            TransparencyMode.On  => true,
-            TransparencyMode.Off => false,
-            _                    => TransparencyPreference.IsEnabled(),
-        };
-
-        bool useBackdrop = useTransparency && _snapshot.OsdBackdrop != BackdropStyle.Solid;
-        var kind = useBackdrop ? Acrylic.Backdrop.Acrylic : Acrylic.Backdrop.None;
-        Acrylic.Apply(hwnd, kind, ThemeInfo.IsDarkMode());
+        Acrylic.Apply(hwnd, Acrylic.Backdrop.None, ThemeInfo.IsDarkMode());
     }
 
     private void OnPickAccent(object sender, RoutedEventArgs e)
@@ -336,8 +407,8 @@ public partial class SettingsWindow : Window
                    || _snapshot.OsdBrightnessHighColor.Equals("auto", StringComparison.OrdinalIgnoreCase);
         HighColorSwatch.Background = new SolidColorBrush(ResolveHighColorForUI());
         LblHighColorMode.Text = isAuto
-            ? "Auto — derived from your accent."
-            : "Custom — click swatch to change, Auto to reset.";
+            ? "Auto: derived from your accent."
+            : "Custom: click the swatch to change, Auto to reset.";
     }
 
     private void RefreshAccentSwatch()
@@ -383,69 +454,47 @@ public partial class SettingsWindow : Window
 
     // ---- Theme ----
 
+    /// <summary>
+    /// Apply the settings window's colour palette. v0.6.40: theme follows
+    /// the Windows app-mode setting (dark vs light) only — the OSD's
+    /// Liquid Glass / Subtle / Solid backdrop preference no longer changes
+    /// the settings UI, so the settings window has its own consistent
+    /// look that doesn't mutate when the user switches OSD style.
+    /// </summary>
     private void ApplyTheme(bool isDark)
     {
-        // The window's WindowBg/SidebarBg become semi-transparent when a DWM backdrop
-        // is in play, so the live blur shows through. Cards stay more opaque to keep
-        // text readable. In Solid mode, everything is opaque as before.
-        bool transparency = _snapshot.TransparencyEffects switch
-        {
-            TransparencyMode.On  => true,
-            TransparencyMode.Off => false,
-            _                    => TransparencyPreference.IsEnabled(),
-        };
-        bool useBackdrop = transparency && _snapshot.OsdBackdrop != BackdropStyle.Solid;
-        bool isGlass = useBackdrop && _snapshot.OsdBackdrop == BackdropStyle.LiquidGlass;
-
         var r = Resources;
-        if (isGlass)
+        if (isDark)
         {
-            // Liquid Glass — theme-neutral, white-on-glass. Same in dark & light.
-            r["App.WindowBg"]      = Brush(0x00000000);  // fully transparent
-            r["App.SidebarBg"]     = Brush(0x14FFFFFF);  // faint white wash
-            r["App.CardBg"]        = Brush(0x14FFFFFF);
-            r["App.CardBorder"]    = Brush(0x33FFFFFF);
-            r["App.Divider"]       = Brush(0x14FFFFFF);
+            r["App.WindowBg"]      = Brush(0xFF1C1C1E);   // iOS-like deep neutral
+            r["App.SidebarBg"]     = Brush(0xFF161618);
+            r["App.CardBg"]        = Brush(0xFF242427);
+            r["App.CardBorder"]    = Brush(0x14FFFFFF);
+            r["App.Divider"]       = Brush(0x0FFFFFFF);
             r["App.TextPrimary"]   = Brush(0xFFFFFFFF);
-            r["App.TextSecondary"] = Brush(0xCCFFFFFF);
-            r["App.HoverBg"]       = Brush(0x18FFFFFF);
-            r["App.SelectedBg"]    = Brush(0x28FFFFFF);
+            r["App.TextSecondary"] = Brush(0x99FFFFFF);
+            r["App.HoverBg"]       = Brush(0x0FFFFFFF);
+            r["App.SelectedBg"]    = Brush(0x1FFFFFFF);
             r["App.Accent"]        = Brush(0xFF60CDFF);
-            r["App.TrackBg"]       = Brush(0x33FFFFFF);
-            r["App.InputBg"]       = Brush(0x14FFFFFF);
-            r["App.ToggleTrackOff"]= Brush(0x33FFFFFF);
-        }
-        else if (isDark)
-        {
-            r["App.WindowBg"]      = Brush(useBackdrop ? 0x66202020u : 0xFF202020u);
-            r["App.SidebarBg"]     = Brush(useBackdrop ? 0x55181818u : 0xFF1A1A1Au);
-            r["App.CardBg"]        = Brush(useBackdrop ? 0xCC2B2B2Bu : 0xFF2B2B2Bu);
-            r["App.CardBorder"]    = Brush(0x1FFFFFFF);
-            r["App.Divider"]       = Brush(0x14FFFFFF);
-            r["App.TextPrimary"]   = Brush(0xFFFFFFFF);
-            r["App.TextSecondary"] = Brush(0xB3FFFFFF);
-            r["App.HoverBg"]       = Brush(0x14FFFFFF);
-            r["App.SelectedBg"]    = Brush(0x24FFFFFF);
-            r["App.Accent"]        = Brush(0xFF60CDFF);
-            r["App.TrackBg"]       = Brush(0x33FFFFFF);
-            r["App.InputBg"]       = Brush(useBackdrop ? 0x661E1E1Eu : 0xFF1E1E1Eu);
+            r["App.TrackBg"]       = Brush(0x26FFFFFF);
+            r["App.InputBg"]       = Brush(0xFF2C2C2F);
             r["App.ToggleTrackOff"]= Brush(0x33FFFFFF);
         }
         else
         {
-            r["App.WindowBg"]      = Brush(useBackdrop ? 0x66F3F3F3u : 0xFFF3F3F3u);
-            r["App.SidebarBg"]     = Brush(useBackdrop ? 0x55EDEDEDu : 0xFFEDEDEDu);
-            r["App.CardBg"]        = Brush(useBackdrop ? 0xCCFFFFFFu : 0xFFFFFFFFu);
-            r["App.CardBorder"]    = Brush(0x14000000);
-            r["App.Divider"]       = Brush(0x0D000000);
-            r["App.TextPrimary"]   = Brush(0xFF1F1F1F);
-            r["App.TextSecondary"] = Brush(0x99000000);
-            r["App.HoverBg"]       = Brush(0x0D000000);
-            r["App.SelectedBg"]    = Brush(0x1A000000);
+            r["App.WindowBg"]      = Brush(0xFFF7F7F8);   // iOS-like off-white
+            r["App.SidebarBg"]     = Brush(0xFFEEEEF1);
+            r["App.CardBg"]        = Brush(0xFFFFFFFF);
+            r["App.CardBorder"]    = Brush(0x12000000);
+            r["App.Divider"]       = Brush(0x08000000);
+            r["App.TextPrimary"]   = Brush(0xFF1A1A1C);
+            r["App.TextSecondary"] = Brush(0x80000000);
+            r["App.HoverBg"]       = Brush(0x08000000);
+            r["App.SelectedBg"]    = Brush(0x14000000);
             r["App.Accent"]        = Brush(0xFF005FB8);
-            r["App.TrackBg"]       = Brush(0x22000000);
-            r["App.InputBg"]       = Brush(useBackdrop ? 0x66FFFFFFu : 0xFFFFFFFFu);
-            r["App.ToggleTrackOff"]= Brush(0x22000000);
+            r["App.TrackBg"]       = Brush(0x1A000000);
+            r["App.InputBg"]       = Brush(0xFFFFFFFF);
+            r["App.ToggleTrackOff"]= Brush(0x29000000);
         }
     }
 
@@ -734,13 +783,13 @@ public partial class SettingsWindow : Window
         string body = id switch
         {
             SchedulePointId.BedtimeStart => $"Evening ramp starts at {Fmt(t)} ({k} K)",
-            SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {Fmt(t)}",
+            SchedulePointId.BedtimeEnd   => $"Bedtime: {k} K from {Fmt(t)}",
             SchedulePointId.WakeupStart  => $"Morning ramp starts at {Fmt(t)} ({k} K)",
-            SchedulePointId.WakeupEnd    => $"Wake — {k} K by {Fmt(t)}",
+            SchedulePointId.WakeupEnd    => $"Wake: {k} K by {Fmt(t)}",
             _ => string.Empty,
         };
         if (locked && !string.IsNullOrEmpty(body))
-            body += "\n(Recommended profile is locked on kelvin — clone via + to edit colour temperatures.)";
+            body += "\n(Recommended profile is locked on kelvin. Clone via + to edit colour temperatures.)";
         return body;
     }
 
@@ -1035,7 +1084,7 @@ public partial class SettingsWindow : Window
             if (_huePairSecondsLeft <= 0)
             {
                 _huePairSecondsLeft = 30;
-                LblHuePairingStatus.Text = "Press the button again — the 30-second window has lapsed.";
+                LblHuePairingStatus.Text = "Press the button again. The 30 second window has lapsed.";
             }
             else
             {

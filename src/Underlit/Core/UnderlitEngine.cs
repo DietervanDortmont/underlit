@@ -125,7 +125,13 @@ public sealed class UnderlitEngine : IDisposable
     {
         _settings = settings;
         _targetWarmth = Math.Clamp(_targetWarmth, 1500, 6500);
-        ApplyNow();
+        // v0.6.40: refresh gamma/overlay using the CURRENT in-flight warmth
+        // and brightness instead of snapping to target. The old ApplyNow
+        // here aborted any active warmth ramp by setting
+        // _currentWarmthRendered = _targetWarmth, which interfered with
+        // schedule-graph drag previews when a settings push happened
+        // mid-drag.
+        ApplySoftwareNow();
     }
 
     // ---- User commands ----

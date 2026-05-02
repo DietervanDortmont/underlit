@@ -36,11 +36,28 @@ public sealed class Scheduler : IDisposable
 
     public void UpdateSettings(AppSettings s) => _settings = s;
 
+    /// <summary>
+    /// Start the scheduler timer. v0.6.40: idempotent — calling Start on an
+    /// already-running scheduler is a no-op now, instead of firing OnTick
+    /// again. The previous behaviour caused per-keystroke flicker during
+    /// schedule-graph drags: every programmatic <c>SldNightWarmth.Value</c>
+    /// write triggered <c>PushSettings → ApplySettings → Scheduler.Start →
+    /// OnTick → SetWarmth(scheduleBaseline)</c>, so the screen oscillated
+    /// between the drag's preview kelvin and the schedule baseline (often
+    /// 6500 K mid-day, "white") on every mouse-move.
+    /// </summary>
     public void Start()
     {
+        if (_timer.IsEnabled) return;
         _timer.Start();
         OnTick(null, EventArgs.Empty);
     }
+
+    /// <summary>Force a single immediate baseline computation, e.g. when
+    /// the user has just enabled the schedule or changed their schedule
+    /// curve and wants the screen to reflect that without waiting up to
+    /// 30 s for the next regular tick.</summary>
+    public void Pulse() => OnTick(null, EventArgs.Empty);
 
     public void Stop() => _timer.Stop();
 

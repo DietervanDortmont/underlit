@@ -13,22 +13,32 @@
         UseLayoutRounding="True">
 
     <Window.Resources>
-        <!-- All theme-reactive brushes are DynamicResource. Values set in code by ApplyTheme(). -->
+        <!--
+            v0.6.40: visual system overhaul. Apple/iOS-flavoured palette,
+            consistent typography rhythm (page title 22 / caption 11 SC /
+            row label 13 / value chip 12 SC), pill-shaped scrollbar, iOS-
+            style toggle switch, refined slider, themed tooltip.
+            All theme-reactive brushes are DynamicResource — populated by
+            ApplyTheme() at runtime to follow Windows dark/light only
+            (no longer dependent on OSD backdrop choice).
+        -->
 
+        <!-- ===== Sidebar ===== -->
         <Style x:Key="SidebarItem" TargetType="ListBoxItem">
-            <Setter Property="Padding" Value="14,10"/>
-            <Setter Property="Margin" Value="8,2"/>
+            <Setter Property="Padding" Value="14,9"/>
+            <Setter Property="Margin" Value="10,1"/>
             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ListBoxItem">
                         <Border x:Name="Bd"
                                 Background="{TemplateBinding Background}"
-                                CornerRadius="6"
+                                CornerRadius="8"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter/>
                         </Border>
@@ -45,72 +55,176 @@
             </Setter>
         </Style>
 
+        <!-- ===== Card / row scaffolding ===== -->
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource App.CardBg}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="4,2"/>
-            <Setter Property="Margin" Value="0,0,0,16"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
         </Style>
 
         <Style x:Key="CardCaption" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
-            <Setter Property="Margin" Value="4,14,0,6"/>
+            <Setter Property="Margin" Value="6,18,0,8"/>
+            <!-- iOS-style "section header": small caps with a touch of letter spacing. -->
+            <Setter Property="TextOptions.TextFormattingMode" Value="Ideal"/>
         </Style>
 
         <Style x:Key="Row" TargetType="Grid">
             <Setter Property="MinHeight" Value="48"/>
+            <Setter Property="Margin" Value="0,2"/>
         </Style>
 
         <Style x:Key="RowDivider" TargetType="Border">
             <Setter Property="Height" Value="1"/>
             <Setter Property="Background" Value="{DynamicResource App.Divider}"/>
-            <Setter Property="Margin" Value="14,0"/>
+            <Setter Property="Margin" Value="16,0"/>
         </Style>
 
         <Style x:Key="RowLabel" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
             <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Margin" Value="14,0,12,0"/>
+            <Setter Property="Margin" Value="16,0,12,0"/>
         </Style>
 
+        <!-- Inline hint TextBlocks are deprecated in v0.6.40; kept as a
+             style so XAML that still uses it doesn't break, but we set
+             Visibility=Collapsed by default so leftover hints just don't
+             render. The same explanatory text shows up as a tooltip on
+             the adjacent control instead, on hover. -->
         <Style x:Key="RowHint" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
-            <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Margin" Value="14,0,12,0"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Visibility" Value="Collapsed"/>
         </Style>
 
+        <!-- ===== Themed tooltip (Apple-style minimal popup) ===== -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="{DynamicResource App.CardBg}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border CornerRadius="8"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                MaxWidth="320">
+                            <Border.Effect>
+                                <DropShadowEffect Color="#000000" BlurRadius="14"
+                                                  ShadowDepth="2" Opacity="0.18"/>
+                            </Border.Effect>
+                            <ContentPresenter TextBlock.TextWrapping="Wrap"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===== iOS-style toggle switch ===== -->
         <Style x:Key="ToggleSwitch" TargetType="CheckBox">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="Margin" Value="0,0,14,0"/>
+            <Setter Property="Margin" Value="0,0,16,0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
-                        <Border x:Name="Track" Width="40" Height="22"
-                                CornerRadius="11"
-                                Background="{DynamicResource App.ToggleTrackOff}">
+                        <Border x:Name="Track" Width="44" Height="26"
+                                CornerRadius="13"
+                                Background="{DynamicResource App.ToggleTrackOff}"
+                                BorderThickness="0">
                             <Grid>
                                 <Ellipse x:Name="Knob"
-                                         Width="16" Height="16"
-                                         Margin="3"
+                                         Width="22" Height="22"
+                                         Margin="2"
                                          HorizontalAlignment="Left"
-                                         Fill="White"/>
+                                         Fill="White"
+                                         RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <TranslateTransform x:Name="KnobShift" X="0"/>
+                                    </Ellipse.RenderTransform>
+                                    <Ellipse.Effect>
+                                        <DropShadowEffect Color="#000000" BlurRadius="4"
+                                                          ShadowDepth="1" Opacity="0.30"/>
+                                    </Ellipse.Effect>
+                                </Ellipse>
                             </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="{DynamicResource App.Accent}"/>
-                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobShift"
+                                                             Storyboard.TargetProperty="X"
+                                                             To="18" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <ColorAnimation Storyboard.TargetName="Track"
+                                                            Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                            To="#FF34C759" Duration="0:0:0.18"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="KnobShift"
+                                                             Storyboard.TargetProperty="X"
+                                                             To="0" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <CubicEase EasingMode="EaseOut"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
                             </Trigger>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Track" Property="Opacity" Value="0.9"/>
+                                <Setter TargetName="Track" Property="Opacity" Value="0.92"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===== Apple-style slider ===== -->
+        <Style x:Key="AppleSliderThumb" TargetType="Thumb">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Grid>
+                            <Ellipse Fill="White">
+                                <Ellipse.Effect>
+                                    <DropShadowEffect Color="#000000" BlurRadius="6"
+                                                      ShadowDepth="1" Opacity="0.28"/>
+                                </Ellipse.Effect>
+                            </Ellipse>
+                            <Ellipse x:Name="Halo" Fill="{DynamicResource App.Accent}"
+                                     Opacity="0" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Halo" Property="Opacity" Value="0.10"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="Halo" Property="Opacity" Value="0.18"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -120,32 +234,71 @@
 
         <Style x:Key="AppleSlider" TargetType="Slider">
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <!-- v0.6.31: dropped from 180 → 80. A 180-dip floor meant the
-                 row's natural width was ~470 dip; narrower windows clipped
-                 the slider's right edge instead of shrinking it. 80 still
-                 leaves the thumb addressable while letting the window narrow
-                 to ~370 dip without overflow. -->
             <Setter Property="MinWidth" Value="80"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
             <Setter Property="Foreground" Value="{DynamicResource App.Accent}"/>
             <Setter Property="Background" Value="{DynamicResource App.TrackBg}"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="22">
+                            <Border Height="4" CornerRadius="2"
+                                    VerticalAlignment="Center"
+                                    Background="{TemplateBinding Background}"/>
+                            <Track x:Name="PART_Track" Height="22" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <!-- The "decrease" side of the track is the
+                                                     filled portion (left of thumb); paint it
+                                                     with the slider's accent foreground. -->
+                                                <Border Height="4" CornerRadius="2"
+                                                        VerticalAlignment="Center"
+                                                        Background="{Binding Foreground,
+                                                                     RelativeSource={RelativeSource AncestorType=Slider}}"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource AppleSliderThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
+        <!-- ===== Themed text input ===== -->
         <Style x:Key="AppleTextBox" TargetType="TextBox">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="Margin" Value="0,0,14,0"/>
-            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Margin" Value="0,0,16,0"/>
+            <Setter Property="Padding" Value="10,7"/>
             <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
             <Setter Property="CaretBrush" Value="{DynamicResource App.TextPrimary}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
             <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontSize" Value="13"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border CornerRadius="6"
+                        <Border x:Name="Bd"
+                                CornerRadius="8"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}">
@@ -153,26 +306,219 @@
                                           Padding="{TemplateBinding Padding}"
                                           VerticalAlignment="Center"/>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource App.Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
+        <!-- ===== Refined dropdown (ComboBox) ===== -->
+        <Style x:Key="AppleComboBox" TargetType="ComboBox">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="MinWidth" Value="140"/>
+            <Setter Property="Margin" Value="0,0,16,0"/>
+            <Setter Property="Padding" Value="12,7,10,7"/>
+            <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleButton"
+                                          Grid.Column="0"
+                                          ClickMode="Press"
+                                          Focusable="False"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="Bd"
+                                                CornerRadius="8"
+                                                Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"/>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                                <ToggleButton.Background>
+                                    <Binding Path="Background" RelativeSource="{RelativeSource TemplatedParent}"/>
+                                </ToggleButton.Background>
+                                <ToggleButton.BorderBrush>
+                                    <Binding Path="BorderBrush" RelativeSource="{RelativeSource TemplatedParent}"/>
+                                </ToggleButton.BorderBrush>
+                                <ToggleButton.BorderThickness>
+                                    <Binding Path="BorderThickness" RelativeSource="{RelativeSource TemplatedParent}"/>
+                                </ToggleButton.BorderThickness>
+                            </ToggleButton>
+                            <ContentPresenter Name="ContentSite"
+                                              IsHitTestVisible="False"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center"
+                                              HorizontalAlignment="Left"/>
+                            <Path x:Name="Arrow"
+                                  HorizontalAlignment="Right" VerticalAlignment="Center"
+                                  Margin="0,0,12,0"
+                                  Width="9" Height="6"
+                                  Stretch="Fill"
+                                  Fill="{DynamicResource App.TextSecondary}"
+                                  Data="M 0 0 L 4.5 6 L 9 0 Z"/>
+                            <Popup Name="Popup"
+                                   Placement="Bottom"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   PopupAnimation="Slide">
+                                <Border x:Name="DropDownBorder"
+                                        Margin="0,4,0,8"
+                                        CornerRadius="10"
+                                        Background="{DynamicResource App.CardBg}"
+                                        BorderBrush="{DynamicResource App.CardBorder}"
+                                        BorderThickness="1"
+                                        SnapsToDevicePixels="True"
+                                        MinWidth="{TemplateBinding ActualWidth}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <Border.Effect>
+                                        <DropShadowEffect Color="#000000" BlurRadius="20"
+                                                          ShadowDepth="3" Opacity="0.22"/>
+                                    </Border.Effect>
+                                    <ScrollViewer Margin="4" SnapsToDevicePixels="True">
+                                        <StackPanel IsItemsHost="True"
+                                                    KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource App.Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="{DynamicResource App.Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd"
+                                Padding="{TemplateBinding Padding}"
+                                CornerRadius="6"
+                                Background="Transparent">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.HoverBg}"/>
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.SelectedBg}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Default ComboBox to the Apple style without forcing every site
+             to opt in via Style attribute. -->
+        <Style TargetType="ComboBox" BasedOn="{StaticResource AppleComboBox}"/>
+
+        <!-- ===== Pill scrollbar ===== -->
+        <Style x:Key="PillScrollThumb" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border CornerRadius="3"
+                                Background="{DynamicResource App.TextSecondary}"
+                                Opacity="0.42"
+                                Margin="2"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent">
+                            <Track x:Name="PART_Track"
+                                   IsDirectionReversed="True"
+                                   Width="6"
+                                   HorizontalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand"
+                                                  Background="Transparent" BorderThickness="0">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource PillScrollThumb}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand"
+                                                  Background="Transparent" BorderThickness="0">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Background="Transparent"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="MinHeight" Value="10"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <Style x:Key="ValueChip" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="MinWidth" Value="54"/>
+            <Setter Property="MinWidth" Value="56"/>
             <Setter Property="TextAlignment" Value="Right"/>
-            <Setter Property="Margin" Value="8,0,14,0"/>
+            <Setter Property="Margin" Value="8,0,16,0"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
-            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
 
         <Style x:Key="PageTitle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="22"/>
+            <Setter Property="FontSize" Value="26"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
-            <Setter Property="Margin" Value="0,0,0,18"/>
+            <Setter Property="Margin" Value="0,0,0,20"/>
         </Style>
     </Window.Resources>
 
@@ -397,7 +743,7 @@
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
-                                           Text="The brightness bar runs 0..100. The right half (50–100) uses your Windows accent — that's where the OS's own brightness slider lives. The left half (0–50) shifts to a darker shade so you get a clear visual cue when you're pushing brightness BELOW the OS minimum, into Underlit's extended-dim range. There's a single transition at the 50 mark — not a per-step gradient. Choose the dim shade or let it auto-derive from your accent."/>
+                                           Text="The brightness bar runs 0 to 100. The right half (50 to 100) uses your Windows accent, the same range the system slider covers. The left half (0 to 50) shifts to a darker shade as a visual cue that you've pushed brightness below the OS minimum into Underlit's extended-dim range. The transition is a single hard switch at 50, not a per-step gradient."/>
 
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>
@@ -408,7 +754,7 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Sub-OS-min colour"/>
                                         <TextBlock x:Name="LblHighColorMode" Style="{StaticResource RowHint}"
-                                                   Text="Auto — darkened from your accent."/>
+                                                   Text="Auto: darkened from your accent."/>
                                     </StackPanel>
                                     <Button Grid.Column="1" x:Name="BtnPickHighColor" Margin="0,0,8,0" Padding="6"
                                             Cursor="Hand" Background="Transparent" BorderThickness="0"
@@ -440,7 +786,7 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Live capture"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="On: glass refracts what's behind in real time. Windows 11 22H2/23H2 shows a brief yellow capture-border indicator while the OSD is visible. Off: a single snapshot is taken when the OSD appears (frozen for ~1.3s) — no yellow border on any Windows version."/>
+                                                   Text="On: the glass refracts what's behind it in real time. On Windows 11 22H2 and later this shows a brief yellow capture indicator while the OSD is visible. Off: a single snapshot is taken when the OSD appears and frozen for the duration. No yellow indicator on any Windows version."/>
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" x:Name="ChkGlassLiveCapture" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
@@ -599,7 +945,7 @@
                     <StackPanel x:Name="PageHotkeys" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Hotkeys"/>
                         <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
-                                   Text="Click a field, then press the key combination you want — Underlit captures it directly. Esc cancels, Backspace clears. Bindings need at least one modifier (Ctrl, Alt, Shift, or Win) so a single key isn't hijacked system-wide."/>
+                                   Text="Click a field and press the key combination you want. Esc cancels, Backspace clears. Bindings need at least one modifier (Ctrl, Alt, Shift, or Win) so a single key isn't hijacked system-wide."/>
 
                         <TextBlock Style="{StaticResource CardCaption}" Text="BRIGHTNESS"/>
                         <Border Style="{StaticResource Card}">
@@ -693,7 +1039,7 @@
                         <TextBlock Style="{StaticResource PageTitle}" Text="Schedule"/>
 
                         <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,12"
-                                   Text="Two ways to control warmth: turn the toggle ON to let Underlit follow the day/night ramp below — your screen auto-warms in the evening and resets to neutral in the morning, applied immediately on launch. Turn the toggle OFF to control warmth manually with hotkeys; whatever you set persists across sessions until you change it again."/>
+                                   Text="On: Underlit follows the day to night curve below. Your screen warms in the evening and resets to neutral in the morning, applied immediately on launch. Off: you control warmth manually with hotkeys, and whatever you set persists until you change it."/>
 
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
@@ -1132,7 +1478,7 @@
                     <StackPanel x:Name="PageExclusions" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Exclusions"/>
                         <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
-                                   Text="When any of these apps is focused, Underlit suspends its dimming. Enter process names WITHOUT the .exe — one per line."/>
+                                   Text="When any of these apps is focused, Underlit suspends its dimming. Enter process names without the .exe, one per line."/>
                         <Border Style="{StaticResource Card}" Padding="4">
                             <TextBox x:Name="TxtExclusions"
                                      Style="{StaticResource AppleTextBox}"

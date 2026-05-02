@@ -263,7 +263,7 @@ public partial class HotkeyField : UserControl
             if (string.IsNullOrEmpty(Value))
             {
                 ValueText.Visibility   = Visibility.Visible;
-                ValueText.Text         = "(none — click to set)";
+                ValueText.Text         = "(none, click to set)";
                 ValueText.Foreground   = (Brush?)TryFindResource("App.TextSecondary")
                                         ?? Brushes.Gray;
                 ValueText.FontStyle    = FontStyles.Italic;

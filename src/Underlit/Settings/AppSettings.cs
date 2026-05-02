@@ -100,6 +100,17 @@ public sealed class AppSettings
     public BackdropStyle OsdBackdrop { get; set; } = BackdropStyle.Subtle;
 
     /// <summary>
+    /// Color the brightness fill transitions toward as the level approaches +100.
+    ///   "auto"  — derive automatically from the accent (~55% RGB multiplier).
+    ///   "#AARRGGBB" or "#RRGGBB" — specific user-chosen color.
+    ///
+    /// Below the transition midpoint (brightness ≤ 50) the fill is the accent
+    /// color; above 50 it lerps from accent to this color, reaching it fully at
+    /// brightness 100. Gives a "more brightness = deeper colour" cue.
+    /// </summary>
+    public string OsdBrightnessHighColor { get; set; } = "auto";
+
+    /// <summary>
     /// How the brightness / warmth indicator inside the OSD pill is drawn.
     ///   Bar       — current default. Thin 4px slider with a track + small partial
     ///                fill that grows from the centre outward.

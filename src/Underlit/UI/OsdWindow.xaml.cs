@@ -148,6 +148,8 @@ public partial class OsdWindow : Window
     private bool _glassLiveCapture = true;
     /// <summary>Which bar style the OSD draws — Bar (thin slider) vs SolidFill (tall pill fill).</summary>
     private OsdBarStyle _barStyle = OsdBarStyle.Bar;
+    /// <summary>"auto" or hex string — color the brightness fill transitions to past 50%.</summary>
+    private string _brightnessHighColor = "auto";
     /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
     private double _lastBrightness;
     private int _lastWarmth = 6500;
@@ -211,9 +213,10 @@ public partial class OsdWindow : Window
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
                                      TransparencyMode transparencyMode, BackdropStyle backdrop,
                                      GlassParams glass, bool glassLiveCapture,
-                                     OsdBarStyle barStyle)
+                                     OsdBarStyle barStyle, string brightnessHighColor)
     {
         _barStyle = barStyle;
+        _brightnessHighColor = string.IsNullOrWhiteSpace(brightnessHighColor) ? "auto" : brightnessHighColor;
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
 
@@ -432,6 +435,16 @@ public partial class OsdWindow : Window
         double posWidth = clamped >= 0 ?  clamped / 100.0 * half : 0;
         double negWidth = clamped <  0 ? -clamped / 100.0 * half : 0;
 
+        // Recompute the positive-fill colour against the current brightness so
+        // it picks up the accent → "high" colour gradient as the value approaches
+        // 100. Below the transition midpoint (50) it stays pure accent.
+        if (clamped > 0)
+        {
+            Color fill = ComputeBrightnessFillColor(clamped);
+            if (solid) SolidFillPos.Background = new SolidColorBrush(WithAlpha(fill, 0xC0));
+            else        FillRight.Background  = new SolidColorBrush(fill);
+        }
+
         if (solid)
         {
             SolidFillPos.Width = posWidth;
@@ -442,6 +455,80 @@ public partial class OsdWindow : Window
             FillRight.Width = posWidth;
             FillLeft.Width  = negWidth;
         }
+    }
+
+    /// <summary>
+    /// Brightness fill colour as a function of level (expects 0..100):
+    ///   • level ≤ 50 → pure accent.
+    ///   • 50 &lt; level ≤ 100 → linear lerp from accent toward the configured
+    ///                            "high" colour, reaching it fully at 100.
+    ///
+    /// "High" colour is the user setting. When set to "auto" we derive it from
+    /// the accent (RGB ×0.55) so the user gets a sensible default that tracks
+    /// their Windows accent colour automatically.
+    /// </summary>
+    private Color ComputeBrightnessFillColor(double level)
+    {
+        Color baseColor = CurrentAccent();
+        if (level <= 50) return baseColor;
+
+        Color high = ResolveBrightnessHighColor(baseColor);
+        double t = Math.Clamp((level - 50.0) / 50.0, 0, 1);
+        return LerpColor(baseColor, high, t);
+    }
+
+    /// <summary>Resolve the user's "high brightness" colour preference into a Color.
+    /// Auto-mode derives from the supplied accent so the gradient still tracks Windows.</summary>
+    private Color ResolveBrightnessHighColor(Color accent)
+    {
+        if (string.IsNullOrWhiteSpace(_brightnessHighColor)
+            || _brightnessHighColor.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            return AutoDarken(accent);
+
+        if (TryParseHexColor(_brightnessHighColor, out var c)) return c;
+        return AutoDarken(accent);
+    }
+
+    private static Color AutoDarken(Color c) => Color.FromArgb(
+        c.A,
+        (byte)(c.R * 0.55),
+        (byte)(c.G * 0.55),
+        (byte)(c.B * 0.55));
+
+    private static Color LerpColor(Color a, Color b, double t) => Color.FromArgb(
+        (byte)(a.A + (b.A - a.A) * t),
+        (byte)(a.R + (b.R - a.R) * t),
+        (byte)(a.G + (b.G - a.G) * t),
+        (byte)(a.B + (b.B - a.B) * t));
+
+    private static bool TryParseHexColor(string s, out Color c)
+    {
+        c = default;
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        s = s.Trim();
+        if (s.StartsWith("#")) s = s[1..];
+        try
+        {
+            if (s.Length == 6)
+            {
+                c = Color.FromRgb(
+                    Convert.ToByte(s[..2], 16),
+                    Convert.ToByte(s[2..4], 16),
+                    Convert.ToByte(s[4..6], 16));
+                return true;
+            }
+            if (s.Length == 8)
+            {
+                c = Color.FromArgb(
+                    Convert.ToByte(s[..2], 16),
+                    Convert.ToByte(s[2..4], 16),
+                    Convert.ToByte(s[4..6], 16),
+                    Convert.ToByte(s[6..8], 16));
+                return true;
+            }
+        }
+        catch { }
+        return false;
     }
 
     private void UpdateWarmthBar(int kelvin)

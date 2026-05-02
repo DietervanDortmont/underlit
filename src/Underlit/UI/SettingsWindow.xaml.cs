@@ -87,6 +87,8 @@ public partial class SettingsWindow : Window
 
         BtnPickAccent.Click += OnPickAccent;
         BtnPickTint.Click   += OnPickTint;
+        BtnPickHighColor.Click  += OnPickHighColor;
+        BtnResetHighColor.Click += OnResetHighColor;
         CboTransparency.SelectionChanged += (_, _) =>
         {
             PushSettings();
@@ -175,6 +177,67 @@ public partial class SettingsWindow : Window
         TintSwatch.Background = new SolidColorBrush(color);
     }
 
+    private void OnPickHighColor(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+        };
+        // Pre-seed with the currently-resolved colour (whatever auto would produce
+        // if the user is on auto, otherwise their saved choice) so the picker opens
+        // on something close to what they're seeing today.
+        Color seed = ResolveHighColorForUI();
+        dlg.Color = System.Drawing.Color.FromArgb(seed.A, seed.R, seed.G, seed.B);
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            var c = dlg.Color;
+            _snapshot.OsdBrightnessHighColor = $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+            RefreshHighColorSwatch();
+            PushSettings();
+        }
+    }
+
+    private void OnResetHighColor(object sender, RoutedEventArgs e)
+    {
+        _snapshot.OsdBrightnessHighColor = "auto";
+        RefreshHighColorSwatch();
+        PushSettings();
+    }
+
+    /// <summary>The colour the swatch should display right now — either the user's
+    /// saved choice or, when on "auto", the same RGB×0.55 darkening the OSD applies
+    /// internally so the swatch matches what they actually see.</summary>
+    private Color ResolveHighColorForUI()
+    {
+        bool isAuto = string.IsNullOrWhiteSpace(_snapshot.OsdBrightnessHighColor)
+                   || _snapshot.OsdBrightnessHighColor.Equals("auto", StringComparison.OrdinalIgnoreCase);
+        if (!isAuto && TryParseHex(_snapshot.OsdBrightnessHighColor, out var c))
+            return c;
+
+        // Auto mode — show the darkened accent that the OSD will actually paint.
+        Color accent;
+        if (ChkFollowAccent.IsChecked == true)
+            accent = AccentColorReader.GetAccentColor();
+        else
+            TryParseHex(_snapshot.OsdAccentColor, out accent);
+        return Color.FromArgb(
+            accent.A,
+            (byte)(accent.R * 0.55),
+            (byte)(accent.G * 0.55),
+            (byte)(accent.B * 0.55));
+    }
+
+    private void RefreshHighColorSwatch()
+    {
+        bool isAuto = string.IsNullOrWhiteSpace(_snapshot.OsdBrightnessHighColor)
+                   || _snapshot.OsdBrightnessHighColor.Equals("auto", StringComparison.OrdinalIgnoreCase);
+        HighColorSwatch.Background = new SolidColorBrush(ResolveHighColorForUI());
+        LblHighColorMode.Text = isAuto
+            ? "Auto — derived from your accent."
+            : "Custom — click swatch to change, Auto to reset.";
+    }
+
     private void RefreshAccentSwatch()
     {
         Color color;
@@ -193,6 +256,10 @@ public partial class SettingsWindow : Window
         AccentSwatch.Background = new SolidColorBrush(color);
         // Disabled visual cue when we're following Windows.
         BtnPickAccent.Opacity = (ChkFollowAccent.IsChecked == true) ? 0.55 : 1.0;
+
+        // The high-brightness swatch in "Auto" mode is derived from the accent,
+        // so any accent change has to refresh it too.
+        if (HighColorSwatch != null) RefreshHighColorSwatch();
     }
 
     private static bool TryParseHex(string? hex, out Color c)
@@ -365,6 +432,7 @@ public partial class SettingsWindow : Window
         SldGlassRimSecondary.Value   = _snapshot.GlassRimSecondary;
         SldGlassTintStrength.Value   = _snapshot.GlassTintStrength;
         RefreshTintSwatch();
+        RefreshHighColorSwatch();
 
         TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
         TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;

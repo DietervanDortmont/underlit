@@ -371,6 +371,39 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- BAR COLOUR — gradient between accent and a "high brightness" shade -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="BAR COLOUR"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                           Text="The brightness fill starts in your Windows accent (or the custom accent above) and gradually transitions to a deeper shade as you push past 50% — visualising 'more brightness = stronger colour'. Choose the shade or let it auto-derive from your accent."/>
+
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="High brightness color"/>
+                                        <TextBlock x:Name="LblHighColorMode" Style="{StaticResource RowHint}"
+                                                   Text="Auto — derived from your accent."/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnPickHighColor" Margin="0,0,8,0" Padding="6"
+                                            Cursor="Hand" Background="Transparent" BorderThickness="0"
+                                            ToolTip="Pick a custom 'high brightness' colour">
+                                        <Border x:Name="HighColorSwatch"
+                                                Width="32" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                    </Button>
+                                    <Button Grid.Column="2" x:Name="BtnResetHighColor" Margin="0,0,14,0"
+                                            Content="Auto" Padding="10,4"
+                                            Cursor="Hand"
+                                            ToolTip="Reset to auto-derive from accent"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
                         <!-- LIQUID GLASS TUNING (active when Backdrop = Liquid Glass) -->
                         <TextBlock Style="{StaticResource CardCaption}" Text="LIQUID GLASS"/>
                         <Border Style="{StaticResource Card}">
@@ -606,15 +639,38 @@
                     <StackPanel x:Name="PageSchedule" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Schedule"/>
 
+                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,12"
+                                   Text="Two ways to control warmth: turn the toggle ON to let Underlit follow the day/night ramp below — your screen auto-warms in the evening and resets to neutral in the morning, applied immediately on launch. Turn the toggle OFF to control warmth manually with hotkeys; whatever you set persists across sessions until you change it again."/>
+
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Warmth follows a schedule"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Warmth follows a schedule"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Override automatically every 30 seconds while running."/>
+                                    </StackPanel>
                                     <CheckBox Grid.Column="1" x:Name="ChkScheduleEnabled" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
+
+                        <!-- Schedule curve cards — dimmed/disabled when the toggle above is off so the
+                             user gets a clear signal that they're inert in manual mode. IsEnabled
+                             binding handles the disable state; Opacity binding handles the visual cue. -->
+                        <StackPanel x:Name="SchedulePanelCurve"
+                                    IsEnabled="{Binding ElementName=ChkScheduleEnabled, Path=IsChecked}">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Opacity" Value="1.0"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ElementName=ChkScheduleEnabled, Path=IsChecked}" Value="False">
+                                            <Setter Property="Opacity" Value="0.45"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
 
                         <TextBlock Style="{StaticResource CardCaption}" Text="BEDTIME RAMP"/>
                         <Border Style="{StaticResource Card}">
@@ -664,6 +720,7 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                        </StackPanel>  <!-- /SchedulePanelCurve -->
                     </StackPanel>
 
                     <!-- MONITORS -->

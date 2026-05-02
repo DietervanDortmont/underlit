@@ -58,7 +58,8 @@ public sealed class UnderlitHost : IDisposable
             _settings.OsdBackdrop,
             GlassParamsFromSettings(_settings),
             _settings.GlassLiveCapture,
-            _settings.OsdBarStyle);
+            _settings.OsdBarStyle,
+            _settings.OsdBrightnessHighColor);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -129,15 +130,29 @@ public sealed class UnderlitHost : IDisposable
         // Night Light
         if (_settings.DisableWindowsNightLight) NightLightControl.Disable();
 
-        // Auto-start: the registry is the source of truth. If the installer wrote a Run
-        // entry but our freshly-defaulted settings.json said StartWithWindows=false, we'd
-        // otherwise delete the installer's entry on first launch. Sync the other way.
+        // Auto-start: two-step reconciliation between settings.json and the
+        // HKCU\...\Run registry value.
+        //
+        //   1. INHERIT: if the installer just wrote a Run entry (typical first
+        //      install) but our defaulted settings.json says StartWithWindows=false,
+        //      we'd otherwise delete the installer's entry on first launch. So if
+        //      registry and settings disagree, settings inherits the registry's
+        //      truth and persists.
+        //
+        //   2. REFRESH: rewrite the registry to the CURRENT Environment.ProcessPath
+        //      when enabled. This fixes the "Task Manager says enabled but boot
+        //      doesn't actually launch the app" failure mode — caused by the
+        //      registry value pointing at an old install location that no longer
+        //      exists. AutoStart.Set logs the before/after so the user can confirm
+        //      via %LOCALAPPDATA%\Underlit\underlit.log.
         bool registryHasAutoStart = AutoStart.IsEnabled();
         if (registryHasAutoStart != _settings.StartWithWindows)
         {
             _settings.StartWithWindows = registryHasAutoStart;
             _settings.Save();
         }
+        Logger.Info($"AutoStart: settings={_settings.StartWithWindows}, registered={AutoStart.GetRegisteredCommand() ?? "<absent>"}, currentExe={AutoStart.GetCurrentExePath() ?? "<unknown>"}");
+        AutoStart.Set(_settings.StartWithWindows);
 
         // Listen for display changes (add/remove monitor, resolution change)
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
@@ -254,7 +269,8 @@ public sealed class UnderlitHost : IDisposable
             next.OsdBackdrop,
             GlassParamsFromSettings(next),
             next.GlassLiveCapture,
-            next.OsdBarStyle);
+            next.OsdBarStyle,
+            next.OsdBrightnessHighColor);
     }
 
     private static Underlit.Sys.GlassParams GlassParamsFromSettings(AppSettings s) => new()

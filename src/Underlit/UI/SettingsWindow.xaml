@@ -140,7 +140,15 @@
             </Setter>
         </Style>
 
-        <!-- ===== iOS-style toggle switch ===== -->
+        <!-- ===== iOS-style toggle switch =====
+             Two layered backgrounds: the off-state track (theme grey, always
+             present underneath) plus a green ON overlay whose Opacity
+             animates 0..1 on IsChecked. This avoids the v0.6.40 problem
+             where the ColorAnimation only had EnterActions, so flipping
+             OFF left the track stuck on green. The opacity approach also
+             means the brushes don't get globally mutated, which is what
+             happens when you ColorAnimate on a DynamicResource brush.
+        -->
         <Style x:Key="ToggleSwitch" TargetType="CheckBox">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
@@ -154,6 +162,12 @@
                                 Background="{DynamicResource App.ToggleTrackOff}"
                                 BorderThickness="0">
                             <Grid>
+                                <!-- Green overlay for the ON state. Opacity
+                                     animates 0..1 to fade in/out. -->
+                                <Border x:Name="OnOverlay"
+                                        CornerRadius="13"
+                                        Background="#FF34C759"
+                                        Opacity="0"/>
                                 <Ellipse x:Name="Knob"
                                          Width="22" Height="22"
                                          Margin="2"
@@ -182,9 +196,9 @@
                                                     <CubicEase EasingMode="EaseOut"/>
                                                 </DoubleAnimation.EasingFunction>
                                             </DoubleAnimation>
-                                            <ColorAnimation Storyboard.TargetName="Track"
-                                                            Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
-                                                            To="#FF34C759" Duration="0:0:0.18"/>
+                                            <DoubleAnimation Storyboard.TargetName="OnOverlay"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="1" Duration="0:0:0.18"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </Trigger.EnterActions>
@@ -198,6 +212,9 @@
                                                     <CubicEase EasingMode="EaseOut"/>
                                                 </DoubleAnimation.EasingFunction>
                                             </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="OnOverlay"
+                                                             Storyboard.TargetProperty="Opacity"
+                                                             To="0" Duration="0:0:0.18"/>
                                         </Storyboard>
                                     </BeginStoryboard>
                                 </Trigger.ExitActions>
@@ -210,6 +227,10 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Default every CheckBox to the toggle switch look unless a
+             site explicitly opts out. -->
+        <Style TargetType="CheckBox" BasedOn="{StaticResource ToggleSwitch}"/>
 
         <!-- ===== Apple-style slider ===== -->
         <Style x:Key="AppleSliderThumb" TargetType="Thumb">
@@ -296,6 +317,8 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Center"/>
             <Setter Property="Margin" Value="0,0,16,0"/>
             <Setter Property="Padding" Value="10,7"/>
             <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
@@ -516,12 +539,157 @@
         <Style x:Key="ValueChip" TargetType="TextBlock">
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="HorizontalAlignment" Value="Right"/>
-            <Setter Property="MinWidth" Value="56"/>
+            <!-- Wide enough that "+200 K" / "1500 K" fit without clipping. -->
+            <Setter Property="MinWidth" Value="68"/>
             <Setter Property="TextAlignment" Value="Right"/>
             <Setter Property="Margin" Value="8,0,16,0"/>
             <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="TextWrapping" Value="NoWrap"/>
+        </Style>
+
+        <!-- Default Slider style — every Slider in the app picks up the
+             AppleSlider template (thin track, glass thumb, accent fill on
+             the left). The previous v0.6.40 keyed AppleSlider with no
+             default meant that liquid-glass tuning sliders (which weren't
+             explicitly opted in) kept the chunky default WPF look. -->
+        <Style TargetType="Slider" BasedOn="{StaticResource AppleSlider}"/>
+
+        <!-- ===== Icon button (transparent, scale-bounce on hover) =====
+             Used for the profile rename / clone / delete row. No visible
+             box; hover scales the icon up about 12% with a quick bouncy
+             cubic-out so it feels lively without grabbing attention. -->
+        <Style x:Key="IconButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="Transparent"
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="Scale" ScaleX="1" ScaleY="1"/>
+                            </Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1.16" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <BackEase EasingMode="EaseOut" Amplitude="0.4"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1.16" Duration="0:0:0.18">
+                                                <DoubleAnimation.EasingFunction>
+                                                    <BackEase EasingMode="EaseOut" Amplitude="0.4"/>
+                                                </DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.14"/>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.14"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ===== Pill action button =====
+             For visible buttons like Unpair / Refresh / Test / Discover.
+             Subtle pill shape, faint border, fills with a soft accent on
+             hover and presses with a slightly darker version. Distinctly
+             buttony without the chunky default WPF chrome. -->
+        <Style x:Key="PillButton" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource App.InputBg}"/>
+            <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource App.CardBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="16,7"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                CornerRadius="14"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="Scale" ScaleX="1" ScaleY="1"/>
+                            </Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.HoverBg}"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource App.Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="0.96" Duration="0:0:0.08"/>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="0.96" Duration="0:0:0.08"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleX"
+                                                             To="1" Duration="0:0:0.12"/>
+                                            <DoubleAnimation Storyboard.TargetName="Scale"
+                                                             Storyboard.TargetProperty="ScaleY"
+                                                             To="1" Duration="0:0:0.12"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style x:Key="PageTitle" TargetType="TextBlock">
@@ -766,16 +934,16 @@
                                         <TextBlock x:Name="LblHighColorMode" Style="{StaticResource RowHint}"
                                                    Text="Auto: darkened from your accent."/>
                                     </StackPanel>
-                                    <Button Grid.Column="1" x:Name="BtnPickHighColor" Margin="0,0,8,0" Padding="6"
-                                            Cursor="Hand" Background="Transparent" BorderThickness="0"
-                                            ToolTip="Pick a custom colour for the sub-OS-min half (0–50)">
+                                    <Button Grid.Column="1" x:Name="BtnPickHighColor" Margin="0,0,8,0"
+                                            Style="{StaticResource IconButton}"
+                                            ToolTip="Pick a custom colour for the sub-OS-min half (0 to 50)">
                                         <Border x:Name="HighColorSwatch"
                                                 Width="32" Height="22" CornerRadius="4"
                                                 BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
                                     </Button>
                                     <Button Grid.Column="2" x:Name="BtnResetHighColor" Margin="0,0,14,0"
-                                            Content="Auto" Padding="10,4"
-                                            Cursor="Hand"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Auto"
                                             ToolTip="Reset to auto-derive from accent"/>
                                 </Grid>
                             </StackPanel>
@@ -1097,38 +1265,41 @@
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <ComboBox x:Name="CboProfile"
-                                              Margin="14,0,8,0"
-                                              VerticalAlignment="Center"
-                                              MinWidth="200"
-                                              IsEditable="False"/>
+                                    <Grid VerticalAlignment="Center" Margin="14,0,8,0">
+                                        <ComboBox x:Name="CboProfile"
+                                                  VerticalAlignment="Center"
+                                                  MinWidth="200"
+                                                  IsEditable="False"/>
+                                        <TextBox x:Name="TxtProfileRename"
+                                                 Style="{StaticResource AppleTextBox}"
+                                                 Visibility="Collapsed"
+                                                 Margin="0"
+                                                 HorizontalAlignment="Stretch"
+                                                 TextAlignment="Left"
+                                                 HorizontalContentAlignment="Left"/>
+                                    </Grid>
                                     <Button Grid.Column="1" x:Name="BtnRenameProfile"
-                                            Margin="0,0,4,0" Padding="6,4"
-                                            Cursor="Hand" Background="Transparent"
-                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            Style="{StaticResource IconButton}"
                                             ToolTip="Rename this profile">
                                         <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="14"
+                                                   FontSize="15"
                                                    Foreground="{DynamicResource App.TextPrimary}"
                                                    Text="&#xE70F;"/>
                                     </Button>
                                     <Button Grid.Column="2" x:Name="BtnAddProfile"
-                                            Margin="0,0,4,0" Padding="6,4"
-                                            Cursor="Hand" Background="Transparent"
-                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
+                                            Style="{StaticResource IconButton}"
                                             ToolTip="Clone current profile to a new one">
                                         <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="14"
+                                                   FontSize="15"
                                                    Foreground="{DynamicResource App.TextPrimary}"
                                                    Text="&#xE710;"/>
                                     </Button>
                                     <Button Grid.Column="3" x:Name="BtnRemoveProfile"
-                                            Margin="0,0,14,0" Padding="6,4"
-                                            Cursor="Hand" Background="Transparent"
-                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"
-                                            ToolTip="Delete this profile (disabled for Recommended)">
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource IconButton}"
+                                            ToolTip="Delete this profile">
                                         <TextBlock FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                                   FontSize="14"
+                                                   FontSize="15"
                                                    Foreground="{DynamicResource App.TextPrimary}"
                                                    Text="&#xE738;"/>
                                     </Button>
@@ -1245,7 +1416,7 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Auto-discover bridges on your network"/>
                                         <Button Grid.Column="1" x:Name="BtnHueDiscover" Margin="0,0,14,0"
-                                                Content="Discover" Padding="14,6" Cursor="Hand"/>
+                                                Style="{StaticResource PillButton}" Content="Discover"/>
                                     </Grid>
                                     <Border Style="{StaticResource RowDivider}"/>
                                     <Grid Style="{StaticResource Row}">
@@ -1260,7 +1431,7 @@
                                                  Padding="6,4"
                                                  ToolTip="e.g. 192.168.1.42"/>
                                         <Button Grid.Column="2" x:Name="BtnHueConnectManual" Margin="0,0,14,0"
-                                                Content="Use this" Padding="14,6" Cursor="Hand"/>
+                                                Style="{StaticResource PillButton}" Content="Use this"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>
@@ -1302,16 +1473,15 @@
                                                    Foreground="{DynamicResource App.TextSecondary}"
                                                    FontSize="11"/>
                                         <Button Grid.Column="1" x:Name="BtnHuePairCancel"
-                                                Margin="0,0,8,0" Padding="14,6"
-                                                Content="Back" Cursor="Hand"
-                                                Background="Transparent"
-                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                                Margin="0,0,8,0"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Back"/>
                                         <Button Grid.Column="2" x:Name="BtnHuePair"
-                                                Padding="18,6"
-                                                Content="Pair" Cursor="Hand"
+                                                Style="{StaticResource PillButton}"
                                                 Background="{DynamicResource App.Accent}"
                                                 BorderThickness="0"
-                                                Foreground="White"/>
+                                                Foreground="White"
+                                                Content="Pair"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>
@@ -1331,9 +1501,8 @@
                                         <TextBlock Style="{StaticResource RowHint}" x:Name="LblHueBridgeStatus" Text="Reachable"/>
                                     </StackPanel>
                                     <Button Grid.Column="1" x:Name="BtnHueUnpair" Margin="0,0,14,0"
-                                            Content="Unpair" Padding="14,6" Cursor="Hand"
-                                            Background="Transparent"
-                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                            Style="{StaticResource PillButton}"
+                                            Content="Unpair"/>
                                 </Grid>
                             </Border>
 
@@ -1342,13 +1511,25 @@
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
                                                Text="Tick any rooms / zones / groups Underlit should follow. Lights you don't tick are left alone."/>
-                                    <ItemsControl x:Name="HueGroupsList" Margin="14,0,14,12">
+                                    <ItemsControl x:Name="HueGroupsList" Margin="14,4,14,12">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <CheckBox Content="{Binding DisplayName}"
-                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                                          Margin="0,3"
-                                                          Foreground="{DynamicResource App.TextPrimary}"/>
+                                                <!-- v0.6.42: switch on the right, label on the
+                                                     left, mirroring the rest of the toggle rows. -->
+                                                <Grid Margin="0,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource App.TextPrimary}"
+                                                               FontSize="13"/>
+                                                    <CheckBox Grid.Column="1"
+                                                              Style="{StaticResource ToggleSwitch}"
+                                                              Margin="0"
+                                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"/>
+                                                </Grid>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
@@ -1361,13 +1542,11 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Refresh group list / test selection"/>
                                         <Button Grid.Column="1" x:Name="BtnHueRefreshGroups"
-                                                Margin="0,0,8,0" Content="Refresh"
-                                                Padding="14,6" Cursor="Hand"
-                                                Background="Transparent"
-                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                                Margin="0,0,8,0"
+                                                Style="{StaticResource PillButton}" Content="Refresh"/>
                                         <Button Grid.Column="2" x:Name="BtnHueTest"
-                                                Margin="0,0,14,0" Content="Test"
-                                                Padding="14,6" Cursor="Hand"/>
+                                                Margin="0,0,14,0"
+                                                Style="{StaticResource PillButton}" Content="Test"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>
@@ -1445,15 +1624,63 @@
                     <StackPanel x:Name="PageMonitors" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Monitors"/>
                         <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
-                                   Text="Per-monitor offsets are ADDED to the global brightness and warmth. Handy for a main monitor that's physically much brighter than a secondary."/>
+                                   Text="Per-monitor offsets are added to the global brightness and warmth. Useful for a main monitor that's physically much brighter than a secondary one."/>
                         <Border Style="{StaticResource Card}" Padding="0">
                             <ListView x:Name="LstMonitors" Background="Transparent" BorderThickness="0">
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem">
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Padding" Value="14,10"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource App.TextPrimary}"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListViewItem">
+                                                    <Border x:Name="Bd"
+                                                            CornerRadius="6"
+                                                            Margin="6,2"
+                                                            Background="{TemplateBinding Background}"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <GridViewRowPresenter VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.HoverBg}"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource App.SelectedBg}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListView.ItemContainerStyle>
                                 <ListView.View>
                                     <GridView>
-                                        <GridViewColumn Header="Display" Width="200" DisplayMemberBinding="{Binding DeviceName}"/>
-                                        <GridViewColumn Header="Path" Width="100" DisplayMemberBinding="{Binding Path}"/>
-                                        <GridViewColumn Header="Brightness offset" Width="140" DisplayMemberBinding="{Binding BrightnessOffset}"/>
-                                        <GridViewColumn Header="Warmth offset (K)" Width="140" DisplayMemberBinding="{Binding WarmthOffset}"/>
+                                        <GridView.ColumnHeaderContainerStyle>
+                                            <Style TargetType="GridViewColumnHeader">
+                                                <Setter Property="Background" Value="Transparent"/>
+                                                <Setter Property="Foreground" Value="{DynamicResource App.TextSecondary}"/>
+                                                <Setter Property="FontSize" Value="11"/>
+                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                                <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                                                <Setter Property="Padding" Value="14,8"/>
+                                                <Setter Property="BorderThickness" Value="0"/>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="GridViewColumnHeader">
+                                                            <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                                                                <ContentPresenter VerticalAlignment="Center"/>
+                                                            </Border>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </GridView.ColumnHeaderContainerStyle>
+                                        <GridViewColumn Header="Display" Width="280" DisplayMemberBinding="{Binding DeviceName}"/>
+                                        <GridViewColumn Header="Brightness offset" Width="160" DisplayMemberBinding="{Binding BrightnessOffset, StringFormat={}{0:+0;-0;0}}"/>
+                                        <GridViewColumn Header="Warmth offset (K)" Width="160" DisplayMemberBinding="{Binding WarmthOffset, StringFormat={}{0:+0;-0;0} K}"/>
                                     </GridView>
                                 </ListView.View>
                             </ListView>
@@ -1466,8 +1693,10 @@
                                         <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Brightness offset"/>
-                                    <Slider Grid.Column="1" x:Name="SldMonBrOffset" Style="{StaticResource AppleSlider}"
-                                            Minimum="-50" Maximum="50" TickFrequency="5"/>
+                                    <Slider Grid.Column="1" x:Name="SldMonBrOffset"
+                                            Minimum="-50" Maximum="50"
+                                            TickFrequency="1"
+                                            IsSnapToTickEnabled="True"/>
                                     <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonBr"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
@@ -1476,9 +1705,22 @@
                                         <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Warmth offset (K)"/>
-                                    <Slider Grid.Column="1" x:Name="SldMonWrOffset" Style="{StaticResource AppleSlider}"
-                                            Minimum="-2000" Maximum="0" TickFrequency="100"/>
+                                    <Slider Grid.Column="1" x:Name="SldMonWrOffset"
+                                            Minimum="-2000" Maximum="0"
+                                            TickFrequency="50"
+                                            IsSnapToTickEnabled="True"/>
                                     <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblMonWr"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Reset all per-monitor offsets to zero"/>
+                                    <Button Grid.Column="1" x:Name="BtnResetMonitors"
+                                            Margin="0,0,16,0"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Reset all"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

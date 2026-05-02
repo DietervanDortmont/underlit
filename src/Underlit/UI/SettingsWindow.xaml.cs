@@ -112,6 +112,7 @@ public partial class SettingsWindow : Window
         LstMonitors.SelectionChanged += OnMonitorSelected;
         SldMonBrOffset.ValueChanged += OnMonitorOffsetChanged;
         SldMonWrOffset.ValueChanged += OnMonitorOffsetChanged;
+        BtnResetMonitors.Click += OnResetAllMonitorOffsets;
 
         BtnPickAccent.Click += OnPickAccent;
         BtnPickTint.Click   += OnPickTint;
@@ -123,6 +124,11 @@ public partial class SettingsWindow : Window
         BtnRemoveProfile.Click += OnRemoveProfile;
         BtnRenameProfile.Click += OnRenameProfile;
         CboProfile.SelectionChanged += OnProfileSelectionChanged;
+
+        // v0.6.42: inline rename on TxtProfileRename (Enter commits, Escape
+        // cancels, LostFocus commits). Replaces the modal dialog.
+        TxtProfileRename.KeyDown   += OnProfileRenameKeyDown;
+        TxtProfileRename.LostFocus += OnProfileRenameLostFocus;
 
         // Schedule graph redraws on any input that changes the curve. We hook
         // these in addition to the existing PushSettings hooks so the redraw is
@@ -540,8 +546,12 @@ public partial class SettingsWindow : Window
         LblRampDuration.Text   = ((int)SldRampDuration.Value) + " ms";
         LblNightWarmth.Text    = ((int)SldNightWarmth.Value) + " K";
         LblOsdGap.Text         = ((int)SldOsdGap.Value) + " dip";
-        LblMonBr.Text          = ((int)SldMonBrOffset.Value >= 0 ? "+" : "") + (int)SldMonBrOffset.Value;
-        LblMonWr.Text          = ((int)SldMonWrOffset.Value) + " K";
+        // Always integer + signed format so a +3 monitor offset and a 0
+        // baseline read identically; matches the GridView's StringFormat.
+        int monBr = (int)Math.Round(SldMonBrOffset.Value);
+        int monWr = (int)Math.Round(SldMonWrOffset.Value);
+        LblMonBr.Text = monBr.ToString("+0;-0;0");
+        LblMonWr.Text = monWr.ToString("+0;-0;0") + " K";
 
         // Live preview swatch for the night-warmth slider — same gamma → RGB
         // multipliers the engine applies, so the swatch is colour-accurate.
@@ -641,7 +651,12 @@ public partial class SettingsWindow : Window
         }
 
         // ---- X-axis time labels (below curve) ----
-        // Locale-aware: 24h locales get "00:00".."24:00", 12h locales get "12 AM".."12 AM".
+        // v0.6.42: pull a theme-aware foreground from window resources so
+        // axis labels are visible in BOTH light and dark mode. The old
+        // hard-coded white was invisible on the new light-theme card.
+        var axisBrush = (Brush?)TryFindResource("App.TextSecondary")
+                        ?? new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF));
+
         foreach (int hour in new[] { 0, 6, 12, 18, 24 })
         {
             double x = curveLeft + hour / 24.0 * curveW;
@@ -649,7 +664,7 @@ public partial class SettingsWindow : Window
             {
                 Text = FmtAxisHour(hour),
                 FontSize = 10,
-                Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF)),
+                Foreground = axisBrush,
             };
             label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             double labelW = label.DesiredSize.Width;
@@ -661,8 +676,6 @@ public partial class SettingsWindow : Window
         }
 
         // ---- Y-axis kelvin labels (left of curve) ----
-        // Five evenly-spaced rungs from 6500 K (cool, top) down to 1500 K (warm, bottom),
-        // matching the y-mapping used by both the curve and the drag handler.
         foreach (int kelvin in new[] { 6500, 5250, 4000, 2750, 1500 })
         {
             double y = curveTop + curveH - ((kelvin - 1500) / 5000.0) * curveH;
@@ -670,7 +683,7 @@ public partial class SettingsWindow : Window
             {
                 Text = $"{kelvin} K",
                 FontSize = 10,
-                Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF)),
+                Foreground = axisBrush,
             };
             label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             double labelW = label.DesiredSize.Width;
@@ -699,11 +712,15 @@ public partial class SettingsWindow : Window
             pts.Add(new Point(x, y));
         }
 
+        // v0.6.42: theme-aware curve stroke. White-on-white was invisible
+        // when the settings window switched to the light palette.
+        var curveBrush = (Brush?)TryFindResource("App.TextPrimary")
+                         ?? new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
         var line = new System.Windows.Shapes.Polyline
         {
             Points = pts,
-            Stroke = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
-            StrokeThickness = 2,
+            Stroke = curveBrush,
+            StrokeThickness = 2.4,
             StrokeLineJoin = PenLineJoin.Round,
         };
         ScheduleGraph.Children.Add(line);
@@ -1411,25 +1428,83 @@ public partial class SettingsWindow : Window
         RedrawScheduleGraph();
     }
 
+    /// <summary>
+    /// v0.6.42: pencil click opens an inline rename in the dropdown's slot
+    /// instead of a modal dialog. The TextBox sibling
+    /// <c>TxtProfileRename</c> overlays the dropdown, takes focus, selects
+    /// the current name, and commits on Enter or LostFocus. Escape cancels.
+    /// </summary>
     private void OnRenameProfile(object sender, RoutedEventArgs e)
     {
         var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
         if (active == null) return;
 
-        // Lightweight in-place rename — a small input prompt window.
-        var dlg = new ProfileRenameDialog(active.Name, _snapshot.WarmthProfiles
-            .Where(p => p != active).Select(p => p.Name))
+        TxtProfileRename.Text = active.Name;
+        CboProfile.Visibility = Visibility.Collapsed;
+        TxtProfileRename.Visibility = Visibility.Visible;
+
+        // Defer focus to the next dispatcher tick so WPF has finished the
+        // visibility transition; otherwise Focus()/SelectAll race with
+        // layout and leave the caret in the wrong place.
+        Dispatcher.BeginInvoke(new Action(() =>
         {
-            Owner = this,
-        };
-        if (dlg.ShowDialog() != true) return;
-        var newName = dlg.NewName.Trim();
-        if (string.IsNullOrEmpty(newName) || newName == active.Name) return;
+            TxtProfileRename.Focus();
+            Keyboard.Focus(TxtProfileRename);
+            TxtProfileRename.SelectAll();
+        }), DispatcherPriority.Input);
+    }
+
+    private void OnProfileRenameKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            CommitProfileRename();
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            CancelProfileRename();
+            e.Handled = true;
+        }
+    }
+
+    private void OnProfileRenameLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (TxtProfileRename.Visibility == Visibility.Visible)
+        {
+            CommitProfileRename();
+        }
+    }
+
+    private void CommitProfileRename()
+    {
+        var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
+        if (active == null) { CancelProfileRename(); return; }
+
+        string newName = TxtProfileRename.Text.Trim();
+        if (string.IsNullOrEmpty(newName) || newName == active.Name)
+        {
+            CancelProfileRename();
+            return;
+        }
+        // Reject collisions with other profile names.
+        if (_snapshot.WarmthProfiles.Any(p => p != active && p.Name == newName))
+        {
+            CancelProfileRename();
+            return;
+        }
 
         active.Name = newName;
         _snapshot.ActiveProfileName = newName;
         RefreshProfileDropdown();
         PushSettings();
+        CancelProfileRename();
+    }
+
+    private void CancelProfileRename()
+    {
+        TxtProfileRename.Visibility = Visibility.Collapsed;
+        CboProfile.Visibility = Visibility.Visible;
     }
 
     // ---- Settings load/save ----
@@ -1523,26 +1598,68 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// True while OnMonitorSelected is loading the picked monitor's
+    /// stored offsets back into the sliders. v0.6.42: gates
+    /// OnMonitorOffsetChanged so the brightness-slider's first
+    /// ValueChanged (fired BEFORE the warmth slider has been updated)
+    /// doesn't write the OLD monitor's warmth value into the NEW
+    /// monitor's row, which is what made warmth offsets appear to leak
+    /// across displays.
+    /// </summary>
+    private bool _loadingMonitorRow;
+
     private void OnMonitorSelected(object sender, SelectionChangedEventArgs e)
     {
         if (LstMonitors.SelectedItem is MonitorRow row)
         {
-            SldMonBrOffset.Value = row.BrightnessOffset;
-            SldMonWrOffset.Value = row.WarmthOffset;
+            _loadingMonitorRow = true;
+            try
+            {
+                SldMonBrOffset.Value = row.BrightnessOffset;
+                SldMonWrOffset.Value = row.WarmthOffset;
+            }
+            finally
+            {
+                _loadingMonitorRow = false;
+            }
             UpdateAllValueChips();
         }
     }
 
     private void OnMonitorOffsetChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_loadingMonitorRow) return;
         if (LstMonitors.SelectedItem is MonitorRow row)
         {
-            row.BrightnessOffset = SldMonBrOffset.Value;
-            row.WarmthOffset = (int)SldMonWrOffset.Value;
+            row.BrightnessOffset = (int)Math.Round(SldMonBrOffset.Value);
+            row.WarmthOffset     = (int)Math.Round(SldMonWrOffset.Value);
             LstMonitors.Items.Refresh();
             UpdateAllValueChips();
             PushSettings();
         }
+    }
+
+    /// <summary>v0.6.42: Reset every monitor's per-monitor offsets to 0
+    /// in one click. Mirrors the change into the sliders for the
+    /// currently-selected row so the UI reflects the reset immediately.</summary>
+    private void OnResetAllMonitorOffsets(object sender, RoutedEventArgs e)
+    {
+        foreach (var r in _monRows)
+        {
+            r.BrightnessOffset = 0;
+            r.WarmthOffset     = 0;
+        }
+        LstMonitors.Items.Refresh();
+        _loadingMonitorRow = true;
+        try
+        {
+            SldMonBrOffset.Value = 0;
+            SldMonWrOffset.Value = 0;
+        }
+        finally { _loadingMonitorRow = false; }
+        UpdateAllValueChips();
+        PushSettings();
     }
 
     /// <summary>v0.6.30: respect the user's Windows time-format setting.
@@ -1609,20 +1726,11 @@ public partial class SettingsWindow : Window
         => System.Globalization.CultureInfo.CurrentCulture.DateTimeFormat.ShortTimePattern.Contains('t');
 
     /// <summary>Format an integer hour (0..24) for the graph's X-axis label
-    /// strip. 24-hour locales: "00:00", "06:00", ..., "24:00".
-    /// 12-hour locales: "12 AM", "6 AM", "12 PM", "6 PM", "12 AM".</summary>
-    private static string FmtAxisHour(int hour)
-    {
-        if (Is12HourLocale())
-        {
-            int hh = hour % 24;
-            string ampm = hh < 12 ? "AM" : "PM";
-            int display = hh % 12;
-            if (display == 0) display = 12;
-            return $"{display} {ampm}";
-        }
-        return $"{hour:D2}:00";
-    }
+    /// strip. v0.6.42: always 24-hour format regardless of Windows locale.
+    /// Compact "00".."24" labels are easier to read than "12 AM" / "6 PM"
+    /// strings in the limited horizontal space the strip has, and they
+    /// match the 24-hour convention of the underlying schedule curve.</summary>
+    private static string FmtAxisHour(int hour) => $"{hour:D2}:00";
 
     private void PushSettings()
     {

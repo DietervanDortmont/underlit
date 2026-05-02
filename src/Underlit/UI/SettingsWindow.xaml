@@ -1573,6 +1573,12 @@
 
                             <TextBlock Style="{StaticResource CardCaption}" Text="COLOUR RANGE"/>
                             <Border Style="{StaticResource Card}">
+                                <!-- v0.6.46: wrap children in a StackPanel so the
+                                     Border (single-child container) holds the
+                                     mode-picker row plus the gradient-endpoint
+                                     row underneath it without the XAML parser
+                                     tripping on multiple Border children. -->
+                                <StackPanel>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -1581,7 +1587,7 @@
                                     <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="How lights match the warmth schedule"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="Circadian: native colour temperature (subtle, recommended). White → red: full RGB drift toward deep red in the evening (dramatic). Warm white only: clamped 5000–2700 K range, gentlest."/>
+                                                   Text="Circadian: native colour temperature (subtle, recommended). Custom gradient: bulbs drift through any two colours you pick (dramatic). Warm white only: clamped 5000 to 2700 K range, gentlest."/>
                                     </StackPanel>
                                     <ComboBox Grid.Column="1" x:Name="CboHueColorRange"
                                               Margin="0,0,14,0" MinWidth="160" VerticalAlignment="Center">
@@ -1625,6 +1631,7 @@
                                                 BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
                                     </Button>
                                 </Grid>
+                                </StackPanel>
                             </Border>
 
                             <TextBlock Style="{StaticResource CardCaption}" Text="ADJUSTMENT"/>

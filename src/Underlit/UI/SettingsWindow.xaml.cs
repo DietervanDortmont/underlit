@@ -841,12 +841,27 @@ public partial class SettingsWindow : Window
                 break;
             case SchedulePointId.BedtimeEnd:
                 p.Bedtime       = t;
-                if (!locked) p.BedtimeKelvin = kelvin;
+                if (!locked)
+                {
+                    // v0.6.38: deep-night anchors are kept equal at all
+                    // times — dragging Bedtime's vertical position pulls
+                    // WakeupStart along with it. The night plateau between
+                    // them is by definition a single warmth, so allowing
+                    // them to drift would just produce a slightly sloped
+                    // plateau the user has to manually re-flatten.
+                    p.BedtimeKelvin     = kelvin;
+                    p.WakeupStartKelvin = kelvin;
+                }
                 TxtBedtime.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupStart:
                 p.WakeupStart       = t;
-                if (!locked) p.WakeupStartKelvin = kelvin;
+                if (!locked)
+                {
+                    // Mirror of the BedtimeEnd case — see comment there.
+                    p.WakeupStartKelvin = kelvin;
+                    p.BedtimeKelvin     = kelvin;
+                }
                 TxtWakeupStart.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupEnd:

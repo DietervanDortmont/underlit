@@ -362,6 +362,18 @@ public sealed class AppSettings
             p.BedtimeKelvin       = Math.Clamp(p.BedtimeKelvin,       1500, 6500);
             p.WakeupStartKelvin   = Math.Clamp(p.WakeupStartKelvin,   1500, 6500);
             p.WakeTimeKelvin      = Math.Clamp(p.WakeTimeKelvin,      1500, 6500);
+
+            // v0.6.38: the night plateau is a single warmth — keep the two
+            // deep anchors (Bedtime's "after the evening ramp" and Wakeup's
+            // "before the morning ramp") equal. If a settings.json from
+            // before this constraint shipped with drifted values, converge
+            // them on load to whichever was deeper, so the curve is flat
+            // through the night going forward.
+            int deep = Math.Min(p.BedtimeKelvin, p.WakeupStartKelvin);
+            p.BedtimeKelvin     = deep;
+            p.WakeupStartKelvin = deep;
+            // NightWarmthKelvin tracks the same value for the legacy slider.
+            p.NightWarmthKelvin = deep;
         }
 
         if (string.IsNullOrEmpty(ActiveProfileName)

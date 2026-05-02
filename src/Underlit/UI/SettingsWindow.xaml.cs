@@ -487,6 +487,11 @@ public partial class SettingsWindow : Window
     /// </summary>
     /// <summary>Bottom margin reserved for time labels under the curve (dip).</summary>
     private const double GraphLabelHeight = 16;
+    /// <summary>Left margin reserved for kelvin labels on the Y axis (dip).
+    /// v0.6.30: introduced so the curve has a labelled vertical axis. All
+    /// X-coordinate calculations on the graph offset by this much from the
+    /// left edge so the curve doesn't draw under the labels.</summary>
+    private const double GraphYAxisWidth = 36;
 
     /// <summary>Hit radius (dip) for the draggable circles. Larger than the visual
     /// radius so the user has a generous click target.</summary>
@@ -508,30 +513,33 @@ public partial class SettingsWindow : Window
         double h = ScheduleGraph.ActualHeight;
         if (w <= 1 || h <= 1) return;
 
-        // Reserve the bottom strip for axis labels — the curve and points draw
-        // into the area above this. We compute kelvin → y from this reduced
-        // height so labels never overlap the curve.
-        double curveH = Math.Max(1, h - GraphLabelHeight);
+        // Carve out reserved strips:
+        //   • Bottom GraphLabelHeight dip → X-axis time labels.
+        //   • Left   GraphYAxisWidth dip → Y-axis kelvin labels.
+        // The curve area is everything else.
+        double curveH    = Math.Max(1, h - GraphLabelHeight);
+        double curveLeft = GraphYAxisWidth;
+        double curveW    = Math.Max(1, w - curveLeft);
 
         ScheduleGraph.Children.Clear();
 
         // Background: vertical gradient from cool→warm to suggest "lower kelvin = warmer light".
         var bg = new System.Windows.Shapes.Rectangle
         {
-            Width = w, Height = curveH,
+            Width = curveW, Height = curveH,
             RadiusX = 6, RadiusY = 6,
             Fill = new LinearGradientBrush(
                 Color.FromArgb(0x18, 0xA8, 0xC8, 0xFF),  // cool wash at top
                 Color.FromArgb(0x28, 0xFF, 0xA0, 0x50),  // warm wash at bottom
                 90),
         };
-        Canvas.SetLeft(bg, 0); Canvas.SetTop(bg, 0);
+        Canvas.SetLeft(bg, curveLeft); Canvas.SetTop(bg, 0);
         ScheduleGraph.Children.Add(bg);
 
         // Faint vertical hour markers at 6, 12, 18 — orientation cues.
         foreach (int hour in new[] { 6, 12, 18 })
         {
-            double x = hour / 24.0 * w;
+            double x = curveLeft + hour / 24.0 * curveW;
             var marker = new System.Windows.Shapes.Line
             {
                 X1 = x, Y1 = 0, X2 = x, Y2 = curveH,
@@ -541,31 +549,51 @@ public partial class SettingsWindow : Window
             ScheduleGraph.Children.Add(marker);
         }
 
-        // Time labels along the bottom — every 6 hours, plus end caps.
+        // ---- X-axis time labels (below curve) ----
+        // Locale-aware: 24h locales get "00:00".."24:00", 12h locales get "12 AM".."12 AM".
         foreach (int hour in new[] { 0, 6, 12, 18, 24 })
         {
-            double x = hour / 24.0 * w;
-            string text = hour == 24 ? "24h"
-                       : hour == 0  ? "0h"
-                                    : $"{hour}h";
+            double x = curveLeft + hour / 24.0 * curveW;
             var label = new TextBlock
             {
-                Text = text,
+                Text = FmtAxisHour(hour),
                 FontSize = 10,
                 Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF)),
             };
-            // Measure to centre the label under its tick.
             label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             double labelW = label.DesiredSize.Width;
-            // Clamp to graph bounds so the 0h label doesn't get clipped on the left.
+            // Clamp to the graph's full width so the leftmost/rightmost labels don't clip.
             double labelX = Math.Max(0, Math.Min(w - labelW, x - labelW / 2));
             Canvas.SetLeft(label, labelX);
             Canvas.SetTop(label, curveH + 2);
             ScheduleGraph.Children.Add(label);
         }
 
-        // Build a temporary AppSettings from the live UI values + active-profile
-        // points so the graph tracks unsaved edits.
+        // ---- Y-axis kelvin labels (left of curve) ----
+        // Five evenly-spaced rungs from 6500 K (cool, top) down to 1500 K (warm, bottom),
+        // matching the y-mapping used by both the curve and the drag handler.
+        foreach (int kelvin in new[] { 6500, 5250, 4000, 2750, 1500 })
+        {
+            double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
+            var label = new TextBlock
+            {
+                Text = $"{kelvin} K",
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF)),
+            };
+            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double labelW = label.DesiredSize.Width;
+            double labelH = label.DesiredSize.Height;
+            // Right-align inside the reserved left strip, with a 4 dip gutter.
+            double labelX = Math.Max(0, curveLeft - labelW - 4);
+            // Clamp vertically so the top/bottom labels don't get cut off.
+            double labelY = Math.Max(0, Math.Min(curveH - labelH, y - labelH / 2));
+            Canvas.SetLeft(label, labelX);
+            Canvas.SetTop(label, labelY);
+            ScheduleGraph.Children.Add(label);
+        }
+
+        // Build the schedule snapshot — pulls live profile + text-field values.
         var s = SnapshotForSchedule();
 
         var pts = new System.Windows.Media.PointCollection();
@@ -575,7 +603,7 @@ public partial class SettingsWindow : Window
             double hour = i / (double)samples * 24.0;
             DateTime t = DateTime.Today.AddHours(hour);
             int k = Underlit.Core.Scheduler.ComputeWarmth(t, s);
-            double x = hour / 24.0 * w;
+            double x = curveLeft + hour / 24.0 * curveW;
             double y = curveH - ((k - 1500) / 5000.0) * curveH;
             pts.Add(new Point(x, y));
         }
@@ -591,15 +619,15 @@ public partial class SettingsWindow : Window
 
         // Draggable anchor points — each pulls its kelvin from the active
         // profile so vertical drag really retargets warmth at that anchor.
-        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.WakeupStartKelvin,  w, curveH);
-        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   s.WakeupEndKelvin,    w, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, w, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   w, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.WakeupStartKelvin,  curveLeft, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   s.WakeupEndKelvin,    curveLeft, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, curveLeft, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   curveLeft, curveW, curveH);
 
         // "Now" indicator — a vertical line at the current time so the user can
         // read off "what kelvin am I targeting right now" at a glance.
         DateTime now = DateTime.Now;
-        double nowX = (now.Hour + now.Minute / 60.0) / 24.0 * w;
+        double nowX = curveLeft + (now.Hour + now.Minute / 60.0) / 24.0 * curveW;
         var nowLine = new System.Windows.Shapes.Line
         {
             X1 = nowX, Y1 = 0, X2 = nowX, Y2 = curveH,
@@ -613,10 +641,12 @@ public partial class SettingsWindow : Window
     /// <summary>Render one of the four draggable anchor markers at (timeOfDay, kelvin).
     /// Two layered ellipses: a transparent outer one that's the hit target, and a
     /// smaller visible one. Tags are used by the mouse-down handler to identify which
-    /// point was grabbed.</summary>
-    private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double w, double curveH)
+    /// point was grabbed. v0.6.30: takes the curve area's left offset and width
+    /// so dots draw aligned with the (now Y-axis-labelled) curve, not the raw
+    /// canvas left edge.</summary>
+    private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double curveLeft, double curveW, double curveH)
     {
-        double x = t.AsHourFractional / 24.0 * w;
+        double x = curveLeft + t.AsHourFractional / 24.0 * curveW;
         double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
 
         // Larger transparent hit-target — improves drag affordance without
@@ -652,10 +682,10 @@ public partial class SettingsWindow : Window
 
     private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t, int k) => id switch
     {
-        SchedulePointId.BedtimeStart => $"Evening ramp starts at {t.Hour:D2}:{t.Minute:D2} ({k} K)",
-        SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {t.Hour:D2}:{t.Minute:D2}",
-        SchedulePointId.WakeupStart  => $"Morning ramp starts at {t.Hour:D2}:{t.Minute:D2} ({k} K)",
-        SchedulePointId.WakeupEnd    => $"Wake — {k} K by {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.BedtimeStart => $"Evening ramp starts at {Fmt(t)} ({k} K)",
+        SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {Fmt(t)}",
+        SchedulePointId.WakeupStart  => $"Morning ramp starts at {Fmt(t)} ({k} K)",
+        SchedulePointId.WakeupEnd    => $"Wake — {k} K by {Fmt(t)}",
         _ => string.Empty,
     };
 
@@ -714,11 +744,16 @@ public partial class SettingsWindow : Window
         double w = ScheduleGraph.ActualWidth;
         double h = ScheduleGraph.ActualHeight;
         if (w <= 0 || h <= 0) return;
-        double curveH = Math.Max(1, h - GraphLabelHeight);
+        double curveH    = Math.Max(1, h - GraphLabelHeight);
+        double curveLeft = GraphYAxisWidth;
+        double curveW    = Math.Max(1, w - curveLeft);
 
-        double clampedX = Math.Clamp(mouseX, 0, w);
+        // Subtract the Y-axis label strip before mapping x → hour, otherwise
+        // a click at canvas x=0 would resolve to "00:00" but the curve at
+        // hour 0 actually draws at x=curveLeft.
+        double clampedX = Math.Clamp(mouseX - curveLeft, 0, curveW);
         double clampedY = Math.Clamp(mouseY, 0, curveH);
-        double hour = clampedX / w * 24.0;
+        double hour = clampedX / curveW * 24.0;
         TimeOfDay t = TimeOfDayFromHourFractional(hour);
         // Invert: top of curve area = max kelvin (6500), bottom = 1500.
         int kelvin = (int)Math.Round(1500 + (1.0 - clampedY / curveH) * 5000);
@@ -1045,17 +1080,32 @@ public partial class SettingsWindow : Window
 
     /// <summary>Build a transient AppSettings from the schedule UI fields so the
     /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>
+    /// <summary>
+    /// Build the AppSettings the schedule graph samples from. v0.6.30: returns
+    /// <see cref="_snapshot"/> itself with the four time text-fields (which may
+    /// be edited but not yet committed) overlaid into the active profile, then
+    /// re-derives the legacy curve fields. This keeps every per-anchor kelvin
+    /// the user has set via drag (BedtimeStartKelvin / WakeupStartKelvin / etc.)
+    /// — the previous "build a fresh AppSettings with only Bedtime + WakeTime"
+    /// approach threw all that away and made the ramp-start dots redraw at
+    /// derived positions instead of the user's drag positions.
+    /// </summary>
     private AppSettings SnapshotForSchedule()
     {
-        var s = new AppSettings
-        {
-            Bedtime  = ParseTime(TxtBedtime.Text,  _snapshot.Bedtime),
-            WakeTime = ParseTime(TxtWakeTime.Text, _snapshot.WakeTime),
-            NightWarmthKelvin = (int)SldNightWarmth.Value,
-            ScheduleEnabled   = true,  // graph always shows the curve as if active
-        };
-        s.EnsureScheduleCurveDerived();  // populate the legacy 4-field window from Bedtime/WakeTime
-        return s;
+        var p = _snapshot.ActiveProfile();
+        // Pull the latest text-field values into the active profile so unsaved
+        // edits are reflected. The profile is the authoritative source for
+        // anchor kelvins (per-anchor drag writes there); times can move via
+        // either text edit or drag, so refresh from the boxes.
+        p.BedtimeStart = ParseTime(TxtBedtimeStart.Text, p.BedtimeStart);
+        p.Bedtime      = ParseTime(TxtBedtime.Text,      p.Bedtime);
+        p.WakeupStart  = ParseTime(TxtWakeupStart.Text,  p.WakeupStart);
+        p.WakeTime     = ParseTime(TxtWakeTime.Text,     p.WakeTime);
+        // Don't mutate ScheduleEnabled here — Scheduler.ComputeWarmth doesn't
+        // gate on it, and stomping the user's setting on every redraw would
+        // silently re-enable schedule mode behind their back.
+        _snapshot.EnsureScheduleCurveDerived();      // mirror profile → top-level fields
+        return _snapshot;
     }
 
     private static string ToHHMM(double hours)
@@ -1341,7 +1391,15 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static string Fmt(TimeOfDay t) => $"{t.Hour:D2}:{t.Minute:D2}";
+    /// <summary>v0.6.30: respect the user's Windows time-format setting.
+    /// CurrentCulture's "t" pattern is "HH:mm" in 24-hour locales (e.g. nl-NL,
+    /// en-GB) and "h:mm tt" in 12-hour locales (e.g. en-US). Use a fixed
+    /// non-DST date so DateTime can hold the time without surprises.</summary>
+    private static string Fmt(TimeOfDay t)
+    {
+        var dt = new DateTime(2000, 1, 1, t.Hour, t.Minute, 0);
+        return dt.ToString("t", System.Globalization.CultureInfo.CurrentCulture);
+    }
 
     /// <summary>Format a kelvin offset (positive or negative integer) for the
     /// Hue warmth-offset value chip. "0 K" for neutral, "+500 K" for cooler,
@@ -1353,13 +1411,45 @@ public partial class SettingsWindow : Window
         _   => $"{k} K",
     };
 
+    /// <summary>Parse a time string the user typed in either the locale-current
+    /// short-time format ("9:30 PM" or "21:30" depending on Windows setting),
+    /// falling back to invariant H:mm so legacy 24-hour entries keep working
+    /// in 12-hour locales. Returns <paramref name="fallback"/> if neither
+    /// parser can make sense of the input.</summary>
     private static TimeOfDay ParseTime(string? s, TimeOfDay fallback)
     {
         if (string.IsNullOrWhiteSpace(s)) return fallback;
-        var parts = s.Split(':');
-        if (parts.Length != 2) return fallback;
-        if (!int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m)) return fallback;
-        return new TimeOfDay(Math.Clamp(h, 0, 23), Math.Clamp(m, 0, 59));
+        s = s.Trim();
+        if (DateTime.TryParse(s, System.Globalization.CultureInfo.CurrentCulture,
+                                System.Globalization.DateTimeStyles.None, out var dt))
+            return new TimeOfDay(dt.Hour, dt.Minute);
+        if (DateTime.TryParseExact(s, new[] { "H:mm", "HH:mm" },
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.None, out dt))
+            return new TimeOfDay(dt.Hour, dt.Minute);
+        return fallback;
+    }
+
+    /// <summary>True if the user's current locale formats short times in
+    /// 12-hour mode (e.g. en-US "h:mm tt"). Detected via the presence of an
+    /// AM/PM designator slot in the short-time pattern.</summary>
+    private static bool Is12HourLocale()
+        => System.Globalization.CultureInfo.CurrentCulture.DateTimeFormat.ShortTimePattern.Contains('t');
+
+    /// <summary>Format an integer hour (0..24) for the graph's X-axis label
+    /// strip. 24-hour locales: "00:00", "06:00", ..., "24:00".
+    /// 12-hour locales: "12 AM", "6 AM", "12 PM", "6 PM", "12 AM".</summary>
+    private static string FmtAxisHour(int hour)
+    {
+        if (Is12HourLocale())
+        {
+            int hh = hour % 24;
+            string ampm = hh < 12 ? "AM" : "PM";
+            int display = hh % 12;
+            if (display == 0) display = 12;
+            return $"{display} {ampm}";
+        }
+        return $"{hour:D2}:00";
     }
 
     private void PushSettings()

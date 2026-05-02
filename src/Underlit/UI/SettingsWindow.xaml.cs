@@ -112,6 +112,14 @@ public partial class SettingsWindow : Window
         SldNightWarmth.ValueChanged += (_, _) => RedrawScheduleGraph();
         foreach (var tb in new[] { TxtBedtime, TxtWakeTime })
             tb.LostFocus += (_, _) => RedrawScheduleGraph();
+
+        // Graph drag — the four anchor points (BedtimeStart, BedtimeEnd,
+        // WakeupStart, WakeupEnd) are click-and-drag editable. PreviewMouse*
+        // beats any descendant ellipse capture and lets us coalesce drag state
+        // in one place.
+        ScheduleGraph.PreviewMouseLeftButtonDown += OnGraphMouseDown;
+        ScheduleGraph.PreviewMouseMove           += OnGraphMouseMove;
+        ScheduleGraph.PreviewMouseLeftButtonUp   += OnGraphMouseUp;
         CboTransparency.SelectionChanged += (_, _) =>
         {
             PushSettings();
@@ -438,6 +446,22 @@ public partial class SettingsWindow : Window
     /// fades from cool (top, daytime) to warm (bottom, night) so the curve reads
     /// at a glance even without axis labels.
     /// </summary>
+    /// <summary>Bottom margin reserved for time labels under the curve (dip).</summary>
+    private const double GraphLabelHeight = 16;
+
+    /// <summary>Hit radius (dip) for the draggable circles. Larger than the visual
+    /// radius so the user has a generous click target.</summary>
+    private const double GraphPointHitRadius = 12;
+    /// <summary>Visual radius of the draggable circles (dip).</summary>
+    private const double GraphPointVisualRadius = 6;
+
+    /// <summary>The four anchor points the user can drag horizontally to retime
+    /// the schedule curve. Each id corresponds to a TimeOfDay slot on the active
+    /// profile that <see cref="OnGraphMouseMove"/> updates.</summary>
+    private enum SchedulePointId { BedtimeStart, BedtimeEnd, WakeupStart, WakeupEnd }
+
+    private SchedulePointId? _draggingSchedulePoint;
+
     private void RedrawScheduleGraph()
     {
         if (ScheduleGraph == null) return;
@@ -445,12 +469,17 @@ public partial class SettingsWindow : Window
         double h = ScheduleGraph.ActualHeight;
         if (w <= 1 || h <= 1) return;
 
+        // Reserve the bottom strip for axis labels — the curve and points draw
+        // into the area above this. We compute kelvin → y from this reduced
+        // height so labels never overlap the curve.
+        double curveH = Math.Max(1, h - GraphLabelHeight);
+
         ScheduleGraph.Children.Clear();
 
         // Background: vertical gradient from cool→warm to suggest "lower kelvin = warmer light".
         var bg = new System.Windows.Shapes.Rectangle
         {
-            Width = w, Height = h,
+            Width = w, Height = curveH,
             RadiusX = 6, RadiusY = 6,
             Fill = new LinearGradientBrush(
                 Color.FromArgb(0x18, 0xA8, 0xC8, 0xFF),  // cool wash at top
@@ -460,21 +489,44 @@ public partial class SettingsWindow : Window
         Canvas.SetLeft(bg, 0); Canvas.SetTop(bg, 0);
         ScheduleGraph.Children.Add(bg);
 
-        // Hour markers — faint vertical lines at 6, 12, 18.
+        // Faint vertical hour markers at 6, 12, 18 — orientation cues.
         foreach (int hour in new[] { 6, 12, 18 })
         {
             double x = hour / 24.0 * w;
             var marker = new System.Windows.Shapes.Line
             {
-                X1 = x, Y1 = 0, X2 = x, Y2 = h,
+                X1 = x, Y1 = 0, X2 = x, Y2 = curveH,
                 Stroke = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)),
                 StrokeThickness = 1,
             };
             ScheduleGraph.Children.Add(marker);
         }
 
-        // Build a temporary AppSettings from the live UI values so the graph
-        // tracks edits without first persisting them through PushSettings.
+        // Time labels along the bottom — every 6 hours, plus end caps.
+        foreach (int hour in new[] { 0, 6, 12, 18, 24 })
+        {
+            double x = hour / 24.0 * w;
+            string text = hour == 24 ? "24h"
+                       : hour == 0  ? "0h"
+                                    : $"{hour}h";
+            var label = new TextBlock
+            {
+                Text = text,
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromArgb(0xAA, 0xFF, 0xFF, 0xFF)),
+            };
+            // Measure to centre the label under its tick.
+            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double labelW = label.DesiredSize.Width;
+            // Clamp to graph bounds so the 0h label doesn't get clipped on the left.
+            double labelX = Math.Max(0, Math.Min(w - labelW, x - labelW / 2));
+            Canvas.SetLeft(label, labelX);
+            Canvas.SetTop(label, curveH + 2);
+            ScheduleGraph.Children.Add(label);
+        }
+
+        // Build a temporary AppSettings from the live UI values + active-profile
+        // points so the graph tracks unsaved edits.
         var s = SnapshotForSchedule();
 
         var pts = new System.Windows.Media.PointCollection();
@@ -485,7 +537,7 @@ public partial class SettingsWindow : Window
             DateTime t = DateTime.Today.AddHours(hour);
             int k = Underlit.Core.Scheduler.ComputeWarmth(t, s);
             double x = hour / 24.0 * w;
-            double y = h - ((k - 1500) / 5000.0) * h;
+            double y = curveH - ((k - 1500) / 5000.0) * curveH;
             pts.Add(new Point(x, y));
         }
 
@@ -498,19 +550,164 @@ public partial class SettingsWindow : Window
         };
         ScheduleGraph.Children.Add(line);
 
+        // Draggable anchor points.
+        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.NightWarmthKelvin, w, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   6500,                w, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, 6500,              w, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.NightWarmthKelvin, w, curveH);
+
         // "Now" indicator — a vertical line at the current time so the user can
         // read off "what kelvin am I targeting right now" at a glance.
         DateTime now = DateTime.Now;
         double nowX = (now.Hour + now.Minute / 60.0) / 24.0 * w;
         var nowLine = new System.Windows.Shapes.Line
         {
-            X1 = nowX, Y1 = 0, X2 = nowX, Y2 = h,
+            X1 = nowX, Y1 = 0, X2 = nowX, Y2 = curveH,
             Stroke = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)),
             StrokeThickness = 1.5,
             StrokeDashArray = new System.Windows.Media.DoubleCollection(new[] { 3.0, 3.0 }),
         };
         ScheduleGraph.Children.Add(nowLine);
     }
+
+    /// <summary>Render one of the four draggable anchor markers at (timeOfDay, kelvin).
+    /// Two layered ellipses: a transparent outer one that's the hit target, and a
+    /// smaller visible one. Tags are used by the mouse-down handler to identify which
+    /// point was grabbed.</summary>
+    private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double w, double curveH)
+    {
+        double x = t.AsHourFractional / 24.0 * w;
+        double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
+
+        // Larger transparent hit-target — improves drag affordance without
+        // making the visible marker bulky.
+        var hit = new System.Windows.Shapes.Ellipse
+        {
+            Width = GraphPointHitRadius * 2,
+            Height = GraphPointHitRadius * 2,
+            Fill = System.Windows.Media.Brushes.Transparent,
+            Cursor = System.Windows.Input.Cursors.SizeWE,
+            Tag = id,
+            ToolTip = SchedulePointTooltip(id, t),
+        };
+        Canvas.SetLeft(hit, x - GraphPointHitRadius);
+        Canvas.SetTop(hit, y - GraphPointHitRadius);
+        ScheduleGraph.Children.Add(hit);
+
+        // Visible marker — a filled circle with a thin accent ring.
+        var dot = new System.Windows.Shapes.Ellipse
+        {
+            Width = GraphPointVisualRadius * 2,
+            Height = GraphPointVisualRadius * 2,
+            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF)),
+            Stroke = (Brush?)TryFindResource("App.Accent") ?? new SolidColorBrush(Color.FromRgb(0x60, 0xCD, 0xFF)),
+            StrokeThickness = 2,
+            IsHitTestVisible = false,   // hit target above handles input
+        };
+        Canvas.SetLeft(dot, x - GraphPointVisualRadius);
+        Canvas.SetTop(dot, y - GraphPointVisualRadius);
+        ScheduleGraph.Children.Add(dot);
+    }
+
+    private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t) => id switch
+    {
+        SchedulePointId.BedtimeStart => $"Evening ramp starts at {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.BedtimeEnd   => $"Bedtime — deep warmth from {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.WakeupStart  => $"Morning ramp starts at {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.WakeupEnd    => $"Wake — neutral by {t.Hour:D2}:{t.Minute:D2}",
+        _ => string.Empty,
+    };
+
+    // ---- Schedule-graph mouse-drag handling ----
+
+    private void OnGraphMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        // Find which anchor (if any) was clicked. We hit-test the canvas children
+        // and look for a Tag that's a SchedulePointId.
+        var pos = e.GetPosition(ScheduleGraph);
+        var hit = ScheduleGraph.InputHitTest(pos);
+        if (hit is FrameworkElement fe && fe.Tag is SchedulePointId id)
+        {
+            _draggingSchedulePoint = id;
+            ScheduleGraph.CaptureMouse();
+            UpdatePointFromMouse(id, pos.X);
+            e.Handled = true;
+        }
+    }
+
+    private void OnGraphMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_draggingSchedulePoint is not SchedulePointId id) return;
+        var pos = e.GetPosition(ScheduleGraph);
+        UpdatePointFromMouse(id, pos.X);
+    }
+
+    private void OnGraphMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (_draggingSchedulePoint == null) return;
+        _draggingSchedulePoint = null;
+        ScheduleGraph.ReleaseMouseCapture();
+        // Final commit — push to settings on release so the change persists.
+        PushSettings();
+        UpdateAllValueChips();
+        WarmthPreviewEnded?.Invoke();
+    }
+
+    /// <summary>Map a mouse X position to a time-of-day, write it into the active
+    /// profile's corresponding slot, sync the input fields and the legacy ramp
+    /// window, and redraw the graph. Also pings the live-preview event so the
+    /// engine warmth follows the dragged point in real time.</summary>
+    private void UpdatePointFromMouse(SchedulePointId id, double mouseX)
+    {
+        double w = ScheduleGraph.ActualWidth;
+        if (w <= 0) return;
+        double clampedX = Math.Clamp(mouseX, 0, w);
+        double hour = clampedX / w * 24.0;
+        TimeOfDay t = TimeOfDayFromHourFractional(hour);
+
+        var p = _snapshot.ActiveProfile();
+        switch (id)
+        {
+            case SchedulePointId.BedtimeStart: p.BedtimeStart = t; break;
+            case SchedulePointId.BedtimeEnd:
+                p.Bedtime = t;
+                TxtBedtime.Text = Fmt(t);
+                break;
+            case SchedulePointId.WakeupStart:  p.WakeupStart = t; break;
+            case SchedulePointId.WakeupEnd:
+                p.WakeTime = t;
+                TxtWakeTime.Text = Fmt(t);
+                break;
+        }
+        _snapshot.EnsureScheduleCurveDerived();
+        RedrawScheduleGraph();
+
+        // Live-preview: tell the engine to ramp toward the kelvin at the
+        // dragged point so the user feels the value instead of just seeing it.
+        int previewK = id switch
+        {
+            SchedulePointId.BedtimeEnd or SchedulePointId.WakeupStart => p.NightWarmthKelvin,
+            _ => 6500,
+        };
+        WarmthPreviewRequested?.Invoke(previewK);
+    }
+
+    private static TimeOfDay TimeOfDayFromHourFractional(double hours)
+    {
+        while (hours < 0)  hours += 24;
+        while (hours >= 24) hours -= 24;
+        int hour = (int)Math.Floor(hours);
+        int min  = (int)Math.Round((hours - hour) * 60);
+        if (min >= 60) { hour = (hour + 1) % 24; min = 0; }
+        return new TimeOfDay(hour, min);
+    }
+
+    /// <summary>Raised while the user is dragging a schedule anchor point. The
+    /// host wires this to the engine's PreviewWarmth method so the screen
+    /// warmth follows the drag in real time. The corresponding "ended" event
+    /// fires on mouse-up so the engine can return to scheduled behaviour.</summary>
+    public event Action<int>? WarmthPreviewRequested;
+    public event Action? WarmthPreviewEnded;
 
     /// <summary>Build a transient AppSettings from the schedule UI fields so the
     /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>

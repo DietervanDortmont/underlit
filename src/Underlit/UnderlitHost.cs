@@ -237,6 +237,12 @@ public sealed class UnderlitHost : IDisposable
         }
         _settingsWindow = new SettingsWindow(_settings, _engine?.Displays.ToList() ?? new(), _hardware);
         _settingsWindow.Applied += ApplySettings;
+        // Live-preview while the user drags an anchor in the schedule graph.
+        // Engine.PreviewWarmth ramps the screen toward the dragged point's
+        // kelvin without persisting; EndWarmthPreview hands control back to
+        // the saved warmth (and the scheduler reasserts on its next tick).
+        _settingsWindow.WarmthPreviewRequested += k => _engine?.PreviewWarmth(k);
+        _settingsWindow.WarmthPreviewEnded     += () => _engine?.EndWarmthPreview();
         _settingsWindow.Closed += (_, _) =>
         {
             _settings.Save();

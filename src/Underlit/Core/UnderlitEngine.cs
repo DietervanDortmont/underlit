@@ -268,6 +268,30 @@ public sealed class UnderlitEngine : IDisposable
     /// <summary>Scheduler baseline — warmth only now.</summary>
     public void ApplyScheduleBaselineWarmth(int warmth) => SetWarmth(warmth);
 
+    /// <summary>
+    /// Transient warmth preview — used by the schedule-graph drag handler so
+    /// the screen tracks the dragged point's kelvin in real time without
+    /// committing the value to <see cref="AppSettings.WarmthKelvin"/>. Pair
+    /// with <see cref="EndWarmthPreview"/> on mouse-up; the scheduler's next
+    /// tick (≤30 s) will reassert the schedule's actual current-time warmth.
+    /// </summary>
+    public void PreviewWarmth(int kelvin)
+    {
+        _targetWarmth = Math.Clamp(kelvin, 1500, 6500);
+        StartRamp();
+        LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
+    }
+
+    /// <summary>Stop preview-driving warmth and resume from the saved manual
+    /// warmth in settings. The scheduler will overwrite that on its next tick
+    /// if it's enabled.</summary>
+    public void EndWarmthPreview()
+    {
+        _targetWarmth = Math.Clamp(_settings.WarmthKelvin, 1500, 6500);
+        StartRamp();
+        LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
+    }
+
     // ---- Internal ----
 
     private double DerivedSigned() => _extendedDim > 0 ? -(double)_extendedDim : _hardwareLevel;

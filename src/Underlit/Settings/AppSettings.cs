@@ -192,21 +192,23 @@ public sealed class AppSettings
     // ---- Schedule helpers ----
 
     /// <summary>
-    /// Recompute the legacy four-field ramp window from Bedtime/WakeTime using
-    /// the same circadian-physiology model the "Apply" preset used:
-    ///   • BedtimeEnd   = Bedtime
-    ///   • BedtimeStart = Bedtime − 2.5 h   (start of evening ramp)
-    ///   • WakeupEnd    = WakeTime
-    ///   • WakeupStart  = WakeTime − 0.75 h (start of morning ramp)
-    /// All wrap around midnight via mod 24. Call this whenever Bedtime,
-    /// WakeTime, or the active profile changes.
+    /// Mirror the active profile's four ramp anchor times into the top-level
+    /// fields the <see cref="Underlit.Core.Scheduler"/> reads. Each profile
+    /// independently stores all four times — they're no longer derived from
+    /// Bedtime/WakeTime alone, so the user can drag the onset points
+    /// (BedtimeStart / WakeupStart) on the graph to widen or narrow the ramps.
+    /// Call this after any profile-altering change.
     /// </summary>
     public void EnsureScheduleCurveDerived()
     {
-        BedtimeEnd   = Bedtime;
-        BedtimeStart = ShiftHours(Bedtime, -2.5);
-        WakeupEnd    = WakeTime;
-        WakeupStart  = ShiftHours(WakeTime, -0.75);
+        var p = ActiveProfile();
+        BedtimeStart = p.BedtimeStart;
+        BedtimeEnd   = p.Bedtime;
+        WakeupStart  = p.WakeupStart;
+        WakeupEnd    = p.WakeTime;
+        Bedtime      = p.Bedtime;
+        WakeTime     = p.WakeTime;
+        NightWarmthKelvin = p.NightWarmthKelvin;
     }
 
     private static TimeOfDay ShiftHours(TimeOfDay t, double hours)
@@ -224,20 +226,51 @@ public sealed class AppSettings
     /// Make sure the profile list contains the built-in "Recommended" entry and
     /// that <see cref="ActiveProfileName"/> resolves to a profile that exists.
     /// Safe to call repeatedly — idempotent.
+    ///
+    /// On first migration from a pre-profile version (Profile list empty), the
+    /// Recommended profile is seeded from the user's existing top-level
+    /// Bedtime / WakeTime / NightWarmthKelvin so their previous schedule is
+    /// preserved instead of being replaced by hard-coded defaults.
     /// </summary>
     public void EnsureProfilesInitialized()
     {
-        if (WarmthProfiles.Count == 0
-            || !WarmthProfiles.Any(p => p.IsBuiltIn && p.Name == "Recommended"))
+        if (WarmthProfiles.Count == 0)
         {
+            WarmthProfiles.Add(new WarmthProfile
+            {
+                Name = "Recommended",
+                IsBuiltIn = true,
+                Bedtime      = Bedtime,
+                WakeTime     = WakeTime,
+                BedtimeStart = ShiftHours(Bedtime, -2.5),
+                WakeupStart  = ShiftHours(WakeTime, -0.75),
+                NightWarmthKelvin = NightWarmthKelvin,
+            });
+        }
+        else if (!WarmthProfiles.Any(p => p.IsBuiltIn && p.Name == "Recommended"))
+        {
+            // Existing profiles list but no built-in — add Recommended at index 0
+            // with the science defaults.
             WarmthProfiles.Insert(0, new WarmthProfile
             {
                 Name = "Recommended",
                 IsBuiltIn = true,
-                Bedtime  = new TimeOfDay(23, 30),
-                WakeTime = new TimeOfDay(7, 30),
+                Bedtime      = new TimeOfDay(23, 30),
+                WakeTime     = new TimeOfDay(7, 30),
+                BedtimeStart = new TimeOfDay(21, 0),
+                WakeupStart  = new TimeOfDay(6, 45),
                 NightWarmthKelvin = 2700,
             });
+        }
+
+        // Validate / repair each profile's onset times so they sit before the
+        // corresponding ramp end. If the JSON deserialised them as TimeOfDay()
+        // (the all-zero struct default) the user got 00:00 which is nonsensical
+        // for either onset; reset to the canonical 2.5h / 0.75h offsets.
+        foreach (var p in WarmthProfiles)
+        {
+            if (p.BedtimeStart == default) p.BedtimeStart = ShiftHours(p.Bedtime, -2.5);
+            if (p.WakeupStart  == default) p.WakeupStart  = ShiftHours(p.WakeTime, -0.75);
         }
 
         if (string.IsNullOrEmpty(ActiveProfileName)
@@ -355,8 +388,21 @@ public readonly record struct TimeOfDay(int Hour, int Minute)
 public sealed class WarmthProfile
 {
     public string Name { get; set; } = "Profile";
+
+    /// <summary>Start of the evening warming ramp (when warmth begins moving from
+    /// neutral toward NightWarmthKelvin). Defaults to Bedtime − 2.5h.</summary>
+    public TimeOfDay BedtimeStart { get; set; } = new(21, 0);
+
+    /// <summary>End of the evening ramp — fully at NightWarmthKelvin.</summary>
     public TimeOfDay Bedtime  { get; set; } = new(23, 30);
+
+    /// <summary>Start of the morning ramp (warmth begins moving from
+    /// NightWarmthKelvin back toward neutral). Defaults to WakeTime − 0.75h.</summary>
+    public TimeOfDay WakeupStart { get; set; } = new(6, 45);
+
+    /// <summary>End of the morning ramp — fully at neutral 6500K.</summary>
     public TimeOfDay WakeTime { get; set; } = new(7, 30);
+
     public int NightWarmthKelvin { get; set; } = 2700;
 
     /// <summary>

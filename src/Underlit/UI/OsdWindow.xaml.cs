@@ -429,23 +429,23 @@ public partial class OsdWindow : Window
     // ---- Bar drawing ----
 
     /// <summary>
-    /// Brightness bar update — v0.6.19 model.
+    /// Brightness bar update — v0.6.24 model.
     ///
-    /// The bar represents a 0..100 indicator that grows from the LEFT edge as the
-    /// engine's signed -100..+100 level goes from -100 (extended-dim max) to +100
-    /// (hardware max). Mapping: displayValue = (signedLevel + 100) / 2.
+    /// The bar represents a 0..100 indicator that grows from the LEFT edge. The
+    /// engine's signed -100..+100 level maps to displayValue 0..100 via
+    /// (signed + 100) / 2.
     ///
-    /// The fill is split into two coloured halves whose widths are independent:
-    ///   • FillLeft  — covers 0..50 of the bar. Anchored at the LEFT edge.
-    ///                 Width = min(displayValue, 50) / 50 × halfBar.
-    ///                 Colour = "low" / dim shade (signals "below Windows native min").
-    ///   • FillRight — covers 50..100 of the bar. Anchored at the LEFT edge of the
-    ///                 right column.
-    ///                 Width = max(displayValue - 50, 0) / 50 × halfBar.
-    ///                 Colour = accent (Windows native brightness range).
-    /// At exactly 50, FillLeft is full and FillRight is empty — the user sees the
-    /// dim shade fill exactly half the bar with a visible (hard) edge at the
-    /// transition. As they brighten further, the accent extends rightward.
+    /// Layout: two side-by-side fills (FillLeft for 0..50, FillRight for 50..100)
+    /// share a single colour. The colour switches between two states based on
+    /// where the indicator currently sits:
+    ///   • display ≥ 50 — both halves render in the accent colour. The Windows
+    ///                    native brightness range (50..100) and the visible
+    ///                    portion of the sub-OS-min half look identical; the
+    ///                    bar reads as one continuous accent-coloured fill.
+    ///   • display &lt; 50 — only FillLeft is visible (FillRight is empty), and
+    ///                    it renders in the "low" / dim shade. The user gets a
+    ///                    subtle hint that they've crossed below the Windows
+    ///                    native minimum into Underlit's extended-dim range.
     /// </summary>
     private void UpdateBrightnessBar(double levelSigned)
     {
@@ -463,6 +463,24 @@ public partial class OsdWindow : Window
         double display = (clamped + 100.0) / 2.0;            // map -100..+100 → 0..100
         double leftWidth  = Math.Min(display, 50.0) / 50.0 * half;
         double rightWidth = Math.Max(0, display - 50.0) / 50.0 * half;
+
+        // Colour both halves with the SAME colour at any given moment so the
+        // visible fill reads as one continuous shape. The colour flips based
+        // solely on whether we're below the OS-min threshold (50). Above 50 we
+        // use the accent everywhere; below 50 we use the dim shade.
+        Color accent = CurrentAccent();
+        Color dim    = ResolveBrightnessLowColor(accent);
+        Color shared = display < 50.0 ? dim : accent;
+        if (solid)
+        {
+            SolidFillNeg.Background = new SolidColorBrush(WithAlpha(shared, 0xC0));
+            SolidFillPos.Background = new SolidColorBrush(WithAlpha(shared, 0xC0));
+        }
+        else
+        {
+            FillLeft.Background  = new SolidColorBrush(shared);
+            FillRight.Background = new SolidColorBrush(shared);
+        }
 
         if (solid)
         {

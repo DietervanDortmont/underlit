@@ -45,29 +45,29 @@ public partial class OsdWindow : Window
     private DispatcherTimer? _hideTimer;
     private const int ShowDurationMs = 1300;
 
-    // ---- Dynamic-Island entry animation tunables ----
-    // The entry plays in two distinct phases so the seed circle reads as a real
-    // shape rather than a fleeting in-between:
-    //   Phase 1 (0..SlidePhaseMs)   — pure CIRCLE rises from below the taskbar
-    //                                 to its rest Y. The clip rect stays at
-    //                                 SeedCircleRect the whole time, so the
-    //                                 user clearly sees a small round seed
-    //                                 swimming up from behind the taskbar.
-    //   Phase 2 (SlidePhaseMs..end) — circle MORPHS into the full pill. Slide
-    //                                 has already settled (or is settling
-    //                                 with overshoot) so the morph is the only
-    //                                 large motion. Total entry takes
-    //                                 SlidePhaseMs + MorphPhaseMs to play.
+    // ---- Dynamic-Island entry/exit animation tunables ----
+    // v0.6.32: entry and exit are now mirrors — same total duration, slide and
+    // morph run in parallel with one slightly leading the other. The "fully
+    // slide up first, wait, then morph" choreography felt robotic.
     //
-    // The two animations overlap by MorphOverlapMs so the morph kicks in
-    // slightly before the slide settles — keeps the motion continuous instead
-    // of feeling like two strict phases bolted together.
-    private const int    SlidePhaseMs    = 380;   // pure circle slide up
-    private const int    MorphPhaseMs    = 380;   // circle → pill morph
-    private const int    MorphOverlapMs  = 60;    // morph starts this many ms before slide ends
-    private const int    EntryDurationMs = SlidePhaseMs + MorphPhaseMs - MorphOverlapMs;
+    //   Entry — slide leads, morph trails (matches Apple's pill: a round seed
+    //           rises and stretches into the pill near the top of its arc):
+    //     • Slide  0   .. EntryDurationMs    (Y: SlideFromBelowDip → 0, BackEase)
+    //     • Morph  MorphLeadMs .. EntryDurationMs (Rect: circle → pill, smooth)
+    //
+    //   Exit  — morph leads, slide trails (mirror of entry; the pill compresses
+    //           back to a circle and the circle drops behind the taskbar):
+    //     • Morph  0   .. EntryDurationMs - MorphLeadMs (Rect: pill → circle, smooth)
+    //     • Slide  0   .. EntryDurationMs              (Y: 0 → SlideFromBelowDip, smooth)
+    //
+    // MorphLeadMs is the asymmetry between slide and morph — small enough that
+    // both feel simultaneous, large enough that the user sees the order
+    // (seed-shape on entry, pill-shape on exit) clearly.
+    private const int    EntryDurationMs = 460;
+    private const int    MorphLeadMs     = 120;
     private const int    FadeInDurationMs = 240;
-    private const int    ExitDurationMs   = 220;
+    /// <summary>Exit total duration. Mirror of <see cref="EntryDurationMs"/>.</summary>
+    private const int    ExitDurationMs   = EntryDurationMs;
     /// <summary>
     /// Initial Y-offset for the entry slide, in dip. The seed circle sits at
     /// local y=10–56 inside the PillContainer (which is pinned to the top
@@ -340,27 +340,73 @@ public partial class OsdWindow : Window
     }
 
     /// <summary>
-    /// Slot the OSD window into z-order just BELOW the Windows taskbar
-    /// (Shell_TrayWnd) so the entry/exit slide animation passes BEHIND the
-    /// taskbar rather than drawing on top of it. Both windows are in the
-    /// topmost group, so Windows respects the explicit insert-after request
-    /// inside that group — meaning the OSD still floats above normal app
-    /// windows, just not above the taskbar.
+    /// Position the OSD's z-order so it (a) stays above normal app windows
+    /// like Chrome, and (b) stays behind the taskbar so the entry/exit slide
+    /// passes behind it instead of drawing on top of it.
     ///
-    /// Called every Show() because Windows tends to re-promote topmost
-    /// windows to the front of the topmost group on activation, which would
-    /// undo our placement.
+    /// The two goals fight each other on Windows 11 because the Win 11
+    /// taskbar isn't always topmost. Strategy:
+    ///
+    ///   • If Shell_TrayWnd is topmost (Win 10, most Win 11 setups): place
+    ///     OSD just below the tray INSIDE the topmost group via
+    ///     SetWindowPos(osd, tray, ...). Both windows stay topmost, the OSD
+    ///     sits between the tray and every non-topmost app, so the slide
+    ///     passes behind the tray and we still float above Chrome.
+    ///
+    ///   • If Shell_TrayWnd is NOT topmost: dropping below it would demote
+    ///     the OSD out of the topmost group and Chrome (foreground, top of
+    ///     the non-topmost stack) would render above us. Instead, force the
+    ///     OSD to topmost via HWND_TOPMOST. We give up the "behind taskbar"
+    ///     effect here — the slide will draw over the taskbar — but the OSD
+    ///     stays above all app windows, which is the priority.
+    ///
+    /// Called every Show() because Windows re-promotes topmost windows to
+    /// the front of the topmost group on activation, which would undo the
+    /// "below tray" placement.
     /// </summary>
-    private void DropBelowTaskbar()
+    private void PositionOsdZOrder()
     {
         if (Hwnd == IntPtr.Zero) return;
         IntPtr tray = NativeMethods.FindWindow("Shell_TrayWnd", null);
-        if (tray == IntPtr.Zero) return;
-        NativeMethods.SetWindowPos(
-            Hwnd, tray,
-            0, 0, 0, 0,
-            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
-            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+        if (tray == IntPtr.Zero)
+        {
+            // No taskbar found at all — at least make sure we're topmost.
+            NativeMethods.SetWindowPos(
+                Hwnd, NativeMethods.HWND_TOPMOST,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+            return;
+        }
+
+        int trayEx = NativeMethods.GetWindowLong(tray, NativeMethods.GWL_EXSTYLE);
+        bool trayIsTopmost = (trayEx & NativeMethods.WS_EX_TOPMOST) != 0;
+
+        if (trayIsTopmost)
+        {
+            // Put OSD just below tray in the topmost group. Both stay
+            // topmost; OSD lives in z-order BETWEEN the tray and every
+            // non-topmost app window, so we get behind-taskbar AND
+            // above-Chrome at the same time.
+            NativeMethods.SetWindowPos(
+                Hwnd, tray,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+        }
+        else
+        {
+            // Tray is non-topmost (some Win 11 configurations). Dropping
+            // below it would demote us into the non-topmost stack, where
+            // Chrome can render over us. Stay topmost — the slide will
+            // draw over the taskbar instead of behind it, but the OSD is
+            // guaranteed above app windows.
+            NativeMethods.SetWindowPos(
+                Hwnd, NativeMethods.HWND_TOPMOST,
+                0, 0, 0, 0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
+        }
     }
 
     /// <summary>The Rect that, used with the WindowRoot clip, exposes the entire visible
@@ -1064,35 +1110,36 @@ public partial class OsdWindow : Window
             _entrySlide.Y   = SlideFromBelowDip;
             Opacity         = 0;
             Show();
-            // Drop us into z-order just BELOW the taskbar so the slide rises
-            // FROM BEHIND it rather than over it. Has to be after Show() because
-            // before that the window has no z-order to manipulate.
-            DropBelowTaskbar();
+            // Place us at the right z-order layer (just below the taskbar if
+            // the taskbar is topmost; otherwise force topmost). Has to be
+            // after Show() because before that the window has no z-order to
+            // manipulate.
+            PositionOsdZOrder();
 
             var spring  = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = EntryBackAmplitude };
             var smooth  = new QuadraticEase { EasingMode = EasingMode.EaseOut };
 
-            // Phase 1: circle slides up from below the taskbar to rest. No
-            // shape morph during this leg — the rect stays at SeedCircleRect
-            // because we haven't started the rect animation yet.
+            // Slide leads: starts at t=0, runs the full entry duration with a
+            // BackEase spring overshoot near the end so the pill bounces into
+            // place rather than locking on the rest position.
             var slideAnim = new DoubleAnimation
             {
                 From = SlideFromBelowDip,
                 To   = 0,
-                Duration = TimeSpan.FromMilliseconds(SlidePhaseMs),
+                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
                 EasingFunction = spring,
             };
 
-            // Phase 2: circle morphs into the full pill, beginning a hair
-            // before the slide finishes so the motion feels continuous.
-            // Smooth ease (not Back) here — overshoot looks weird when a wide
-            // pill is springing to its width.
+            // Morph trails by MorphLeadMs: the seed circle is most of the way
+            // up before it starts stretching into the pill. Both finish at
+            // the same t=EntryDurationMs so the user sees a single coordinated
+            // motion settle, not two animations ending separately.
             var rectAnim = new RectAnimation
             {
                 From = SeedCircleRect(),
                 To   = FullPillRect(),
-                BeginTime = TimeSpan.FromMilliseconds(SlidePhaseMs - MorphOverlapMs),
-                Duration = TimeSpan.FromMilliseconds(MorphPhaseMs),
+                BeginTime = TimeSpan.FromMilliseconds(MorphLeadMs),
+                Duration = TimeSpan.FromMilliseconds(EntryDurationMs - MorphLeadMs),
                 EasingFunction = smooth,
             };
 
@@ -1130,25 +1177,39 @@ public partial class OsdWindow : Window
 
     /// <summary>
     /// Reverse of the entry: pill shrinks back to the seed circle and slides
-    /// down behind the taskbar while fading out. We use QuadraticEase EaseIn for
-    /// the exit (no overshoot — undershoot before disappearing would look weird).
+    /// down behind the taskbar while fading out. v0.6.32: total duration and
+    /// timing structure mirror the entry. Morph leads (pill compresses to
+    /// circle first), slide trails (the now-circular seed drops behind the
+    /// taskbar). Both end at t=ExitDurationMs.
     /// </summary>
     private void StartExitAnimation()
     {
         var ease = new QuadraticEase { EasingMode = EasingMode.EaseIn };
 
+        // Morph leads: pill collapses to the seed circle in the first
+        // (ExitDurationMs - MorphLeadMs) ms. By the time the slide finishes
+        // its descent, the shape is already a circle.
         var rectAnim = new RectAnimation
         {
-            To = SeedCircleRect(),
-            Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
+            From = FullPillRect(),
+            To   = SeedCircleRect(),
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs - MorphLeadMs),
             EasingFunction = ease,
         };
+
+        // Slide trails: starts at t=0, ends at t=ExitDurationMs — runs the
+        // whole exit alongside the morph. Morph finishing earlier means the
+        // last sliver of the slide (last MorphLeadMs ms) is a pure circle
+        // dropping behind the taskbar, which mirrors the entry's "circle
+        // climbing up" leg.
         var slideAnim = new DoubleAnimation
         {
-            To = SlideFromBelowDip,
+            From = 0,
+            To   = SlideFromBelowDip,
             Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
             EasingFunction = ease,
         };
+
         var fadeOut = new DoubleAnimation
         {
             To = 0.0,

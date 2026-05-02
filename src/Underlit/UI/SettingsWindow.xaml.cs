@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Underlit.Display;
+using Underlit.Hue;
 using Underlit.Settings;
 using Underlit.Sys;
 using Color = System.Windows.Media.Color;
@@ -46,7 +47,7 @@ public partial class SettingsWindow : Window
         LstMonitors.ItemsSource = _monRows;
 
         // Sidebar → page switching
-        _pages = new FrameworkElement[] { PageGeneral, PageHotkeys, PageSchedule, PageMonitors, PageExclusions };
+        _pages = new FrameworkElement[] { PageGeneral, PageHotkeys, PageSchedule, PageLights, PageMonitors, PageExclusions };
         NavList.SelectionChanged += (_, _) => ShowSelectedPage();
 
         // Theming — initial, plus live follow on Windows theme change
@@ -149,6 +150,9 @@ public partial class SettingsWindow : Window
 
         // Apply DWM backdrop to this window so the settings UI matches the OSD's mode.
         SourceInitialized += (_, _) => ApplyBackdropToWindow();
+
+        // Lights / Hue page wiring.
+        WireHuePage();
     }
 
     private void ApplyBackdropToWindow()
@@ -729,6 +733,254 @@ public partial class SettingsWindow : Window
         // the anchor to. They feel the warmth they're configuring instead of
         // just seeing it on a graph.
         WarmthPreviewRequested?.Invoke(kelvin);
+    }
+
+    // ============================================================
+    // Lights / Philips Hue (Settings → Lights page)
+    // ============================================================
+
+    private enum HueUiState { Disconnected, Pairing, Connected }
+
+    /// <summary>Bindable row for the group-selection ItemsControl.</summary>
+    private sealed class HueGroupRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+        private bool _isSelected;
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set { if (_isSelected != value) { _isSelected = value; PropertyChanged?.Invoke(this, new(nameof(IsSelected))); } }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private HueBridgeClient? _hueClient;
+    private string? _huePairingIp;
+    private DispatcherTimer? _huePairTimer;
+    private int _huePairSecondsLeft;
+    private System.Collections.ObjectModel.ObservableCollection<HueGroupRow>? _hueGroupRows;
+
+    private void WireHuePage()
+    {
+        BtnHueDiscover.Click       += async (_, _) => await DiscoverHueBridgesAsync();
+        BtnHueConnectManual.Click  += (_, _) => StartPairingFlow(TxtHueManualIp.Text.Trim());
+        LstHueBridges.SelectionChanged += (_, _) =>
+        {
+            if (LstHueBridges.SelectedItem is HueDiscoveredBridge b) StartPairingFlow(b.Ip);
+        };
+
+        BtnHuePair.Click       += async (_, _) => await TryHuePairAsync();
+        BtnHuePairCancel.Click += (_, _) => CancelHuePairing();
+
+        BtnHueUnpair.Click         += (_, _) => UnpairHue();
+        BtnHueRefreshGroups.Click  += async (_, _) => await LoadHueGroupsAsync();
+        BtnHueTest.Click           += async (_, _) => await TestHueGroupsAsync();
+
+        CboHueColorRange.SelectionChanged += (_, _) =>
+        {
+            int idx = Math.Max(0, CboHueColorRange.SelectedIndex);
+            _snapshot.HueColorRange = (HueColorRangeMode)idx;
+            PushSettings();
+        };
+
+        // Initial state.
+        if (!string.IsNullOrEmpty(_snapshot.HueBridgeIp) && !string.IsNullOrEmpty(_snapshot.HueBridgeUsername))
+        {
+            _hueClient = new HueBridgeClient(_snapshot.HueBridgeIp!, _snapshot.HueBridgeUsername);
+            CboHueColorRange.SelectedIndex = (int)_snapshot.HueColorRange;
+            SetHueUiState(HueUiState.Connected);
+            _ = LoadHueGroupsAsync();
+        }
+        else
+        {
+            SetHueUiState(HueUiState.Disconnected);
+        }
+    }
+
+    private void SetHueUiState(HueUiState s)
+    {
+        HuePanelDisconnected.Visibility = s == HueUiState.Disconnected ? Visibility.Visible : Visibility.Collapsed;
+        HuePanelPairing.Visibility      = s == HueUiState.Pairing      ? Visibility.Visible : Visibility.Collapsed;
+        HuePanelConnected.Visibility    = s == HueUiState.Connected    ? Visibility.Visible : Visibility.Collapsed;
+
+        if (s == HueUiState.Connected && !string.IsNullOrEmpty(_snapshot.HueBridgeIp))
+            LblHueBridgeIp.Text = $"Connected to bridge at {_snapshot.HueBridgeIp}";
+    }
+
+    private async System.Threading.Tasks.Task DiscoverHueBridgesAsync()
+    {
+        BtnHueDiscover.IsEnabled = false;
+        LblHueDiscoverStatus.Text = "Searching for bridges…";
+        LblHueDiscoverStatus.Visibility = Visibility.Visible;
+        HueDiscoveredCard.Visibility = Visibility.Collapsed;
+        try
+        {
+            var bridges = await HueDiscovery.DiscoverViaCloudAsync();
+            LstHueBridges.ItemsSource = bridges;
+            if (bridges.Count == 0)
+            {
+                LblHueDiscoverStatus.Text =
+                    "No bridges found. Make sure your bridge is powered on and on the same network, " +
+                    "or enter its IP manually below.";
+            }
+            else
+            {
+                LblHueDiscoverStatus.Visibility = Visibility.Collapsed;
+                HueDiscoveredCard.Visibility = Visibility.Visible;
+            }
+        }
+        finally { BtnHueDiscover.IsEnabled = true; }
+    }
+
+    private void StartPairingFlow(string bridgeIp)
+    {
+        if (string.IsNullOrWhiteSpace(bridgeIp))
+        {
+            LblHueDiscoverStatus.Text = "Please enter a bridge IP first.";
+            LblHueDiscoverStatus.Visibility = Visibility.Visible;
+            return;
+        }
+        _huePairingIp = bridgeIp;
+        _huePairSecondsLeft = 30;
+        LblHuePairingStatus.Text = $"Bridge: {bridgeIp}  ·  press the link button now ({_huePairSecondsLeft}s)";
+        SetHueUiState(HueUiState.Pairing);
+
+        _huePairTimer?.Stop();
+        _huePairTimer = new DispatcherTimer(DispatcherPriority.Normal)
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _huePairTimer.Tick += (_, _) =>
+        {
+            _huePairSecondsLeft--;
+            if (_huePairSecondsLeft <= 0)
+            {
+                _huePairSecondsLeft = 30;
+                LblHuePairingStatus.Text = "Press the button again — the 30-second window has lapsed.";
+            }
+            else
+            {
+                LblHuePairingStatus.Text =
+                    $"Bridge: {_huePairingIp}  ·  press the link button now ({_huePairSecondsLeft}s)";
+            }
+        };
+        _huePairTimer.Start();
+    }
+
+    private void CancelHuePairing()
+    {
+        _huePairTimer?.Stop();
+        _huePairTimer = null;
+        _huePairingIp = null;
+        SetHueUiState(HueUiState.Disconnected);
+    }
+
+    private async System.Threading.Tasks.Task TryHuePairAsync()
+    {
+        if (string.IsNullOrEmpty(_huePairingIp)) return;
+        BtnHuePair.IsEnabled = false;
+        LblHuePairingStatus.Text = "Pairing…";
+        try
+        {
+            using var temp = new HueBridgeClient(_huePairingIp);
+            string deviceType = $"Underlit#{Environment.MachineName}";
+            if (deviceType.Length > 40) deviceType = deviceType[..40];
+
+            var result = await temp.TryPairAsync(deviceType);
+            if (!result.Success)
+            {
+                LblHuePairingStatus.Text = $"Couldn't pair: {result.Error}. " +
+                    "Press the link button on the bridge and click Pair again within 30 seconds.";
+                return;
+            }
+
+            _huePairTimer?.Stop();
+            _snapshot.HueBridgeIp       = _huePairingIp;
+            _snapshot.HueBridgeUsername = result.Username;
+            _hueClient?.Dispose();
+            _hueClient = new HueBridgeClient(_huePairingIp, result.Username);
+            CboHueColorRange.SelectedIndex = (int)_snapshot.HueColorRange;
+            PushSettings();
+            SetHueUiState(HueUiState.Connected);
+            await LoadHueGroupsAsync();
+        }
+        finally { BtnHuePair.IsEnabled = true; }
+    }
+
+    private async System.Threading.Tasks.Task LoadHueGroupsAsync()
+    {
+        if (_hueClient == null) return;
+        BtnHueRefreshGroups.IsEnabled = false;
+        try
+        {
+            List<HueGroup> groups;
+            try { groups = await _hueClient.GetGroupsAsync(); }
+            catch (Exception ex)
+            {
+                LblHueBridgeStatus.Text = $"Bridge unreachable: {ex.Message}";
+                return;
+            }
+            LblHueBridgeStatus.Text = $"Reachable · {groups.Count} group{(groups.Count == 1 ? "" : "s")}";
+
+            var prevSelected = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
+            _hueGroupRows = new System.Collections.ObjectModel.ObservableCollection<HueGroupRow>();
+            foreach (var g in groups)
+            {
+                var row = new HueGroupRow
+                {
+                    Id          = g.Id,
+                    DisplayName = g.ToString(),
+                    IsSelected  = prevSelected.Contains(g.Id),
+                };
+                row.PropertyChanged += (_, _) =>
+                {
+                    _snapshot.HueSelectedGroupIds = _hueGroupRows!
+                        .Where(r => r.IsSelected)
+                        .Select(r => r.Id)
+                        .ToList();
+                    PushSettings();
+                };
+                _hueGroupRows.Add(row);
+            }
+            HueGroupsList.ItemsSource = _hueGroupRows;
+        }
+        finally { BtnHueRefreshGroups.IsEnabled = true; }
+    }
+
+    private async System.Threading.Tasks.Task TestHueGroupsAsync()
+    {
+        if (_hueClient == null || _hueGroupRows == null) return;
+        var selected = _hueGroupRows.Where(r => r.IsSelected).ToList();
+        if (selected.Count == 0)
+        {
+            LblHueBridgeStatus.Text = "Select at least one group first.";
+            return;
+        }
+        BtnHueTest.IsEnabled = false;
+        try
+        {
+            foreach (var r in selected)
+                await _hueClient.SetGroupStateAsync(r.Id, on: true, mireds: 250, brightness254: 254);
+            await System.Threading.Tasks.Task.Delay(700);
+            foreach (var r in selected)
+                await _hueClient.SetGroupStateAsync(r.Id, on: null, mireds: 350, brightness254: 180);
+        }
+        finally { BtnHueTest.IsEnabled = true; }
+    }
+
+    private void UnpairHue()
+    {
+        _hueClient?.Dispose();
+        _hueClient = null;
+        _snapshot.HueBridgeIp = null;
+        _snapshot.HueBridgeUsername = null;
+        _snapshot.HueSelectedGroupIds = new();
+        HueGroupsList.ItemsSource = null;
+        _hueGroupRows = null;
+        TxtHueManualIp.Text = "";
+        PushSettings();
+        SetHueUiState(HueUiState.Disconnected);
     }
 
     private static TimeOfDay TimeOfDayFromHourFractional(double hours)

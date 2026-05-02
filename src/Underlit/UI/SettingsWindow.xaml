@@ -195,6 +195,7 @@
                     <ListBoxItem Content="General"/>
                     <ListBoxItem Content="Hotkeys"/>
                     <ListBoxItem Content="Schedule"/>
+                    <ListBoxItem Content="Lights"/>
                     <ListBoxItem Content="Monitors"/>
                     <ListBoxItem Content="Exclusions"/>
                 </ListBox>
@@ -792,6 +793,177 @@
                             </StackPanel>
                         </Border>
                         </StackPanel>  <!-- /SchedulePanelCurve -->
+                    </StackPanel>
+
+                    <!-- LIGHTS — Philips Hue integration -->
+                    <StackPanel x:Name="PageLights" Visibility="Collapsed">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Lights"/>
+
+                        <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,12"
+                                   Text="Connect a Philips Hue Bridge so your room lighting can follow Underlit's circadian schedule. Bulbs you select here will warm down with the screen on the bedtime ramp and return to neutral on the morning ramp."/>
+
+                        <!-- DISCONNECTED: discovery + manual IP entry -->
+                        <StackPanel x:Name="HuePanelDisconnected" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource CardCaption}" Text="FIND YOUR BRIDGE"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
+                                               Text="Underlit can locate your bridge via Philips' discovery service, or you can enter its IP directly if you already know it."/>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Auto-discover bridges on your network"/>
+                                        <Button Grid.Column="1" x:Name="BtnHueDiscover" Margin="0,0,14,0"
+                                                Content="Discover" Padding="14,6" Cursor="Hand"/>
+                                    </Grid>
+                                    <Border Style="{StaticResource RowDivider}"/>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Or enter bridge IP manually"/>
+                                        <TextBox Grid.Column="1" x:Name="TxtHueManualIp"
+                                                 Width="160" Margin="0,0,8,0"
+                                                 Padding="6,4"
+                                                 ToolTip="e.g. 192.168.1.42"/>
+                                        <Button Grid.Column="2" x:Name="BtnHueConnectManual" Margin="0,0,14,0"
+                                                Content="Use this" Padding="14,6" Cursor="Hand"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border x:Name="HueDiscoveredCard" Style="{StaticResource Card}" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
+                                               Text="Bridges found on your network:"/>
+                                    <ListBox x:Name="LstHueBridges" Margin="14,0,14,12"
+                                             MaxHeight="120" BorderThickness="1"
+                                             BorderBrush="{DynamicResource App.CardBorder}"
+                                             Background="Transparent"/>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock x:Name="LblHueDiscoverStatus"
+                                       Style="{StaticResource RowHint}"
+                                       Margin="0,4,0,0"
+                                       Visibility="Collapsed"/>
+                        </StackPanel>
+
+                        <!-- PAIRING: link-button countdown -->
+                        <StackPanel x:Name="HuePanelPairing" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource CardCaption}" Text="PAIR WITH BRIDGE"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel Margin="14,14,14,14">
+                                    <TextBlock Style="{StaticResource RowLabel}" Margin="0,0,0,8"
+                                               Text="Press the link button on the top of your Hue Bridge"/>
+                                    <TextBlock Style="{StaticResource RowHint}"
+                                               Text="It's the round button on the bridge's lid. After you press it you have ~30 seconds to click Pair below."/>
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="LblHuePairingStatus"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   FontSize="11"/>
+                                        <Button Grid.Column="1" x:Name="BtnHuePairCancel"
+                                                Margin="0,0,8,0" Padding="14,6"
+                                                Content="Back" Cursor="Hand"
+                                                Background="Transparent"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                        <Button Grid.Column="2" x:Name="BtnHuePair"
+                                                Padding="18,6"
+                                                Content="Pair" Cursor="Hand"
+                                                Background="{DynamicResource App.Accent}"
+                                                BorderThickness="0"
+                                                Foreground="White"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- CONNECTED: group selection + colour range + actions -->
+                        <StackPanel x:Name="HuePanelConnected" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource CardCaption}" Text="BRIDGE"/>
+                            <Border Style="{StaticResource Card}">
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" x:Name="LblHueBridgeIp" Text="Connected to bridge"/>
+                                        <TextBlock Style="{StaticResource RowHint}" x:Name="LblHueBridgeStatus" Text="Reachable"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnHueUnpair" Margin="0,0,14,0"
+                                            Content="Unpair" Padding="14,6" Cursor="Hand"
+                                            Background="Transparent"
+                                            BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Style="{StaticResource CardCaption}" Text="GROUPS"/>
+                            <Border Style="{StaticResource Card}" Padding="0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
+                                               Text="Tick any rooms / zones / groups Underlit should follow. Lights you don't tick are left alone."/>
+                                    <ItemsControl x:Name="HueGroupsList" Margin="14,0,14,12">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding DisplayName}"
+                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                          Margin="0,3"
+                                                          Foreground="{DynamicResource App.TextPrimary}"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Border Style="{StaticResource RowDivider}"/>
+                                    <Grid Style="{StaticResource Row}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Refresh group list / test selection"/>
+                                        <Button Grid.Column="1" x:Name="BtnHueRefreshGroups"
+                                                Margin="0,0,8,0" Content="Refresh"
+                                                Padding="14,6" Cursor="Hand"
+                                                Background="Transparent"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                        <Button Grid.Column="2" x:Name="BtnHueTest"
+                                                Margin="0,0,14,0" Content="Test"
+                                                Padding="14,6" Cursor="Hand"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Style="{StaticResource CardCaption}" Text="COLOUR RANGE"/>
+                            <Border Style="{StaticResource Card}">
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="How lights match the warmth schedule"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Circadian: native colour temperature (subtle, recommended). White → red: full RGB drift toward deep red in the evening (dramatic). Warm white only: clamped 5000–2700 K range, gentlest."/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" x:Name="CboHueColorRange"
+                                              Margin="0,0,14,0" MinWidth="160" VerticalAlignment="Center">
+                                        <ComboBoxItem Content="Circadian (recommended)"/>
+                                        <ComboBoxItem Content="White → red"/>
+                                        <ComboBoxItem Content="Warm white only"/>
+                                    </ComboBox>
+                                </Grid>
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
 
                     <!-- MONITORS -->

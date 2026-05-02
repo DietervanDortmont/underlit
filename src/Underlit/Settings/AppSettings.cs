@@ -201,6 +201,27 @@ public sealed class AppSettings
     /// lockstep through this setter.</summary>
     public int NightWarmthKelvin { get; set; } = 2700;
 
+    // ---- Philips Hue integration (v0.6.27) ----
+
+    /// <summary>LAN IP of the user's Hue Bridge, set after a successful pairing
+    /// in Settings → Lights. Null when no bridge is paired.</summary>
+    public string? HueBridgeIp { get; set; }
+
+    /// <summary>The username/key returned by the bridge during pairing. Acts as
+    /// the bearer token for every subsequent API call. Treat as a secret.</summary>
+    public string? HueBridgeUsername { get; set; }
+
+    /// <summary>Group ids selected for Underlit to control. Groups not in this
+    /// list are left alone — their state is never touched. Empty by default
+    /// (opt-in per-group via the Lights settings page).</summary>
+    public List<string> HueSelectedGroupIds { get; set; } = new();
+
+    /// <summary>How Underlit maps the schedule warmth to Hue colour. Default is
+    /// circadian (kelvin → mireds) which keeps the bulbs in their native colour-
+    /// temperature space. Other options drive the bulbs out into RGB land for
+    /// stronger evening cues.</summary>
+    public HueColorRangeMode HueColorRange { get; set; } = HueColorRangeMode.Circadian;
+
     // ---- Schedule helpers ----
 
     /// <summary>
@@ -494,4 +515,22 @@ public enum OsdBarStyle
 {
     Bar       = 0,
     SolidFill = 1,
+}
+
+/// <summary>
+/// How Underlit maps the schedule warmth onto the user's Hue lights. Selected
+/// per-bridge in Settings → Lights.
+///   • Circadian   — kelvin → Hue mireds (153..500). Native colour temperature
+///                   on the bulb's white axis. Subtle, what most users want.
+///   • WhiteToRed  — kelvin → CIE xy. Daytime = white, deep evening = saturated
+///                   red/orange. More dramatic; only works on bulbs that
+///                   support full colour (Hue Color, Lightstrip, Play, etc.).
+///   • WarmWhiteOnly — clamped to a narrow 5000K → 2700K band. Useful for
+///                   ambient lighting where deep-warm colours feel too much.
+/// </summary>
+public enum HueColorRangeMode
+{
+    Circadian     = 0,
+    WhiteToRed    = 1,
+    WarmWhiteOnly = 2,
 }

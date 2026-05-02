@@ -75,10 +75,16 @@ public partial class SettingsWindow : Window
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
-        foreach (var tb in new TextBox[] { TxtHkBrDown, TxtHkBrUp, TxtHkWrDown, TxtHkWrUp, TxtHkBoost, TxtHkToggle,
-                                           TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd, TxtExclusions })
+        // Schedule/exclusion textboxes still commit on lost-focus.
+        foreach (var tb in new TextBox[] { TxtBedStart, TxtBedEnd, TxtWakeStart, TxtWakeEnd, TxtExclusions })
         {
             tb.LostFocus += (_, _) => PushSettings();
+        }
+        // HotkeyField raises ValueChanged whenever the user captures, clears, or
+        // commits a new binding via the listen-to-bind UI. Bridge straight to PushSettings.
+        foreach (var hk in new HotkeyField[] { TxtHkBrDown, TxtHkBrUp, TxtHkWrDown, TxtHkWrUp, TxtHkBoost, TxtHkToggle })
+        {
+            hk.ValueChanged += _ => PushSettings();
         }
 
         LstMonitors.SelectionChanged += OnMonitorSelected;
@@ -595,12 +601,12 @@ public partial class SettingsWindow : Window
         // be measured yet (hidden page), so SizeChanged will also fire it.
         Dispatcher.BeginInvoke((Action)RedrawScheduleGraph, DispatcherPriority.Loaded);
 
-        TxtHkBrDown.Text = _snapshot.HotkeyBrightnessDown;
-        TxtHkBrUp.Text   = _snapshot.HotkeyBrightnessUp;
-        TxtHkWrDown.Text = _snapshot.HotkeyWarmthDown;
-        TxtHkWrUp.Text   = _snapshot.HotkeyWarmthUp;
-        TxtHkBoost.Text  = _snapshot.HotkeyBoost;
-        TxtHkToggle.Text = _snapshot.HotkeyToggle;
+        TxtHkBrDown.Value = _snapshot.HotkeyBrightnessDown ?? string.Empty;
+        TxtHkBrUp.Value   = _snapshot.HotkeyBrightnessUp   ?? string.Empty;
+        TxtHkWrDown.Value = _snapshot.HotkeyWarmthDown     ?? string.Empty;
+        TxtHkWrUp.Value   = _snapshot.HotkeyWarmthUp       ?? string.Empty;
+        TxtHkBoost.Value  = _snapshot.HotkeyBoost          ?? string.Empty;
+        TxtHkToggle.Value = _snapshot.HotkeyToggle         ?? string.Empty;
 
         TxtBedStart.Text  = Fmt(_snapshot.BedtimeStart);
         TxtBedEnd.Text    = Fmt(_snapshot.BedtimeEnd);
@@ -689,12 +695,12 @@ public partial class SettingsWindow : Window
         _snapshot.GlassRimSecondary   = SldGlassRimSecondary.Value;
         _snapshot.GlassTintStrength   = SldGlassTintStrength.Value;
 
-        _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Text.Trim();
-        _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Text.Trim();
-        _snapshot.HotkeyWarmthDown     = TxtHkWrDown.Text.Trim();
-        _snapshot.HotkeyWarmthUp       = TxtHkWrUp.Text.Trim();
-        _snapshot.HotkeyBoost          = TxtHkBoost.Text.Trim();
-        _snapshot.HotkeyToggle         = TxtHkToggle.Text.Trim();
+        _snapshot.HotkeyBrightnessDown = TxtHkBrDown.Value.Trim();
+        _snapshot.HotkeyBrightnessUp   = TxtHkBrUp.Value.Trim();
+        _snapshot.HotkeyWarmthDown     = TxtHkWrDown.Value.Trim();
+        _snapshot.HotkeyWarmthUp       = TxtHkWrUp.Value.Trim();
+        _snapshot.HotkeyBoost          = TxtHkBoost.Value.Trim();
+        _snapshot.HotkeyToggle         = TxtHkToggle.Value.Trim();
 
         _snapshot.BedtimeStart = ParseTime(TxtBedStart.Text, _snapshot.BedtimeStart);
         _snapshot.BedtimeEnd   = ParseTime(TxtBedEnd.Text, _snapshot.BedtimeEnd);

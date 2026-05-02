@@ -1,6 +1,7 @@
 <Window x:Class="Underlit.UI.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:Underlit.UI"
         Title="Underlit Settings"
         Width="760" Height="600"
         MinWidth="680" MinHeight="520"
@@ -578,7 +579,7 @@
                     <StackPanel x:Name="PageHotkeys" Visibility="Collapsed">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Hotkeys"/>
                         <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,16"
-                                   Text="Type a combination like 'Ctrl+Alt+Down'. Modifiers: Ctrl, Alt, Shift, Win. Keys: letters, digits, F1..F12, Left, Right, Up, Down, Space, Enter."/>
+                                   Text="Click a field, then press the key combination you want — Underlit captures it directly. Esc cancels, Backspace clears. Bindings need at least one modifier (Ctrl, Alt, Shift, or Win) so a single key isn't hijacked system-wide."/>
 
                         <TextBlock Style="{StaticResource CardCaption}" Text="BRIGHTNESS"/>
                         <Border Style="{StaticResource Card}">
@@ -586,13 +587,13 @@
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Brightness down"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkBrDown" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkBrDown" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Brightness up"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkBrUp" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkBrUp" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -603,13 +604,13 @@
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Warmer"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkWrDown" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkWrDown" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Cooler"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkWrUp" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkWrUp" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -623,13 +624,13 @@
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Boost"/>
                                         <TextBlock Style="{StaticResource RowHint}" Text="Toggle: once jumps to full, again restores."/>
                                     </StackPanel>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkBoost" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkBoost" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <TextBlock Style="{StaticResource RowLabel}" Text="Toggle Underlit on/off"/>
-                                    <TextBox Grid.Column="1" x:Name="TxtHkToggle" Style="{StaticResource AppleTextBox}" MinWidth="220"/>
+                                    <ui:HotkeyField Grid.Column="1" x:Name="TxtHkToggle" MinWidth="220" VerticalAlignment="Center" Margin="0,0,14,0"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

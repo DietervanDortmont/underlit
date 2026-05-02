@@ -29,7 +29,10 @@
             including refraction, Phong specular, Fresnel rim, and the soft shadow.
     -->
 
-    <Grid x:Name="WindowRoot">
+    <!-- Background="Transparent" (not null) so the empty pixels of the Grid are still
+         hit-testable — the brightness mouse-drag handler relies on PreviewMouseDown
+         firing across the full pill area, not just on opaque child elements. -->
+    <Grid x:Name="WindowRoot" Background="Transparent">
 
         <!-- ===== Liquid Glass full bitmap =====
              ImageBrush is 300x66; the renderer fills it with the pill, the shadow

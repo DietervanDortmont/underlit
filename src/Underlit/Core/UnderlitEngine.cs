@@ -268,6 +268,15 @@ public sealed class UnderlitEngine : IDisposable
     /// <summary>Scheduler baseline — warmth only now.</summary>
     public void ApplyScheduleBaselineWarmth(int warmth) => SetWarmth(warmth);
 
+    /// <summary>Fixed ramp duration used by <see cref="PreviewWarmth"/>,
+    /// independent of the user's <see cref="AppSettings.RampDurationMs"/>
+    /// setting. Short enough to feel responsive while dragging a graph
+    /// anchor, long enough to mask the gamma jump from "current screen
+    /// warmth" to "dot's kelvin" on the first preview of a drag — that
+    /// jump was the source of the flicker users saw on ramp-anchor drags
+    /// in v0.6.34, where preview snapped instantaneously.</summary>
+    private const int PreviewRampMs = 90;
+
     /// <summary>
     /// Transient warmth preview — used by the schedule-graph drag handler so
     /// the screen tracks the dragged point's kelvin in real time without
@@ -275,30 +284,57 @@ public sealed class UnderlitEngine : IDisposable
     /// with <see cref="EndWarmthPreview"/> on mouse-up; the scheduler's next
     /// tick (≤30 s) will reassert the schedule's actual current-time warmth.
     ///
-    /// v0.6.34: snaps directly to the target instead of starting a fresh
-    /// ramp on every mouse-move. The previous behaviour kicked
-    /// <see cref="StartRamp"/> ~60 times per second, which restarted the
-    /// gamma lerp's start point each frame and made the screen visibly
-    /// flicker during a drag. Snap + a single immediate gamma write per
-    /// tick gives smooth tracking.
+    /// v0.6.36: smooth-ramps to the new target over <see cref="PreviewRampMs"/>
+    /// instead of snapping. v0.6.34's snap eliminated the multi-restart
+    /// jitter the original implementation had, but introduced a different
+    /// flicker: the very first preview of a drag teleported the screen
+    /// from whatever warmth the schedule was holding (e.g. 6500 K mid-day)
+    /// to the dragged anchor's kelvin (e.g. 2700 K for a deep-night
+    /// anchor) in one frame. That single huge gamma jump was the
+    /// "flicker around 3000 K" users were reporting. A short fixed-
+    /// duration ramp smooths the first jump AND tracks subsequent
+    /// drag-moves without piling up — each new call updates
+    /// <see cref="_targetWarmth"/>, the ramp tick keeps interpolating
+    /// from current rendered toward whatever the latest target is.
     /// </summary>
     public void PreviewWarmth(int kelvin)
     {
         int newTarget = Math.Clamp(kelvin, 1500, 6500);
-        if (newTarget == _targetWarmth && _currentWarmthRendered == newTarget) return;
+        if (newTarget == _targetWarmth) return;
         _targetWarmth = newTarget;
-        _currentWarmthRendered = newTarget;
-        // Stop any in-flight ramp — we're now snapping per-frame.
-        _rampTimer?.Stop();
-        ApplySoftwareNow();
+
+        // Restart the ramp from CURRENT rendered (not the target), so a
+        // stream of preview calls during a fast drag interpolates smoothly
+        // through whatever the screen is currently showing — no per-call
+        // snap, no per-call jump back to a stale start point.
+        _rampStartWarmth = _currentWarmthRendered;
+        _rampStartLevel  = _currentSignedLevel;
+        _rampStart       = DateTime.UtcNow;
+        _isPreviewRamping = true;
+
+        if (_rampTimer == null)
+        {
+            _rampTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(16),
+                DispatcherPriority.Render, OnRampTick, _dispatcher);
+        }
+        _rampTimer.Start();
+
         LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
     }
+
+    /// <summary>True while a <see cref="PreviewWarmth"/>-driven ramp is
+    /// running. Causes <see cref="OnRampTick"/> to use
+    /// <see cref="PreviewRampMs"/> as its duration instead of the user's
+    /// <see cref="AppSettings.RampDurationMs"/> — preview tracking has to
+    /// stay tight even when the user has set a long schedule-ramp duration.</summary>
+    private bool _isPreviewRamping;
 
     /// <summary>Stop preview-driving warmth and resume from the saved manual
     /// warmth in settings. The scheduler will overwrite that on its next tick
     /// if it's enabled.</summary>
     public void EndWarmthPreview()
     {
+        _isPreviewRamping = false;  // back to user's normal ramp duration
         _targetWarmth = Math.Clamp(_settings.WarmthKelvin, 1500, 6500);
         StartRamp();
         LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
@@ -342,7 +378,13 @@ public sealed class UnderlitEngine : IDisposable
     private void OnRampTick(object? sender, EventArgs e)
     {
         var elapsed = (DateTime.UtcNow - _rampStart).TotalMilliseconds;
-        var t = Math.Clamp(elapsed / Math.Max(1, _settings.RampDurationMs), 0, 1);
+        // Preview ramps use a fixed short duration so drag-tracking stays
+        // responsive even when the user has set a long schedule-ramp
+        // duration in settings.
+        int durationMs = _isPreviewRamping
+            ? PreviewRampMs
+            : Math.Max(1, _settings.RampDurationMs);
+        var t = Math.Clamp(elapsed / durationMs, 0, 1);
         t = 1 - (1 - t) * (1 - t); // ease-out quad
 
         _currentSignedLevel = _rampStartLevel + (_targetSignedLevel - _rampStartLevel) * t;
@@ -350,7 +392,11 @@ public sealed class UnderlitEngine : IDisposable
 
         ApplySoftwareNow();
 
-        if (t >= 1.0) _rampTimer?.Stop();
+        if (t >= 1.0)
+        {
+            _rampTimer?.Stop();
+            _isPreviewRamping = false;
+        }
     }
 
     /// <summary>Applies everything (hardware + software) using current target values.</summary>

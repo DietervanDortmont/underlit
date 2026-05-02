@@ -160,6 +160,18 @@ public partial class SettingsWindow : Window
             if (!userIsDriving) return;
 
             var p = _snapshot.ActiveProfile();
+            // v0.6.36: the built-in "Recommended" profile is locked on
+            // kelvin. Slider drags update only the legacy display field,
+            // not the per-anchor kelvins, so the curated curve shape is
+            // preserved. Cloning to a custom profile (+) re-enables the
+            // full slider behaviour.
+            if (p.IsBuiltIn)
+            {
+                p.NightWarmthKelvin = k;
+                _snapshot.EnsureScheduleCurveDerived();
+                RedrawScheduleGraph();
+                return;
+            }
             p.NightWarmthKelvin   = k;
             p.BedtimeKelvin       = k;
             p.WakeupStartKelvin   = k;
@@ -679,17 +691,24 @@ public partial class SettingsWindow : Window
         double x = curveLeft + t.AsHourFractional / 24.0 * curveW;
         double y = curveTop + curveH - ((kelvin - 1500) / 5000.0) * curveH;
 
+        // v0.6.36: built-in profiles lock kelvin → cursor reads "SizeWE"
+        // (horizontal-only) so the user knows the dot is re-time-able but
+        // its colour is fixed. Custom profiles get "SizeAll" (both axes).
+        bool locked = _snapshot.ActiveProfile().IsBuiltIn;
+        var cursor = locked
+            ? System.Windows.Input.Cursors.SizeWE
+            : System.Windows.Input.Cursors.SizeAll;
+
         // Larger transparent hit-target — improves drag affordance without
-        // making the visible marker bulky. Cursor is "SizeAll" because each
-        // anchor is freely draggable in both axes (X = retime, Y = retarget kelvin).
+        // making the visible marker bulky.
         var hit = new System.Windows.Shapes.Ellipse
         {
             Width = GraphPointHitRadius * 2,
             Height = GraphPointHitRadius * 2,
             Fill = System.Windows.Media.Brushes.Transparent,
-            Cursor = System.Windows.Input.Cursors.SizeAll,
+            Cursor = cursor,
             Tag = id,
-            ToolTip = SchedulePointTooltip(id, t, kelvin),
+            ToolTip = SchedulePointTooltip(id, t, kelvin, locked),
         };
         Canvas.SetLeft(hit, x - GraphPointHitRadius);
         Canvas.SetTop(hit, y - GraphPointHitRadius);
@@ -710,14 +729,20 @@ public partial class SettingsWindow : Window
         ScheduleGraph.Children.Add(dot);
     }
 
-    private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t, int k) => id switch
+    private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t, int k, bool locked = false)
     {
-        SchedulePointId.BedtimeStart => $"Evening ramp starts at {Fmt(t)} ({k} K)",
-        SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {Fmt(t)}",
-        SchedulePointId.WakeupStart  => $"Morning ramp starts at {Fmt(t)} ({k} K)",
-        SchedulePointId.WakeupEnd    => $"Wake — {k} K by {Fmt(t)}",
-        _ => string.Empty,
-    };
+        string body = id switch
+        {
+            SchedulePointId.BedtimeStart => $"Evening ramp starts at {Fmt(t)} ({k} K)",
+            SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {Fmt(t)}",
+            SchedulePointId.WakeupStart  => $"Morning ramp starts at {Fmt(t)} ({k} K)",
+            SchedulePointId.WakeupEnd    => $"Wake — {k} K by {Fmt(t)}",
+            _ => string.Empty,
+        };
+        if (locked && !string.IsNullOrEmpty(body))
+            body += "\n(Recommended profile is locked on kelvin — clone via + to edit colour temperatures.)";
+        return body;
+    }
 
     // ---- Schedule-graph mouse-drag handling ----
 
@@ -800,26 +825,33 @@ public partial class SettingsWindow : Window
         kelvin = Math.Clamp(kelvin, 1500, 6500);
 
         var p = _snapshot.ActiveProfile();
+        // v0.6.36: the built-in "Recommended" profile is locked on kelvin —
+        // the curated 6500/2700 K shape is the whole point of the preset.
+        // Vertical drag still moves the visual dot during the gesture (so
+        // the user gets feedback), but the kelvin write is skipped, so the
+        // dot snaps back to its locked y position on release. Times are
+        // freely editable via either text fields or horizontal drag.
+        bool locked = p.IsBuiltIn;
         switch (id)
         {
             case SchedulePointId.BedtimeStart:
                 p.BedtimeStart       = t;
-                p.BedtimeStartKelvin = kelvin;
+                if (!locked) p.BedtimeStartKelvin = kelvin;
                 TxtBedtimeStart.Text = Fmt(t);
                 break;
             case SchedulePointId.BedtimeEnd:
                 p.Bedtime       = t;
-                p.BedtimeKelvin = kelvin;
+                if (!locked) p.BedtimeKelvin = kelvin;
                 TxtBedtime.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupStart:
                 p.WakeupStart       = t;
-                p.WakeupStartKelvin = kelvin;
+                if (!locked) p.WakeupStartKelvin = kelvin;
                 TxtWakeupStart.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupEnd:
                 p.WakeTime       = t;
-                p.WakeTimeKelvin = kelvin;
+                if (!locked) p.WakeTimeKelvin = kelvin;
                 TxtWakeTime.Text = Fmt(t);
                 break;
         }
@@ -841,11 +873,30 @@ public partial class SettingsWindow : Window
         RedrawScheduleGraph();
         UpdateAllValueChips();
 
-        // Live preview: ramp the screen to the kelvin the user just dragged
-        // the anchor to. They feel the warmth they're configuring instead of
-        // just seeing it on a graph.
-        WarmthPreviewRequested?.Invoke(kelvin);
+        // Live preview: ramp the screen to the kelvin actually associated
+        // with the anchor after the (possibly skipped) write — i.e. the
+        // dragged value on a custom profile, the locked default on a
+        // built-in. Without this, dragging vertically on Recommended would
+        // make the screen track the mouse even though the dot snaps back.
+        int previewKelvin = locked
+            ? AnchorKelvin(p, id)
+            : kelvin;
+        WarmthPreviewRequested?.Invoke(previewKelvin);
     }
+
+    /// <summary>Read the current kelvin stored on a profile for the given
+    /// schedule anchor. Used by <see cref="UpdatePointFromMouse"/> to
+    /// preview the LOCKED value on built-in profiles instead of the
+    /// transient mouse Y, which would otherwise let the user "feel" a
+    /// warmth they can't actually commit.</summary>
+    private static int AnchorKelvin(WarmthProfile p, SchedulePointId id) => id switch
+    {
+        SchedulePointId.BedtimeStart => p.BedtimeStartKelvin,
+        SchedulePointId.BedtimeEnd   => p.BedtimeKelvin,
+        SchedulePointId.WakeupStart  => p.WakeupStartKelvin,
+        SchedulePointId.WakeupEnd    => p.WakeTimeKelvin,
+        _ => 6500,
+    };
 
     // ============================================================
     // Lights / Philips Hue (Settings → Lights page)

@@ -67,6 +67,59 @@ internal static class NativeMethods
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    public const uint MONITOR_DEFAULTTONULL    = 0;
+    public const uint MONITOR_DEFAULTTOPRIMARY = 1;
+    public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+    // ---------- Shell appbar (taskbar) APIs ----------
+    //
+    // ABM_GETTASKBARPOS is the Windows-authoritative source for taskbar
+    // position + edge; documented to return a screen-coordinate rect that's
+    // expressed in physical pixels for DPI-aware processes (which we are —
+    // PerMonitorV2 in app.manifest). Used by PositionAboveTaskbar to anchor
+    // the OSD reliably regardless of taskbar edge or per-monitor DPI.
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct APPBARDATA
+    {
+        public uint   cbSize;
+        public IntPtr hWnd;
+        public uint   uCallbackMessage;
+        public uint   uEdge;
+        public RECT   rc;
+        public IntPtr lParam;
+    }
+
+    [DllImport("shell32.dll", CallingConvention = CallingConvention.StdCall)]
+    public static extern IntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
+
+    public const uint ABM_GETSTATE       = 0x00000004;
+    public const uint ABM_GETTASKBARPOS  = 0x00000005;
+
+    public const uint ABS_AUTOHIDE       = 0x0000001;
+
+    public const uint ABE_LEFT   = 0;
+    public const uint ABE_TOP    = 1;
+    public const uint ABE_RIGHT  = 2;
+    public const uint ABE_BOTTOM = 3;
+
     // ---------- Monitor enumeration ----------
 
     public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);

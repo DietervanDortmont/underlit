@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -428,13 +429,142 @@ public partial class OsdWindow : Window
         }
     }
 
+    /// <summary>
+    /// Anchor the OSD window so its visible-pill bottom sits
+    /// <see cref="_taskbarGapDip"/> above the system taskbar's top edge,
+    /// horizontally centred on the taskbar's monitor.
+    ///
+    /// v0.6.37: replaces the old WinForms Screen.WorkingArea read with the
+    /// Windows-authoritative <c>ABM_GETTASKBARPOS</c> / <c>ABM_GETSTATE</c>
+    /// shell-appbar query. WorkingArea was returning either DIPs or
+    /// physical pixels depending on DPI awareness mode and Win 11 build,
+    /// which made the gap visibly wrong on some setups even though the
+    /// math looked right. The appbar API gives us the taskbar's real
+    /// physical-pixel rect and its uEdge (top/bottom/left/right), and
+    /// MonitorFromPoint plus GetMonitorInfo gives the monitor's physical
+    /// rect for centring. We convert physical → DIP using the OSD's own
+    /// per-monitor DPI scale at the end, so positioning is correct on any
+    /// taskbar edge and any DPI configuration.
+    ///
+    /// Falls back to the old WorkingArea path if either call fails.
+    /// </summary>
     private void PositionAboveTaskbar()
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double scale = dpi.DpiScaleX;
+        if (scale <= 0) scale = 1.0;
+
+        if (!TryGetTaskbarAnchor(out NativeMethods.RECT taskbarRectPx,
+                                   out NativeMethods.RECT monitorRectPx,
+                                   out uint taskbarEdge,
+                                   out bool autoHide))
+        {
+            FallbackPositionFromWorkingArea(scale);
+            return;
+        }
+
+        // Pill-bottom anchor in PHYSICAL pixels — depends on which edge
+        // the taskbar is on, plus the auto-hide state.
+        int pillBottomPx;
+        if (autoHide)
+        {
+            // Auto-hide taskbar: it's only visible while the cursor is at
+            // the screen edge. Anchor the pill flush against the monitor
+            // edge instead — the pill stays out of the slide-out tray's way.
+            pillBottomPx = monitorRectPx.bottom - 1;
+        }
+        else
+        {
+            pillBottomPx = taskbarEdge switch
+            {
+                NativeMethods.ABE_BOTTOM => taskbarRectPx.top,
+                // Top-edge or vertical taskbars: no taskbar at the screen's
+                // bottom, so anchor against the monitor's bottom edge.
+                NativeMethods.ABE_TOP    => monitorRectPx.bottom - 1,
+                NativeMethods.ABE_LEFT   => monitorRectPx.bottom - 1,
+                NativeMethods.ABE_RIGHT  => monitorRectPx.bottom - 1,
+                _                        => taskbarRectPx.top,
+            };
+        }
+
+        // User-configurable gap, plus the constant offset from the window's
+        // top to the visible pill's bottom (PillBottomYDip).
+        int gapPx       = (int)Math.Round(_taskbarGapDip * scale);
+        int pillTargetPx = pillBottomPx - gapPx;
+        int windowTopPx = pillTargetPx - (int)Math.Round(PillBottomYDip * scale);
+
+        // Convert physical → DIP for WPF Top/Left.
+        double windowTopDip = windowTopPx / scale;
+        double monLeftDip   = monitorRectPx.left  / scale;
+        double monRightDip  = monitorRectPx.right / scale;
+
+        Left = monLeftDip + ((monRightDip - monLeftDip) - Width) / 2;
+        _restTop = windowTopDip;
+        Top = _restTop;
+    }
+
+    /// <summary>
+    /// Pull the system taskbar's physical-pixel rect, its monitor's rect,
+    /// the taskbar's screen edge, and whether it's set to auto-hide. All
+    /// four come from authoritative Windows APIs (Shell appbar messages +
+    /// MonitorFromPoint + GetMonitorInfo). Returns false if the calls fail
+    /// — caller should fall back to WorkingArea-based positioning.
+    /// </summary>
+    private static bool TryGetTaskbarAnchor(
+        out NativeMethods.RECT taskbarRectPx,
+        out NativeMethods.RECT monitorRectPx,
+        out uint taskbarEdge,
+        out bool autoHide)
+    {
+        taskbarRectPx = default;
+        monitorRectPx = default;
+        taskbarEdge   = NativeMethods.ABE_BOTTOM;
+        autoHide      = false;
+
+        var data = new NativeMethods.APPBARDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<NativeMethods.APPBARDATA>(),
+        };
+        if (NativeMethods.SHAppBarMessage(NativeMethods.ABM_GETTASKBARPOS, ref data) == IntPtr.Zero)
+            return false;
+        taskbarRectPx = data.rc;
+        taskbarEdge   = data.uEdge;
+
+        // Auto-hide is a per-process app-bar state, not specific to one
+        // taskbar instance — ABM_GETSTATE returns it as a bitfield.
+        var stateData = new NativeMethods.APPBARDATA
+        {
+            cbSize = (uint)Marshal.SizeOf<NativeMethods.APPBARDATA>(),
+        };
+        long state = NativeMethods.SHAppBarMessage(NativeMethods.ABM_GETSTATE, ref stateData).ToInt64();
+        autoHide = (state & NativeMethods.ABS_AUTOHIDE) != 0;
+
+        // Resolve the monitor that owns the taskbar — pick a point inside
+        // the taskbar rect so we get the right monitor on multi-monitor
+        // setups, then GetMonitorInfo for its physical rect.
+        var pt = new NativeMethods.POINT
+        {
+            X = (taskbarRectPx.left + taskbarRectPx.right) / 2,
+            Y = (taskbarRectPx.top  + taskbarRectPx.bottom) / 2,
+        };
+        IntPtr hMon = NativeMethods.MonitorFromPoint(pt, NativeMethods.MONITOR_DEFAULTTOPRIMARY);
+        if (hMon == IntPtr.Zero) return false;
+
+        var info = new NativeMethods.MONITORINFOEX
+        {
+            cbSize = Marshal.SizeOf<NativeMethods.MONITORINFOEX>(),
+        };
+        if (!NativeMethods.GetMonitorInfo(hMon, ref info)) return false;
+        monitorRectPx = info.rcMonitor;
+        return true;
+    }
+
+    /// <summary>Last-resort positioning if the appbar API or monitor query
+    /// fails. Mirrors the v0.6.36 logic exactly.</summary>
+    private void FallbackPositionFromWorkingArea(double scale)
     {
         var primary = System.Windows.Forms.Screen.PrimaryScreen;
         if (primary == null) return;
-
-        var src = PresentationSource.FromVisual(this);
-        double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
 
         double waLeftDip   = primary.WorkingArea.Left   / scale;
         double waTopDip    = primary.WorkingArea.Top    / scale;
@@ -442,12 +572,6 @@ public partial class OsdWindow : Window
         double waHeightDip = primary.WorkingArea.Height / scale;
 
         Left = waLeftDip + (waWidthDip - Width) / 2;
-        // Window is taller than the visible PillContainer — the bottom half
-        // overlaps the taskbar so the entry animation has somewhere to slide
-        // FROM. Position the window so the PillContainer's pill-bottom
-        // (window y = PillBottomYDip) sits TaskbarGapDip above the taskbar
-        // top. Anything below window y = PillBottomYDip + TaskbarGapDip is
-        // behind the taskbar and not visible to the user.
         _restTop = waTopDip + waHeightDip - PillBottomYDip - _taskbarGapDip;
         Top = _restTop;
     }

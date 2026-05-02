@@ -178,15 +178,27 @@ public sealed class AppSettings
     public List<WarmthProfile> WarmthProfiles { get; set; } = new();
     public string ActiveProfileName { get; set; } = "Recommended";
 
-    // Legacy 4-field schedule curve. Derived from Bedtime/WakeTime via
+    // Legacy 4-field schedule curve. Mirrored from the active profile by
     // EnsureScheduleCurveDerived(); persisted for back-compat with existing
-    // settings.json files and to keep Scheduler.ComputeWarmth's logic intact.
+    // settings.json files and so Scheduler.ComputeWarmth can read the curve
+    // directly off AppSettings without a profile lookup per call.
     public TimeOfDay BedtimeStart { get; set; } = new(21, 0);   // bed - 2.5 h
     public TimeOfDay BedtimeEnd   { get; set; } = new(23, 30);  // == Bedtime
     public TimeOfDay WakeupStart  { get; set; } = new(6, 45);   // wake - 0.75 h
     public TimeOfDay WakeupEnd    { get; set; } = new(7, 30);   // == WakeTime
-    /// <summary>Night-floor warmth in K. Brightness is intentionally NOT on a schedule —
-    /// sudden brightness changes during the day felt disorienting.</summary>
+
+    // Per-anchor kelvin values, also mirrored from the active profile. Each
+    // point on the schedule curve has its own kelvin so the user can drag any
+    // anchor up/down on the graph to retarget warmth at that boundary.
+    public int BedtimeStartKelvin { get; set; } = 6500;
+    public int BedtimeEndKelvin   { get; set; } = 2700;
+    public int WakeupStartKelvin  { get; set; } = 2700;
+    public int WakeupEndKelvin    { get; set; } = 6500;
+
+    /// <summary>Legacy "warmth at night" value — the v0.6.24 single-kelvin field.
+    /// Still exposed because the Settings UI's "Warmth at night" slider keeps
+    /// both deep-warmth anchors (BedtimeEndKelvin + WakeupStartKelvin) in
+    /// lockstep through this setter.</summary>
     public int NightWarmthKelvin { get; set; } = 2700;
 
     // ---- Schedule helpers ----
@@ -208,7 +220,11 @@ public sealed class AppSettings
         WakeupEnd    = p.WakeTime;
         Bedtime      = p.Bedtime;
         WakeTime     = p.WakeTime;
-        NightWarmthKelvin = p.NightWarmthKelvin;
+        BedtimeStartKelvin = p.BedtimeStartKelvin;
+        BedtimeEndKelvin   = p.BedtimeKelvin;
+        WakeupStartKelvin  = p.WakeupStartKelvin;
+        WakeupEndKelvin    = p.WakeTimeKelvin;
+        NightWarmthKelvin  = p.NightWarmthKelvin;
     }
 
     private static TimeOfDay ShiftHours(TimeOfDay t, double hours)
@@ -271,6 +287,24 @@ public sealed class AppSettings
         {
             if (p.BedtimeStart == default) p.BedtimeStart = ShiftHours(p.Bedtime, -2.5);
             if (p.WakeupStart  == default) p.WakeupStart  = ShiftHours(p.WakeTime, -0.75);
+
+            // Per-point kelvin migration (v0.6.24 → v0.6.25).
+            // Older profiles only had NightWarmthKelvin; the four per-anchor
+            // kelvins didn't exist. If a profile loaded from JSON has zero or
+            // out-of-range values for the per-point kelvins (likely default-
+            // initialised because the JSON didn't contain the field), seed them
+            // from NightWarmthKelvin (for the deep points) or 6500 (for the
+            // neutral points).
+            if (p.BedtimeKelvin     <= 0) p.BedtimeKelvin     = p.NightWarmthKelvin;
+            if (p.WakeupStartKelvin <= 0) p.WakeupStartKelvin = p.NightWarmthKelvin;
+            if (p.BedtimeStartKelvin <= 0) p.BedtimeStartKelvin = 6500;
+            if (p.WakeTimeKelvin     <= 0) p.WakeTimeKelvin     = 6500;
+
+            // Clamp to the engine's accepted kelvin range.
+            p.BedtimeStartKelvin  = Math.Clamp(p.BedtimeStartKelvin,  1500, 6500);
+            p.BedtimeKelvin       = Math.Clamp(p.BedtimeKelvin,       1500, 6500);
+            p.WakeupStartKelvin   = Math.Clamp(p.WakeupStartKelvin,   1500, 6500);
+            p.WakeTimeKelvin      = Math.Clamp(p.WakeTimeKelvin,      1500, 6500);
         }
 
         if (string.IsNullOrEmpty(ActiveProfileName)
@@ -389,20 +423,39 @@ public sealed class WarmthProfile
 {
     public string Name { get; set; } = "Profile";
 
-    /// <summary>Start of the evening warming ramp (when warmth begins moving from
-    /// neutral toward NightWarmthKelvin). Defaults to Bedtime − 2.5h.</summary>
+    // Each anchor point on the warmth curve has its OWN kelvin (v0.6.25+),
+    // so the user can drag any point on the schedule graph vertically to
+    // adjust the warmth at that boundary. The schedule curve interpolates
+    // smoothly between the four points using smoothstep — see
+    // Scheduler.ComputeWarmth.
+
+    /// <summary>Start of the evening warming ramp. Defaults to Bedtime − 2.5h.</summary>
     public TimeOfDay BedtimeStart { get; set; } = new(21, 0);
+    /// <summary>Kelvin at BedtimeStart — the value the curve holds at neutral
+    /// before the evening ramp begins. Default 6500 (full neutral).</summary>
+    public int BedtimeStartKelvin { get; set; } = 6500;
 
-    /// <summary>End of the evening ramp — fully at NightWarmthKelvin.</summary>
+    /// <summary>End of the evening ramp.</summary>
     public TimeOfDay Bedtime  { get; set; } = new(23, 30);
+    /// <summary>Kelvin at Bedtime — the deep evening warmth. Default 2700.</summary>
+    public int BedtimeKelvin { get; set; } = 2700;
 
-    /// <summary>Start of the morning ramp (warmth begins moving from
-    /// NightWarmthKelvin back toward neutral). Defaults to WakeTime − 0.75h.</summary>
+    /// <summary>Start of the morning ramp. Defaults to WakeTime − 0.75h.</summary>
     public TimeOfDay WakeupStart { get; set; } = new(6, 45);
+    /// <summary>Kelvin at WakeupStart — the curve has been at this value
+    /// through the night. Default 2700.</summary>
+    public int WakeupStartKelvin { get; set; } = 2700;
 
-    /// <summary>End of the morning ramp — fully at neutral 6500K.</summary>
+    /// <summary>End of the morning ramp.</summary>
     public TimeOfDay WakeTime { get; set; } = new(7, 30);
+    /// <summary>Kelvin at WakeTime — back to neutral. Default 6500.</summary>
+    public int WakeTimeKelvin { get; set; } = 6500;
 
+    /// <summary>Legacy single kelvin used in v0.6.24 and earlier — meant the
+    /// flat "deep night warmth" value. Migrated into BedtimeKelvin/WakeupStartKelvin
+    /// on load (see EnsureProfilesInitialized). Still exposed because the
+    /// Settings UI's "Warmth at night" slider drives both per-point kelvins
+    /// in lockstep through this field.</summary>
     public int NightWarmthKelvin { get; set; } = 2700;
 
     /// <summary>

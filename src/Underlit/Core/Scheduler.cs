@@ -55,32 +55,42 @@ public sealed class Scheduler : IDisposable
     {
         double t = now.Hour + now.Minute / 60.0 + now.Second / 3600.0;
 
-        double bs = s.BedtimeStart.AsHourFractional;
-        double be = s.BedtimeEnd.AsHourFractional;
-        double ws = s.WakeupStart.AsHourFractional;
-        double we = s.WakeupEnd.AsHourFractional;
-
-        int nightW = Math.Clamp(s.NightWarmthKelvin, 1500, 6500);
-        const int dayW = 6500;
-
-        bool inDay      = IsBetween(t, we, bs);
-        bool inRampDown = IsBetween(t, bs, be);
-        bool inNight    = IsBetween(t, be, ws);
-        bool inRampUp   = IsBetween(t, ws, we);
-
-        if (inDay)   return dayW;
-        if (inNight) return nightW;
-        if (inRampDown)
+        // Each of the four schedule anchors carries its own kelvin (v0.6.25+),
+        // so the user can drag any point on the graph vertically to set
+        // warmth at that boundary. We sort by time-of-day, find the segment
+        // containing `t`, and interpolate with smoothstep — that gives a C1-
+        // continuous curve (zero slope at each anchor) so transitions feel
+        // gradual rather than piecewise-linear.
+        Span<(double time, int kelvin)> pts = stackalloc (double, int)[]
         {
-            double f = (t - bs) / Span(bs, be);
-            return LerpInt(dayW, nightW, f);
-        }
-        if (inRampUp)
+            (s.WakeupStart.AsHourFractional, Math.Clamp(s.WakeupStartKelvin,  1500, 6500)),
+            (s.WakeupEnd.AsHourFractional,   Math.Clamp(s.WakeupEndKelvin,    1500, 6500)),
+            (s.BedtimeStart.AsHourFractional, Math.Clamp(s.BedtimeStartKelvin, 1500, 6500)),
+            (s.BedtimeEnd.AsHourFractional,   Math.Clamp(s.BedtimeEndKelvin,   1500, 6500)),
+        };
+        // Sort in-place by time. Four-element bubble sort — readable, allocation-free.
+        for (int i = 0; i < pts.Length - 1; i++)
+        for (int j = 0; j < pts.Length - 1 - i; j++)
+            if (pts[j].time > pts[j + 1].time)
+                (pts[j], pts[j + 1]) = (pts[j + 1], pts[j]);
+
+        // Find the segment that contains t. We iterate consecutive pairs (with
+        // wrap from last → first); IsBetween already handles midnight wrap.
+        for (int i = 0; i < pts.Length; i++)
         {
-            double f = (t - ws) / Span(ws, we);
-            return LerpInt(nightW, dayW, f);
+            var a = pts[i];
+            var b = pts[(i + 1) % pts.Length];
+            if (!IsBetween(t, a.time, b.time)) continue;
+
+            double span = Span(a.time, b.time);
+            if (span < 1e-6) return a.kelvin;
+            double dt = t >= a.time ? t - a.time : (t + 24 - a.time);
+            double f  = Math.Clamp(dt / span, 0, 1);
+            f = f * f * (3 - 2 * f);  // smoothstep — zero-slope at both endpoints
+            return LerpInt(a.kelvin, b.kelvin, f);
         }
-        return dayW;
+
+        return pts[0].kelvin;
     }
 
     private static bool IsBetween(double t, double a, double b)

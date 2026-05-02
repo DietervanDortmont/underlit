@@ -109,7 +109,20 @@ public partial class SettingsWindow : Window
         ScheduleGraph.SizeChanged += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
-        SldNightWarmth.ValueChanged += (_, _) => RedrawScheduleGraph();
+        // Night-warmth slider drives BOTH deep-warmth anchors (BedtimeKelvin
+        // + WakeupStartKelvin) in lockstep. The user can still drag those
+        // anchors independently on the graph; the slider is the "set both"
+        // shortcut. We also keep NightWarmthKelvin in sync for back-compat.
+        SldNightWarmth.ValueChanged += (_, _) =>
+        {
+            int k = (int)SldNightWarmth.Value;
+            var p = _snapshot.ActiveProfile();
+            p.NightWarmthKelvin   = k;
+            p.BedtimeKelvin       = k;
+            p.WakeupStartKelvin   = k;
+            _snapshot.EnsureScheduleCurveDerived();
+            RedrawScheduleGraph();
+        };
         foreach (var tb in new[] { TxtBedtime, TxtWakeTime })
             tb.LostFocus += (_, _) => RedrawScheduleGraph();
 
@@ -550,11 +563,12 @@ public partial class SettingsWindow : Window
         };
         ScheduleGraph.Children.Add(line);
 
-        // Draggable anchor points.
-        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.NightWarmthKelvin, w, curveH);
-        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   6500,                w, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, 6500,              w, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.NightWarmthKelvin, w, curveH);
+        // Draggable anchor points — each pulls its kelvin from the active
+        // profile so vertical drag really retargets warmth at that anchor.
+        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.WakeupStartKelvin,  w, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   s.WakeupEndKelvin,    w, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, w, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   w, curveH);
 
         // "Now" indicator — a vertical line at the current time so the user can
         // read off "what kelvin am I targeting right now" at a glance.
@@ -580,15 +594,16 @@ public partial class SettingsWindow : Window
         double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
 
         // Larger transparent hit-target — improves drag affordance without
-        // making the visible marker bulky.
+        // making the visible marker bulky. Cursor is "SizeAll" because each
+        // anchor is freely draggable in both axes (X = retime, Y = retarget kelvin).
         var hit = new System.Windows.Shapes.Ellipse
         {
             Width = GraphPointHitRadius * 2,
             Height = GraphPointHitRadius * 2,
             Fill = System.Windows.Media.Brushes.Transparent,
-            Cursor = System.Windows.Input.Cursors.SizeWE,
+            Cursor = System.Windows.Input.Cursors.SizeAll,
             Tag = id,
-            ToolTip = SchedulePointTooltip(id, t),
+            ToolTip = SchedulePointTooltip(id, t, kelvin),
         };
         Canvas.SetLeft(hit, x - GraphPointHitRadius);
         Canvas.SetTop(hit, y - GraphPointHitRadius);
@@ -609,12 +624,12 @@ public partial class SettingsWindow : Window
         ScheduleGraph.Children.Add(dot);
     }
 
-    private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t) => id switch
+    private static string SchedulePointTooltip(SchedulePointId id, TimeOfDay t, int k) => id switch
     {
-        SchedulePointId.BedtimeStart => $"Evening ramp starts at {t.Hour:D2}:{t.Minute:D2}",
-        SchedulePointId.BedtimeEnd   => $"Bedtime — deep warmth from {t.Hour:D2}:{t.Minute:D2}",
-        SchedulePointId.WakeupStart  => $"Morning ramp starts at {t.Hour:D2}:{t.Minute:D2}",
-        SchedulePointId.WakeupEnd    => $"Wake — neutral by {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.BedtimeStart => $"Evening ramp starts at {t.Hour:D2}:{t.Minute:D2} ({k} K)",
+        SchedulePointId.BedtimeEnd   => $"Bedtime — {k} K from {t.Hour:D2}:{t.Minute:D2}",
+        SchedulePointId.WakeupStart  => $"Morning ramp starts at {t.Hour:D2}:{t.Minute:D2} ({k} K)",
+        SchedulePointId.WakeupEnd    => $"Wake — {k} K by {t.Hour:D2}:{t.Minute:D2}",
         _ => string.Empty,
     };
 
@@ -630,7 +645,7 @@ public partial class SettingsWindow : Window
         {
             _draggingSchedulePoint = id;
             ScheduleGraph.CaptureMouse();
-            UpdatePointFromMouse(id, pos.X);
+            UpdatePointFromMouse(id, pos.X, pos.Y);
             e.Handled = true;
         }
     }
@@ -639,7 +654,7 @@ public partial class SettingsWindow : Window
     {
         if (_draggingSchedulePoint is not SchedulePointId id) return;
         var pos = e.GetPosition(ScheduleGraph);
-        UpdatePointFromMouse(id, pos.X);
+        UpdatePointFromMouse(id, pos.X, pos.Y);
     }
 
     private void OnGraphMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -653,43 +668,67 @@ public partial class SettingsWindow : Window
         WarmthPreviewEnded?.Invoke();
     }
 
-    /// <summary>Map a mouse X position to a time-of-day, write it into the active
-    /// profile's corresponding slot, sync the input fields and the legacy ramp
-    /// window, and redraw the graph. Also pings the live-preview event so the
-    /// engine warmth follows the dragged point in real time.</summary>
-    private void UpdatePointFromMouse(SchedulePointId id, double mouseX)
+    /// <summary>Map a mouse position to a (time-of-day, kelvin) pair and write
+    /// both into the active profile's corresponding slot. Updates the bedtime
+    /// / wake-time input fields if relevant, syncs the legacy ramp window,
+    /// redraws the graph, and pings the live-preview event so the engine
+    /// warmth follows the dragged point in real time.
+    ///
+    /// X axis maps to time-of-day (0..24h). Y axis maps to kelvin (1500..6500,
+    /// inverted so the top of the graph is the cool end of the spectrum). The
+    /// mouseY is measured against the curve area (excludes the bottom label
+    /// strip) so the kelvin scale matches the visible curve exactly.</summary>
+    private void UpdatePointFromMouse(SchedulePointId id, double mouseX, double mouseY)
     {
         double w = ScheduleGraph.ActualWidth;
-        if (w <= 0) return;
+        double h = ScheduleGraph.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+        double curveH = Math.Max(1, h - GraphLabelHeight);
+
         double clampedX = Math.Clamp(mouseX, 0, w);
+        double clampedY = Math.Clamp(mouseY, 0, curveH);
         double hour = clampedX / w * 24.0;
         TimeOfDay t = TimeOfDayFromHourFractional(hour);
+        // Invert: top of curve area = max kelvin (6500), bottom = 1500.
+        int kelvin = (int)Math.Round(1500 + (1.0 - clampedY / curveH) * 5000);
+        kelvin = Math.Clamp(kelvin, 1500, 6500);
 
         var p = _snapshot.ActiveProfile();
         switch (id)
         {
-            case SchedulePointId.BedtimeStart: p.BedtimeStart = t; break;
+            case SchedulePointId.BedtimeStart:
+                p.BedtimeStart = t;
+                p.BedtimeStartKelvin = kelvin;
+                break;
             case SchedulePointId.BedtimeEnd:
                 p.Bedtime = t;
+                p.BedtimeKelvin = kelvin;
                 TxtBedtime.Text = Fmt(t);
                 break;
-            case SchedulePointId.WakeupStart:  p.WakeupStart = t; break;
+            case SchedulePointId.WakeupStart:
+                p.WakeupStart = t;
+                p.WakeupStartKelvin = kelvin;
+                break;
             case SchedulePointId.WakeupEnd:
                 p.WakeTime = t;
+                p.WakeTimeKelvin = kelvin;
                 TxtWakeTime.Text = Fmt(t);
                 break;
         }
+
+        // Keep the legacy single-kelvin field in sync with the deepest of the
+        // two "deep warmth" anchors, so the NightWarmth slider in Settings
+        // still reads back something sensible after a drag.
+        p.NightWarmthKelvin = Math.Min(p.BedtimeKelvin, p.WakeupStartKelvin);
+
         _snapshot.EnsureScheduleCurveDerived();
         RedrawScheduleGraph();
+        UpdateAllValueChips();
 
-        // Live-preview: tell the engine to ramp toward the kelvin at the
-        // dragged point so the user feels the value instead of just seeing it.
-        int previewK = id switch
-        {
-            SchedulePointId.BedtimeEnd or SchedulePointId.WakeupStart => p.NightWarmthKelvin,
-            _ => 6500,
-        };
-        WarmthPreviewRequested?.Invoke(previewK);
+        // Live preview: ramp the screen to the kelvin the user just dragged
+        // the anchor to. They feel the warmth they're configuring instead of
+        // just seeing it on a graph.
+        WarmthPreviewRequested?.Invoke(kelvin);
     }
 
     private static TimeOfDay TimeOfDayFromHourFractional(double hours)
@@ -777,7 +816,9 @@ public partial class SettingsWindow : Window
         if (active == null) return;
         TxtBedtime.Text   = Fmt(active.Bedtime);
         TxtWakeTime.Text  = Fmt(active.WakeTime);
-        SldNightWarmth.Value = active.NightWarmthKelvin;
+        // Slider position = the deeper of the two "deep warmth" anchors —
+        // matches what the user actually sees on the graph.
+        SldNightWarmth.Value = Math.Min(active.BedtimeKelvin, active.WakeupStartKelvin);
     }
 
     /// <summary>Push the current UI field values back into the active profile

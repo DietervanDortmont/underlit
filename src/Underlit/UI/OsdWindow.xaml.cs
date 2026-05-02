@@ -157,6 +157,22 @@ public partial class OsdWindow : Window
     /// mouse. The argument is a signed level in the engine's -100..+100 space.</summary>
     public event Action<double>? BrightnessSetRequested;
     private bool _dragging;
+
+    // ---- Brightness fill brushes (v0.6.25) ----
+    // Persistent SolidColorBrush instances so we can animate the Color property
+    // smoothly when the indicator crosses the OS-min threshold (50). All four
+    // brushes are kept around regardless of which bar style is active so a
+    // mid-show toggle between Bar and SolidFill modes keeps animations alive.
+    private SolidColorBrush? _brushFillLeft;
+    private SolidColorBrush? _brushFillRight;
+    private SolidColorBrush? _brushSolidNeg;
+    private SolidColorBrush? _brushSolidPos;
+    /// <summary>Tracks which side of the threshold the indicator was on last
+    /// frame; null on first paint. Used to detect a crossing and trigger the
+    /// 500 ms colour fade only on the cross — not on every mouse move.</summary>
+    private bool? _wasBelowOsMin;
+    private const double OsMinThreshold = 50.0;
+    private const int    ColourFadeMs   = 500;
     /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
     private double _lastBrightness;
     private int _lastWarmth = 6500;
@@ -465,21 +481,65 @@ public partial class OsdWindow : Window
         double rightWidth = Math.Max(0, display - 50.0) / 50.0 * half;
 
         // Colour both halves with the SAME colour at any given moment so the
-        // visible fill reads as one continuous shape. The colour flips based
-        // solely on whether we're below the OS-min threshold (50). Above 50 we
-        // use the accent everywhere; below 50 we use the dim shade.
+        // visible fill reads as one continuous shape. The colour flips when
+        // crossing the OS-min threshold; the flip animates over ColourFadeMs
+        // so the user sees a gradual fade rather than a hard pop.
         Color accent = CurrentAccent();
         Color dim    = ResolveBrightnessLowColor(accent);
-        Color shared = display < 50.0 ? dim : accent;
-        if (solid)
+        bool below   = display < OsMinThreshold;
+        Color target = below ? dim : accent;
+        Color targetAlpha = WithAlpha(target, 0xC0);
+
+        // Lazy-init the four persistent brushes and assign them as Background
+        // exactly once. Subsequent paints animate the Color property in place
+        // — much smoother than swapping in a fresh brush on every frame.
+        if (_brushFillLeft == null)
         {
-            SolidFillNeg.Background = new SolidColorBrush(WithAlpha(shared, 0xC0));
-            SolidFillPos.Background = new SolidColorBrush(WithAlpha(shared, 0xC0));
+            _brushFillLeft  = new SolidColorBrush(target);
+            _brushFillRight = new SolidColorBrush(target);
+            _brushSolidNeg  = new SolidColorBrush(targetAlpha);
+            _brushSolidPos  = new SolidColorBrush(targetAlpha);
+            FillLeft.Background     = _brushFillLeft;
+            FillRight.Background    = _brushFillRight;
+            SolidFillNeg.Background = _brushSolidNeg;
+            SolidFillPos.Background = _brushSolidPos;
+            _wasBelowOsMin = below;
+        }
+        else if (_wasBelowOsMin != below)
+        {
+            // Threshold cross — animate. ColorAnimation reads the live current
+            // Color (whatever the previous animation finished/interrupted at)
+            // when From is omitted, so this picks up cleanly even if the user
+            // crosses back and forth quickly.
+            var ease = new QuadraticEase { EasingMode = EasingMode.EaseInOut };
+            var anim       = new ColorAnimation { To = target,      Duration = TimeSpan.FromMilliseconds(ColourFadeMs), EasingFunction = ease };
+            var animAlpha  = new ColorAnimation { To = targetAlpha, Duration = TimeSpan.FromMilliseconds(ColourFadeMs), EasingFunction = ease };
+            _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, anim);
+            _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, anim);
+            _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
+            _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
+            _wasBelowOsMin = below;
         }
         else
         {
-            FillLeft.Background  = new SolidColorBrush(shared);
-            FillRight.Background = new SolidColorBrush(shared);
+            // No crossing this frame — but the accent itself may have changed
+            // (theme switch, user picked a new accent in Settings). Snap the
+            // brushes to the new target without animation so the fill colour
+            // stays consistent without re-firing the fade every paint.
+            // Detect "accent changed" by comparing the brush's current Color
+            // against the target; only update if they differ. We cancel any
+            // running animation first so SetCurrentValue takes effect.
+            if (_brushFillLeft.Color != target)
+            {
+                _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, null);
+                _brushFillLeft.Color  = target;
+                _brushFillRight.Color = target;
+                _brushSolidNeg.Color  = targetAlpha;
+                _brushSolidPos.Color  = targetAlpha;
+            }
         }
 
         if (solid)
@@ -671,8 +731,10 @@ public partial class OsdWindow : Window
         //   FillLeft  = dim shade (signals "below Windows native min").
         //   FillRight = accent (Windows native brightness range).
         // Both anchored to the bar's left edge — see UpdateBrightnessBar.
-        FillLeft.Background    = new SolidColorBrush(ResolveBrightnessLowColor(CurrentAccent()));
-        FillRight.Background   = new SolidColorBrush(CurrentAccent());
+        // FillLeft/FillRight Background is owned by the animated brushes that
+        // UpdateBrightnessBar manages — see _brushFillLeft / _brushFillRight.
+        // Don't replace those Background brushes here; the next UpdateBrightnessBar
+        // tick picks up any accent change and snap-updates the brush in place.
         MidMarker.Background   = new SolidColorBrush(p.MidMarker);
         IconText.Foreground    = new SolidColorBrush(p.Icon);
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
@@ -684,8 +746,8 @@ public partial class OsdWindow : Window
         // live glass refraction (or Subtle blur) is still visible underneath.
         // Same dim/accent split as the thin bar, but at 75% alpha so the live
         // glass refraction underneath still shows through.
-        SolidFillNeg.Background       = new SolidColorBrush(WithAlpha(ResolveBrightnessLowColor(CurrentAccent()), 0xC0));
-        SolidFillPos.Background       = new SolidColorBrush(WithAlpha(CurrentAccent(), 0xC0));
+        // Same as FillLeft/FillRight above — Background is owned by the animated
+        // brushes _brushSolidNeg / _brushSolidPos. UpdateBrightnessBar manages.
         SolidFillWarmthStartStop.Color = p.WarmthStart;
         // Warmth end stop is set per-frame from BlendKelvin in UpdateWarmthBar.
 

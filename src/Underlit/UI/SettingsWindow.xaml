@@ -123,7 +123,17 @@
                                 <DropShadowEffect Color="#000000" BlurRadius="14"
                                                   ShadowDepth="2" Opacity="0.18"/>
                             </Border.Effect>
-                            <ContentPresenter TextBlock.TextWrapping="Wrap"/>
+                            <!-- v0.6.41: TextBlock.TextWrapping is NOT an
+                                 attached property in WPF, so it can't be
+                                 set on ContentPresenter (CI build flagged
+                                 MC3015). Bind a TextBlock directly to the
+                                 tooltip's Content instead. All call sites
+                                 pass plain strings, which is the common
+                                 tooltip case. -->
+                            <TextBlock Text="{TemplateBinding Content}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       FontSize="{TemplateBinding FontSize}"/>
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>

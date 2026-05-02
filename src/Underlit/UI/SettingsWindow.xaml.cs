@@ -1554,7 +1554,20 @@ public partial class SettingsWindow : Window
 
         chip.MouseLeftButtonDown += (s, e) =>
         {
-            if (e.ClickCount >= 2) return;  // double-click handled separately
+            // TextBlock doesn't expose MouseDoubleClick (that lives on
+            // Control), so we detect a double-click by ClickCount on the
+            // bubbling MouseLeftButtonDown and route to edit mode there.
+            if (e.ClickCount >= 2)
+            {
+                if (dragging)
+                {
+                    dragging = false;
+                    chip.ReleaseMouseCapture();
+                }
+                BeginValueChipEdit(chip, slider);
+                e.Handled = true;
+                return;
+            }
             dragOrigin = e.GetPosition(this);
             dragStartValue = slider.Value;
             dragging = true;
@@ -1575,11 +1588,6 @@ public partial class SettingsWindow : Window
             if (!dragging) return;
             dragging = false;
             chip.ReleaseMouseCapture();
-            e.Handled = true;
-        };
-        chip.MouseDoubleClick += (s, e) =>
-        {
-            BeginValueChipEdit(chip, slider);
             e.Handled = true;
         };
     }

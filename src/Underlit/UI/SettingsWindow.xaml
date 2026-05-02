@@ -742,20 +742,32 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- ====== BEDTIME + WAKE TIME ======
-                             The two anchor times that drive the entire schedule curve.
-                             Internally we expand them into the legacy 4-field ramp window
-                             (BedtimeStart = Bed − 2.5h, WakeupStart = Wake − 0.75h, etc.)
-                             so Scheduler.ComputeWarmth keeps working without changes. -->
+                        <!-- ====== TIMES — four independently editable anchors ======
+                             Each of the four schedule anchors (evening-ramp start, bedtime,
+                             morning-ramp start, wake) is an independent time. Editing any
+                             one of them does NOT shift the others — that includes dragging
+                             the corresponding point on the graph. To keep the bedtime ramp
+                             at a particular length you adjust BOTH "Evening ramp starts"
+                             and "Bedtime", same for the morning side. -->
                         <TextBlock Style="{StaticResource CardCaption}" Text="TIMES"/>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Evening ramp starts"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="When the screen begins shifting from neutral toward bedtime warmth."/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" x:Name="TxtBedtimeStart" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Bedtime"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="Underlit reaches deep warmth by this time. Evening ramp starts ~2.5 h earlier."/>
+                                                   Text="When deep warmth is fully reached. Independent of the ramp-start time above."/>
                                     </StackPanel>
                                     <TextBox Grid.Column="1" x:Name="TxtBedtime" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
                                 </Grid>
@@ -763,9 +775,19 @@
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Morning ramp starts"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="When the screen begins shifting from bedtime warmth back toward neutral."/>
+                                    </StackPanel>
+                                    <TextBox Grid.Column="1" x:Name="TxtWakeupStart" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
                                         <TextBlock Style="{StaticResource RowLabel}" Text="Wake time"/>
                                         <TextBlock Style="{StaticResource RowHint}"
-                                                   Text="Underlit returns to neutral by this time. Morning ramp starts ~45 min earlier."/>
+                                                   Text="When neutral is fully reached. Independent of the ramp-start time above."/>
                                     </StackPanel>
                                     <TextBox Grid.Column="1" x:Name="TxtWakeTime" Style="{StaticResource AppleTextBox}" Width="80" Margin="0,0,14,0"/>
                                 </Grid>

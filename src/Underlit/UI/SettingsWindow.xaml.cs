@@ -89,7 +89,7 @@ public partial class SettingsWindow : Window
             };
         }
         // Schedule/exclusion textboxes still commit on lost-focus.
-        foreach (var tb in new TextBox[] { TxtBedtime, TxtWakeTime, TxtExclusions })
+        foreach (var tb in new TextBox[] { TxtBedtimeStart, TxtBedtime, TxtWakeupStart, TxtWakeTime, TxtExclusions })
         {
             tb.LostFocus += (_, _) => PushSettings();
         }
@@ -122,11 +122,13 @@ public partial class SettingsWindow : Window
         ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
         // Night-warmth slider drives BOTH deep-warmth anchors (BedtimeKelvin
-        // + WakeupStartKelvin) in lockstep. The user can still drag those
-        // anchors independently on the graph; the slider is the "set both"
-        // shortcut. We also keep NightWarmthKelvin in sync for back-compat.
+        // + WakeupStartKelvin) in lockstep when the USER moves it. Programmatic
+        // updates (e.g. after a per-anchor vertical drag, where we want to
+        // reflect the dragged kelvin in the slider position) suppress this
+        // handler so the per-anchor values aren't stomped.
         SldNightWarmth.ValueChanged += (_, _) =>
         {
+            if (_suppressNightWarmthSliderEvents) return;
             int k = (int)SldNightWarmth.Value;
             var p = _snapshot.ActiveProfile();
             p.NightWarmthKelvin   = k;
@@ -135,7 +137,7 @@ public partial class SettingsWindow : Window
             _snapshot.EnsureScheduleCurveDerived();
             RedrawScheduleGraph();
         };
-        foreach (var tb in new[] { TxtBedtime, TxtWakeTime })
+        foreach (var tb in new[] { TxtBedtimeStart, TxtBedtime, TxtWakeupStart, TxtWakeTime })
             tb.LostFocus += (_, _) => RedrawScheduleGraph();
 
         // Graph drag — the four anchor points (BedtimeStart, BedtimeEnd,
@@ -680,6 +682,11 @@ public partial class SettingsWindow : Window
         // Final commit — push to settings on release so the change persists.
         PushSettings();
         UpdateAllValueChips();
+        // Final redraw with the now-committed values + the slider in its
+        // updated position. Without this, the graph could be stale if no
+        // mouse-move fired between the last UpdatePointFromMouse and the
+        // mouse-up (rare but possible on a single-click).
+        RedrawScheduleGraph();
         WarmthPreviewEnded?.Invoke();
     }
 
@@ -712,20 +719,22 @@ public partial class SettingsWindow : Window
         switch (id)
         {
             case SchedulePointId.BedtimeStart:
-                p.BedtimeStart = t;
+                p.BedtimeStart       = t;
                 p.BedtimeStartKelvin = kelvin;
+                TxtBedtimeStart.Text = Fmt(t);
                 break;
             case SchedulePointId.BedtimeEnd:
-                p.Bedtime = t;
+                p.Bedtime       = t;
                 p.BedtimeKelvin = kelvin;
                 TxtBedtime.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupStart:
-                p.WakeupStart = t;
+                p.WakeupStart       = t;
                 p.WakeupStartKelvin = kelvin;
+                TxtWakeupStart.Text = Fmt(t);
                 break;
             case SchedulePointId.WakeupEnd:
-                p.WakeTime = t;
+                p.WakeTime       = t;
                 p.WakeTimeKelvin = kelvin;
                 TxtWakeTime.Text = Fmt(t);
                 break;
@@ -735,6 +744,14 @@ public partial class SettingsWindow : Window
         // two "deep warmth" anchors, so the NightWarmth slider in Settings
         // still reads back something sensible after a drag.
         p.NightWarmthKelvin = Math.Min(p.BedtimeKelvin, p.WakeupStartKelvin);
+
+        // Mirror the post-drag deepest kelvin into the slider POSITION (visual
+        // only — handler is suppressed). This is what the user reported was
+        // missing in v0.6.28: the slider stayed at its pre-drag position even
+        // after the user released, making it look like nothing had changed.
+        _suppressNightWarmthSliderEvents = true;
+        try { SldNightWarmth.Value = p.NightWarmthKelvin; }
+        finally { _suppressNightWarmthSliderEvents = false; }
 
         _snapshot.EnsureScheduleCurveDerived();
         RedrawScheduleGraph();
@@ -1043,6 +1060,11 @@ public partial class SettingsWindow : Window
     // ---- Profile management ----
 
     private bool _suppressProfileSelectionEvents;
+    /// <summary>While true, the SldNightWarmth ValueChanged handler skips its
+    /// "set both deep anchors" logic. Set during programmatic slider updates
+    /// (e.g., after a per-anchor graph drag) so the dragged-in kelvin isn't
+    /// instantly stomped back to the slider's pre-drag value.</summary>
+    private bool _suppressNightWarmthSliderEvents;
 
     /// <summary>Repopulate the profile dropdown from <c>_snapshot.WarmthProfiles</c>.
     /// Keeps the active selection on whichever profile name matches
@@ -1077,28 +1099,46 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>Mirror the active profile's Bedtime/WakeTime/NightK into the UI
-    /// fields, so when the user picks a different profile the inputs reflect it.</summary>
+    /// <summary>Mirror the active profile's four anchor times + the deepest
+    /// kelvin into the UI fields, so when the user picks a different profile
+    /// (or returns from a graph drag) the inputs reflect it.</summary>
     private void LoadActiveProfileIntoFields()
     {
         var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
         if (active == null) return;
-        TxtBedtime.Text   = Fmt(active.Bedtime);
-        TxtWakeTime.Text  = Fmt(active.WakeTime);
-        // Slider position = the deeper of the two "deep warmth" anchors —
-        // matches what the user actually sees on the graph.
-        SldNightWarmth.Value = Math.Min(active.BedtimeKelvin, active.WakeupStartKelvin);
+        TxtBedtimeStart.Text = Fmt(active.BedtimeStart);
+        TxtBedtime.Text      = Fmt(active.Bedtime);
+        TxtWakeupStart.Text  = Fmt(active.WakeupStart);
+        TxtWakeTime.Text     = Fmt(active.WakeTime);
+
+        // Programmatic slider update — suppress the ValueChanged handler so
+        // it doesn't stomp the per-anchor kelvins back to the slider value.
+        _suppressNightWarmthSliderEvents = true;
+        try
+        {
+            SldNightWarmth.Value = Math.Min(active.BedtimeKelvin, active.WakeupStartKelvin);
+        }
+        finally
+        {
+            _suppressNightWarmthSliderEvents = false;
+        }
     }
 
-    /// <summary>Push the current UI field values back into the active profile
-    /// object, so user edits to Bedtime/WakeTime/NightK persist with that profile.</summary>
+    /// <summary>Push the four time-of-day input fields into the active profile.
+    /// NightWarmthKelvin is intentionally NOT written here — that field is
+    /// owned by the SldNightWarmth ValueChanged handler (when the user moves
+    /// the slider) and by UpdatePointFromMouse (when the user drags a deep
+    /// anchor on the graph). Writing the slider's value here was stomping
+    /// freshly-dragged per-anchor kelvins every time PushSettings ran, which
+    /// is the bug the user hit in v0.6.28.</summary>
     private void SaveFieldsIntoActiveProfile()
     {
         var active = _snapshot.WarmthProfiles.FirstOrDefault(p => p.Name == _snapshot.ActiveProfileName);
         if (active == null) return;
-        active.Bedtime  = ParseTime(TxtBedtime.Text,  active.Bedtime);
-        active.WakeTime = ParseTime(TxtWakeTime.Text, active.WakeTime);
-        active.NightWarmthKelvin = (int)SldNightWarmth.Value;
+        active.BedtimeStart = ParseTime(TxtBedtimeStart.Text, active.BedtimeStart);
+        active.Bedtime      = ParseTime(TxtBedtime.Text,      active.Bedtime);
+        active.WakeupStart  = ParseTime(TxtWakeupStart.Text,  active.WakeupStart);
+        active.WakeTime     = ParseTime(TxtWakeTime.Text,     active.WakeTime);
     }
 
     private void OnProfileSelectionChanged(object sender, SelectionChangedEventArgs e)

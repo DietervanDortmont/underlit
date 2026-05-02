@@ -10,7 +10,7 @@
         Focusable="False"
         ResizeMode="NoResize"
         Width="300"
-        Height="66"
+        Height="160"
         Opacity="0"
         WindowStartupLocation="Manual"
         Title="Underlit">
@@ -31,8 +31,20 @@
 
     <!-- Background="Transparent" (not null) so the empty pixels of the Grid are still
          hit-testable — the brightness mouse-drag handler relies on PreviewMouseDown
-         firing across the full pill area, not just on opaque child elements. -->
+         firing across the full pill area, not just on opaque child elements.
+         WindowRoot is 300×160 (window height). The visible PillContainer below is
+         pinned to the TOP 66 dip; the bottom 94 dip is empty space that the entry
+         animation slides the pill seed down into so it visually starts from
+         BEHIND the taskbar (the window's lower portion overlaps the taskbar). -->
     <Grid x:Name="WindowRoot" Background="Transparent">
+
+        <!-- All visible glass elements live in this 300×66 container at the top
+             of WindowRoot. The animated WindowRoot.Clip (set up in
+             OnSourceInitialized) and WindowRoot.RenderTransform handle the
+             entry morph + slide; we just need the children to render inside
+             the pill rect. -->
+        <Grid x:Name="PillContainer" Width="300" Height="66"
+              VerticalAlignment="Top" HorizontalAlignment="Left">
 
         <!-- ===== Liquid Glass full bitmap =====
              ImageBrush is 300x66; the renderer fills it with the pill, the shadow
@@ -256,5 +268,6 @@
                 </Grid>
             </Grid>
         </Grid>
+        </Grid>  <!-- /PillContainer -->
     </Grid>
 </Window>

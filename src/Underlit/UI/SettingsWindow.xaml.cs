@@ -68,14 +68,25 @@ public partial class SettingsWindow : Window
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
-        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth,
-                                     SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
+        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth })
+        {
+            sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
+        }
+        // Glass sliders also fire GlassPreviewRequested so the host can keep
+        // the OSD on screen while the user tweaks them — otherwise they'd be
+        // tweaking blind, only seeing the result on the next hotkey press.
+        foreach (var sld in new[] { SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
                                      SldGlassDepth, SldGlassDispersion, SldGlassFrost,
                                      SldGlassCornerRadius, SldGlassBevelWidth,
                                      SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth,
                                      SldGlassRimSecondary, SldGlassTintStrength })
         {
-            sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
+            sld.ValueChanged += (_, _) =>
+            {
+                PushSettings();
+                UpdateAllValueChips();
+                GlassPreviewRequested?.Invoke();
+            };
         }
         // Schedule/exclusion textboxes still commit on lost-focus.
         foreach (var tb in new TextBox[] { TxtBedtime, TxtWakeTime, TxtExclusions })
@@ -999,6 +1010,12 @@ public partial class SettingsWindow : Window
     /// fires on mouse-up so the engine can return to scheduled behaviour.</summary>
     public event Action<int>? WarmthPreviewRequested;
     public event Action? WarmthPreviewEnded;
+
+    /// <summary>Raised whenever the user nudges a Liquid-Glass tuning slider
+    /// (refraction, frost, rim, etc.). The host responds by re-showing the
+    /// OSD with the freshly-pushed glass parameters so the user can see the
+    /// effect in real time, instead of waiting for the next hotkey press.</summary>
+    public event Action? GlassPreviewRequested;
 
     /// <summary>Build a transient AppSettings from the schedule UI fields so the
     /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>

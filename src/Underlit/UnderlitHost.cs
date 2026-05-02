@@ -243,6 +243,11 @@ public sealed class UnderlitHost : IDisposable
         // the saved warmth (and the scheduler reasserts on its next tick).
         _settingsWindow.WarmthPreviewRequested += k => _engine?.PreviewWarmth(k);
         _settingsWindow.WarmthPreviewEnded     += () => _engine?.EndWarmthPreview();
+        // Live-preview the OSD whenever the user nudges a glass slider — push
+        // the OSD back into view (or restart its hide-timer if already up) so
+        // the effect of the slider change is immediately visible.
+        _settingsWindow.GlassPreviewRequested  += () =>
+            _osd?.ShowBrightness(_engine?.CurrentBrightness ?? 100);
         _settingsWindow.Closed += (_, _) =>
         {
             _settings.Save();

@@ -56,19 +56,19 @@ public partial class OsdWindow : Window
     private const int    FadeInDurationMs = 240;
     private const int    ExitDurationMs   = 220;
     /// <summary>
-    /// Initial Y-offset for the entry slide, in dip. The seed circle is 46 dip
-    /// tall, sits at local y=10–56, and the window is 66 dip tall. With slide=44
-    /// the circle is rendered at y=54–100 → only the top 12 dip is visible at
-    /// frame 0, sitting right above the taskbar (BottomMarginDip is 0). That's
-    /// the "circle peeking up from behind the taskbar" moment. Animation then
-    /// pulls slide to 0, with a BackEase overshoot of about 18 dip past rest
-    /// (44 × 0.4) for the bouncy spring.
+    /// Initial Y-offset for the entry slide, in dip. The seed circle sits at
+    /// local y=10–56 inside the PillContainer (which is pinned to the top
+    /// 66 dip of the now-160-dip-tall window). Anything past window y=66 is
+    /// behind the taskbar (the window's lower portion overlaps the taskbar
+    /// because we positioned its top so the PillContainer's bottom (y=66 in
+    /// window coords) sits at the taskbar edge).
     ///
-    /// Push higher (max ≈ 56) to bury the circle deeper at frame 0; lower to
-    /// reveal more of it. Beyond ~50 nothing is visible at the start, so the
-    /// "rise" effect disappears.
+    /// At slide=80 the circle is rendered at y=90–136 — fully behind the
+    /// taskbar, invisible. As the spring pulls slide to 0, the circle emerges
+    /// from below and rises up into the rest position with a BackEase
+    /// overshoot of about 32 dip past rest (80 × 0.4) for a bouncy spring.
     /// </summary>
-    private const double SlideFromBelowDip = 44;
+    private const double SlideFromBelowDip = 80;
     private const double EntryBackAmplitude = 0.4; // BackEase amplitude — overshoot strength
     /// <summary>
     /// Gap between the WPF window's bottom edge and the working area's bottom
@@ -78,7 +78,14 @@ public partial class OsdWindow : Window
     /// gap, now 0 → 10 dip gap. Keep ≥ 0 to avoid the window overlapping the
     /// taskbar (which can cause the taskbar to render in front of the pill).
     /// </summary>
-    private const double BottomMarginDip = 0;
+    /// <summary>
+    /// Y of pill bottom inside the window, in dip. The PillContainer is
+    /// 300×66 at the top of the 300×160 WindowRoot; pill is at PillContainer
+    /// y=10..56 (10 dip shadow above + 46 dip pill + 10 dip shadow below).
+    /// </summary>
+    private const double PillBottomYDip = 56;
+    /// <summary>Gap between pill bottom and taskbar top, in dip.</summary>
+    private const double TaskbarGapDip  = 10;
 
     // ---- Theme palettes ----
     private sealed record ThemeTints(
@@ -171,6 +178,12 @@ public partial class OsdWindow : Window
     /// frame; null on first paint. Used to detect a crossing and trigger the
     /// 500 ms colour fade only on the cross — not on every mouse move.</summary>
     private bool? _wasBelowOsMin;
+    /// <summary>Last target colour the bar was animating TOWARD. Compared
+    /// against the current target to detect external changes (theme switch,
+    /// accent recolour) — distinct from <c>_brushFillLeft.Color</c>, which is
+    /// the live in-animation value and would always disagree with target
+    /// during a fade.</summary>
+    private Color _lastBrightnessTargetColor;
     private const double OsMinThreshold = 50.0;
     private const int    ColourFadeMs   = 500;
     /// <summary>Most recently shown brightness/warmth values, so a style flip can re-render in place.</summary>
@@ -333,42 +346,29 @@ public partial class OsdWindow : Window
     }
 
     /// <summary>
-    /// Apply a SetWindowRgn region matching exactly the renderer's drawn shape, so
-    /// the OS clips any DWM shadow / border to the same outline. The corner radius
-    /// is driven by GlassParams.CornerRadius so the slider in Settings affects both
-    /// the visible bitmap AND the OS clip simultaneously.
+    /// Apply a SetWindowRgn region that defines the OS-level outline of the
+    /// window. v0.6.28: the region must encompass the FULL window rectangle
+    /// (not just the rest pill) because the entry animation slides the seed
+    /// circle through the bottom half of the window — content there has to be
+    /// renderable. Visual rounding of the rest pill comes from
+    /// <see cref="_entryClip"/> (a WPF RectangleGeometry on WindowRoot), not
+    /// from the window region.
     /// </summary>
     private void ApplyPillRegion()
     {
         if (Hwnd == IntPtr.Zero) return;
 
-        // VisualTreeHelper.GetDpi queries the OS for the actual DPI of the window's
-        // current monitor. More reliable than CompositionTarget.TransformToDevice
-        // (which can read 1.0 before the window is placed).
         var dpi = VisualTreeHelper.GetDpi(this);
         double scale = dpi.DpiScaleX;
         if (scale <= 0) scale = 1.0;
 
-        // Use the EXACT same math the renderer uses to compute its pill — otherwise
-        // at fractional DPI we get 1-pixel mismatches between OS clip and rendered
-        // content. Renderer does: pillW = fullW − 2·padX. Match that here.
-        int physFullW = (int)Math.Round(LiveGlassController.FullWidthDip  * scale);
-        int physFullH = (int)Math.Round(LiveGlassController.FullHeightDip * scale);
-        int physPadX  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
-        int physPadY  = (int)Math.Round(LiveGlassController.PaddingDip    * scale);
-        int physPillW = physFullW - 2 * physPadX;
-        int physPillH = physFullH - 2 * physPadY;
-        int rPx = _glass.CornerRadiusPx(physPillH);
+        // Full window rectangle — width/height as configured in XAML, scaled
+        // by DPI. The ENTIRE window rectangle is part of the OS-level region
+        // so the bottom-half slide-from-behind-taskbar works.
+        int physWindowW = (int)Math.Round(this.Width  * scale);
+        int physWindowH = (int)Math.Round(this.Height * scale);
 
-        // CreateRoundRectRgn corners are an ellipse of width=cx, height=cy. For corner
-        // radius rPx we want a circle of diameter 2*rPx.
-        IntPtr rgn = NativeMethods.CreateRoundRectRgn(
-            physPadX,
-            physPadY,
-            physPadX + physPillW,
-            physPadY + physPillH,
-            rPx * 2,
-            rPx * 2);
+        IntPtr rgn = NativeMethods.CreateRectRgn(0, 0, physWindowW, physWindowH);
 
         if (rgn != IntPtr.Zero)
         {
@@ -391,7 +391,13 @@ public partial class OsdWindow : Window
         double waHeightDip = primary.WorkingArea.Height / scale;
 
         Left = waLeftDip + (waWidthDip - Width) / 2;
-        _restTop = waTopDip + waHeightDip - Height - BottomMarginDip;
+        // Window is taller than the visible PillContainer — the bottom half
+        // overlaps the taskbar so the entry animation has somewhere to slide
+        // FROM. Position the window so the PillContainer's pill-bottom
+        // (window y = PillBottomYDip) sits TaskbarGapDip above the taskbar
+        // top. Anything below window y = PillBottomYDip + TaskbarGapDip is
+        // behind the taskbar and not visible to the user.
+        _restTop = waTopDip + waHeightDip - PillBottomYDip - TaskbarGapDip;
         Top = _restTop;
     }
 
@@ -503,7 +509,8 @@ public partial class OsdWindow : Window
             FillRight.Background    = _brushFillRight;
             SolidFillNeg.Background = _brushSolidNeg;
             SolidFillPos.Background = _brushSolidPos;
-            _wasBelowOsMin = below;
+            _wasBelowOsMin             = below;
+            _lastBrightnessTargetColor = target;
         }
         else if (_wasBelowOsMin != below)
         {
@@ -518,28 +525,29 @@ public partial class OsdWindow : Window
             _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, anim);
             _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
             _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, animAlpha);
-            _wasBelowOsMin = below;
+            _wasBelowOsMin             = below;
+            _lastBrightnessTargetColor = target;
         }
-        else
+        else if (_lastBrightnessTargetColor != target)
         {
-            // No crossing this frame — but the accent itself may have changed
+            // No crossing this frame — but the accent itself just changed
             // (theme switch, user picked a new accent in Settings). Snap the
-            // brushes to the new target without animation so the fill colour
-            // stays consistent without re-firing the fade every paint.
-            // Detect "accent changed" by comparing the brush's current Color
-            // against the target; only update if they differ. We cancel any
-            // running animation first so SetCurrentValue takes effect.
-            if (_brushFillLeft.Color != target)
-            {
-                _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                _brushFillLeft.Color  = target;
-                _brushFillRight.Color = target;
-                _brushSolidNeg.Color  = targetAlpha;
-                _brushSolidPos.Color  = targetAlpha;
-            }
+            // brushes without animation so the fill colour stays consistent.
+            //
+            // Critically: we compare _lastBrightnessTargetColor (our last
+            // INTENDED target) to the current target, NOT the brush's live
+            // .Color which is the in-animation value. The old code did the
+            // latter, which mistakenly cancelled the fade on every drag-tick
+            // because the live colour disagrees with target mid-fade.
+            _brushFillLeft.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushFillRight.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushSolidNeg.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushSolidPos.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            _brushFillLeft.Color  = target;
+            _brushFillRight.Color = target;
+            _brushSolidNeg.Color  = targetAlpha;
+            _brushSolidPos.Color  = targetAlpha;
+            _lastBrightnessTargetColor = target;
         }
 
         if (solid)

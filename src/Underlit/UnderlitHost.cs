@@ -60,7 +60,8 @@ public sealed class UnderlitHost : IDisposable
             GlassParamsFromSettings(_settings),
             _settings.GlassLiveCapture,
             _settings.OsdBarStyle,
-            _settings.OsdBrightnessHighColor);
+            _settings.OsdBrightnessHighColor,
+            _settings.OsdGapAboveTaskbarDip);
 
         // Engine
         _engine = new UnderlitEngine(_settings, _ui, _gamma, _overlays, _hardware);
@@ -318,7 +319,8 @@ public sealed class UnderlitHost : IDisposable
             GlassParamsFromSettings(next),
             next.GlassLiveCapture,
             next.OsdBarStyle,
-            next.OsdBrightnessHighColor);
+            next.OsdBrightnessHighColor,
+            next.OsdGapAboveTaskbarDip);
     }
 
     private static Underlit.Sys.GlassParams GlassParamsFromSettings(AppSettings s) => new()

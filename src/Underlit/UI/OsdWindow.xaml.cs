@@ -97,8 +97,15 @@ public partial class OsdWindow : Window
     /// y=10..56 (10 dip shadow above + 46 dip pill + 10 dip shadow below).
     /// </summary>
     private const double PillBottomYDip = 56;
-    /// <summary>Gap between pill bottom and taskbar top, in dip.</summary>
-    private const double TaskbarGapDip  = 10;
+    /// <summary>Default gap between pill bottom and taskbar top, in dip.
+    /// v0.6.35: now also overridable per-user via
+    /// <see cref="AppSettings.OsdGapAboveTaskbarDip"/>; this constant is the
+    /// fallback for the brief window before settings are applied.</summary>
+    private const double TaskbarGapDip  = 30;
+    /// <summary>Live taskbar-gap value mirrored from settings, used by
+    /// <see cref="PositionAboveTaskbar"/>. Updated in
+    /// <see cref="UpdateVisualSettings"/>.</summary>
+    private double _taskbarGapDip = TaskbarGapDip;
 
     // ---- Theme palettes ----
     private sealed record ThemeTints(
@@ -269,12 +276,14 @@ public partial class OsdWindow : Window
     public void UpdateVisualSettings(bool followWindowsAccent, Color? customAccent,
                                      TransparencyMode transparencyMode, BackdropStyle backdrop,
                                      GlassParams glass, bool glassLiveCapture,
-                                     OsdBarStyle barStyle, string brightnessHighColor)
+                                     OsdBarStyle barStyle, string brightnessHighColor,
+                                     int osdGapAboveTaskbarDip)
     {
         _barStyle = barStyle;
         _brightnessHighColor = string.IsNullOrWhiteSpace(brightnessHighColor) ? "auto" : brightnessHighColor;
         _followWindowsAccent = followWindowsAccent;
         _customAccent = followWindowsAccent ? null : customAccent;
+        _taskbarGapDip = Math.Clamp(osdGapAboveTaskbarDip, 0, 200);
 
         _useTransparency = transparencyMode switch
         {
@@ -333,80 +342,39 @@ public partial class OsdWindow : Window
             RadiusY = LiveGlassController.PillHeightDip / 2.0,
             Rect = FullPillRect(),
         };
-        WindowRoot.Clip = _entryClip;
+        // v0.6.35: clip + transform now live on ClipRoot (inside the 300×66
+        // VisibleClip Border) instead of WindowRoot. The outer VisibleClip
+        // masks out the bottom 94 dip of the window, so the seed circle's
+        // slide-from-below animation visually emerges from behind the
+        // bottom edge of its visible zone — faking the "behind taskbar"
+        // effect without depending on actual z-order shenanigans.
+        ClipRoot.Clip = _entryClip;
 
         _entrySlide = new TranslateTransform();
-        WindowRoot.RenderTransform = _entrySlide;
+        ClipRoot.RenderTransform = _entrySlide;
     }
 
     /// <summary>
-    /// Position the OSD's z-order so it (a) stays above normal app windows
-    /// like Chrome, and (b) stays behind the taskbar so the entry/exit slide
-    /// passes behind it instead of drawing on top of it.
+    /// Force the OSD to the top of the topmost z-order group so it stays
+    /// above every app window (Chrome, fullscreen-but-not-exclusive, etc.).
+    /// v0.6.35: no longer tries to slot below Shell_TrayWnd — the
+    /// "behind taskbar" appearance is now faked entirely on the WPF side
+    /// via the VisibleClip Border in OsdWindow.xaml. That made the
+    /// taskbar-z-order trick unreliable on Win 11 setups where
+    /// Shell_TrayWnd isn't topmost (slipping us below Chrome).
     ///
-    /// The two goals fight each other on Windows 11 because the Win 11
-    /// taskbar isn't always topmost. Strategy:
-    ///
-    ///   • If Shell_TrayWnd is topmost (Win 10, most Win 11 setups): place
-    ///     OSD just below the tray INSIDE the topmost group via
-    ///     SetWindowPos(osd, tray, ...). Both windows stay topmost, the OSD
-    ///     sits between the tray and every non-topmost app, so the slide
-    ///     passes behind the tray and we still float above Chrome.
-    ///
-    ///   • If Shell_TrayWnd is NOT topmost: dropping below it would demote
-    ///     the OSD out of the topmost group and Chrome (foreground, top of
-    ///     the non-topmost stack) would render above us. Instead, force the
-    ///     OSD to topmost via HWND_TOPMOST. We give up the "behind taskbar"
-    ///     effect here — the slide will draw over the taskbar — but the OSD
-    ///     stays above all app windows, which is the priority.
-    ///
-    /// Called every Show() because Windows re-promotes topmost windows to
-    /// the front of the topmost group on activation, which would undo the
-    /// "below tray" placement.
+    /// Called every Show() because Windows can re-promote other topmost
+    /// windows on activation; re-asserting HWND_TOPMOST keeps us at the
+    /// top of the topmost group.
     /// </summary>
     private void PositionOsdZOrder()
     {
         if (Hwnd == IntPtr.Zero) return;
-        IntPtr tray = NativeMethods.FindWindow("Shell_TrayWnd", null);
-        if (tray == IntPtr.Zero)
-        {
-            // No taskbar found at all — at least make sure we're topmost.
-            NativeMethods.SetWindowPos(
-                Hwnd, NativeMethods.HWND_TOPMOST,
-                0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
-                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
-            return;
-        }
-
-        int trayEx = NativeMethods.GetWindowLong(tray, NativeMethods.GWL_EXSTYLE);
-        bool trayIsTopmost = (trayEx & NativeMethods.WS_EX_TOPMOST) != 0;
-
-        if (trayIsTopmost)
-        {
-            // Put OSD just below tray in the topmost group. Both stay
-            // topmost; OSD lives in z-order BETWEEN the tray and every
-            // non-topmost app window, so we get behind-taskbar AND
-            // above-Chrome at the same time.
-            NativeMethods.SetWindowPos(
-                Hwnd, tray,
-                0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
-                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
-        }
-        else
-        {
-            // Tray is non-topmost (some Win 11 configurations). Dropping
-            // below it would demote us into the non-topmost stack, where
-            // Chrome can render over us. Stay topmost — the slide will
-            // draw over the taskbar instead of behind it, but the OSD is
-            // guaranteed above app windows.
-            NativeMethods.SetWindowPos(
-                Hwnd, NativeMethods.HWND_TOPMOST,
-                0, 0, 0, 0,
-                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
-                | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
-        }
+        NativeMethods.SetWindowPos(
+            Hwnd, NativeMethods.HWND_TOPMOST,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
     }
 
     /// <summary>The Rect that, used with the WindowRoot clip, exposes the entire visible
@@ -480,7 +448,7 @@ public partial class OsdWindow : Window
         // (window y = PillBottomYDip) sits TaskbarGapDip above the taskbar
         // top. Anything below window y = PillBottomYDip + TaskbarGapDip is
         // behind the taskbar and not visible to the user.
-        _restTop = waTopDip + waHeightDip - PillBottomYDip - TaskbarGapDip;
+        _restTop = waTopDip + waHeightDip - PillBottomYDip - _taskbarGapDip;
         Top = _restTop;
     }
 

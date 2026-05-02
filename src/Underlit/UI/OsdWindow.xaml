@@ -34,25 +34,57 @@
          firing across the full pill area, not just on opaque child elements.
          WindowRoot is 300×160 (window height). The visible PillContainer below is
          pinned to the TOP 66 dip; the bottom 94 dip is empty space that the entry
-         animation slides the pill seed down into so it visually starts from
-         BEHIND the taskbar (the window's lower portion overlaps the taskbar). -->
+         animation slides the pill seed down into.
+
+         v0.6.35: the "appear behind the taskbar" effect is faked entirely on
+         the WPF side — VisibleClip is a 300×66 Border with ClipToBounds=True
+         that masks anything past y=66 inside the window. The window itself
+         stays Topmost (above all apps), but the bottom 94 dip is invisible
+         to the user, so the seed circle's slide animation appears to emerge
+         from behind whatever is at the bottom edge of the screen (taskbar
+         on Windows). No Shell_TrayWnd z-order dance needed. -->
     <Grid x:Name="WindowRoot" Background="Transparent">
 
+        <!-- VisibleClip — fake "behind taskbar" mask (see comment above). -->
+        <Border x:Name="VisibleClip"
+                Width="300" Height="66"
+                VerticalAlignment="Top" HorizontalAlignment="Left"
+                ClipToBounds="True"
+                Background="Transparent">
+        <!-- ClipRoot — owns the animated entry clip (WindowRoot.Clip → ClipRoot.Clip)
+             and the slide TranslateTransform. Its layout is the 300×66 pill rect;
+             the entry clip morphs from circle to pill within that, and the slide
+             transform pushes the pill down into the masked-out bottom region for
+             the "rises from below" animation. -->
+        <Grid x:Name="ClipRoot">
+
         <!-- All visible glass elements live in this 300×66 container at the top
-             of WindowRoot. The animated WindowRoot.Clip (set up in
-             OnSourceInitialized) and WindowRoot.RenderTransform handle the
-             entry morph + slide; we just need the children to render inside
-             the pill rect. -->
+             of ClipRoot. -->
         <Grid x:Name="PillContainer" Width="300" Height="66"
               VerticalAlignment="Top" HorizontalAlignment="Left">
 
         <!-- ===== Liquid Glass full bitmap =====
-             ImageBrush is 300x66; the renderer fills it with the pill, the shadow
-             halo around the pill, and transparent pixels outside the shadow. Border
-             has no CornerRadius because the alpha mask already handles the shape. -->
+             ImageBrush is 300x66; the renderer fills it with the pill body
+             alpha-shaped and transparent pixels outside it. The Border has
+             no CornerRadius because the bitmap's alpha mask already carries
+             the pill outline.
+
+             v0.6.35: DropShadowEffect on this Border casts a soft dark halo
+             around the pill's alpha shape. Without it the pill almost
+             disappears against bright backdrops (white window, snowy desktop
+             wallpaper, etc.). The shadow is barely visible on dark
+             backgrounds — they have plenty of contrast already — and reads
+             clearly on light ones, so it's left on unconditionally. -->
         <Border x:Name="GlassBackdrop"
                 IsHitTestVisible="False"
                 Visibility="Collapsed">
+            <Border.Effect>
+                <DropShadowEffect Color="#FF000000"
+                                  BlurRadius="18"
+                                  ShadowDepth="3"
+                                  Direction="270"
+                                  Opacity="0.30"/>
+            </Border.Effect>
             <Border.Background>
                 <ImageBrush x:Name="GlassBackdropBrush" Stretch="Fill"/>
             </Border.Background>
@@ -286,5 +318,7 @@
             </Grid>
         </Grid>
         </Grid>  <!-- /PillContainer -->
+        </Grid>  <!-- /ClipRoot -->
+        </Border>  <!-- /VisibleClip -->
     </Grid>
 </Window>

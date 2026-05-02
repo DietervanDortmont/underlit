@@ -121,6 +121,14 @@ public sealed class AppSettings
     /// </summary>
     public OsdBarStyle OsdBarStyle { get; set; } = OsdBarStyle.Bar;
 
+    /// <summary>
+    /// Vertical distance, in DIP, between the bottom of the OSD pill and the
+    /// top edge of the taskbar. Default 30 dip — slightly higher than the
+    /// v0.6.34 hard-coded 10 dip so the pill doesn't visually crowd the
+    /// taskbar. Range 0..200 via the Settings slider.
+    /// </summary>
+    public int OsdGapAboveTaskbarDip { get; set; } = 30;
+
     // ---- Liquid Glass tunable parameters (v0.3.2) ----
     // Slider conventions match the Figma "Glass" plugin so the user can hit values
     // they've already tuned visually elsewhere.

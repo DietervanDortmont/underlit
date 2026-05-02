@@ -375,6 +375,20 @@
                                         <ComboBoxItem Content="Solid fill"/>
                                     </ComboBox>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Distance above taskbar"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="How far the OSD pill sits above the taskbar's top edge. Higher values lift the OSD farther from the screen edge."/>
+                                    </StackPanel>
+                                    <Slider Grid.Column="1" x:Name="SldOsdGap" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="200" TickFrequency="10"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdGap"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
 

@@ -68,7 +68,7 @@ public partial class SettingsWindow : Window
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
-        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth })
+        foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth, SldOsdGap })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
         }
@@ -478,6 +478,7 @@ public partial class SettingsWindow : Window
         LblWarmthStep.Text     = ((int)SldWarmthStep.Value) + " K";
         LblRampDuration.Text   = ((int)SldRampDuration.Value) + " ms";
         LblNightWarmth.Text    = ((int)SldNightWarmth.Value) + " K";
+        LblOsdGap.Text         = ((int)SldOsdGap.Value) + " dip";
         LblMonBr.Text          = ((int)SldMonBrOffset.Value >= 0 ? "+" : "") + (int)SldMonBrOffset.Value;
         LblMonWr.Text          = ((int)SldMonWrOffset.Value) + " K";
 
@@ -1341,6 +1342,7 @@ public partial class SettingsWindow : Window
         SldWarmthStep.Value     = _snapshot.WarmthStep;
         SldRampDuration.Value   = _snapshot.RampDurationMs;
         SldNightWarmth.Value    = _snapshot.NightWarmthKelvin;
+        SldOsdGap.Value         = _snapshot.OsdGapAboveTaskbarDip;
 
         SldGlassLightAngle.Value     = _snapshot.GlassLightAngleDeg;
         SldGlassLightIntensity.Value = _snapshot.GlassLightIntensity;
@@ -1524,6 +1526,7 @@ public partial class SettingsWindow : Window
         _snapshot.RampDurationMs  = (int)SldRampDuration.Value;
         _snapshot.SmoothRamping   = _snapshot.RampDurationMs > 10;
         _snapshot.NightWarmthKelvin = (int)SldNightWarmth.Value;
+        _snapshot.OsdGapAboveTaskbarDip = (int)SldOsdGap.Value;
 
         _snapshot.GlassLightAngleDeg  = SldGlassLightAngle.Value;
         _snapshot.GlassLightIntensity = SldGlassLightIntensity.Value;

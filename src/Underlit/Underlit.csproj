@@ -14,7 +14,7 @@
     <AssemblyName>Underlit</AssemblyName>
     <RootNamespace>Underlit</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.6.20</Version>
+    <Version>0.6.21</Version>
     <Product>Underlit</Product>
     <Company>Underlit</Company>
     <Copyright>Copyright (c) 2026</Copyright>
@@ -30,6 +30,22 @@
 
   <ItemGroup>
     <Resource Include="Resources\underlit.ico" Condition="Exists('Resources\underlit.ico')" />
+  </ItemGroup>
+
+  <!--
+    Remove the implicit globally-imported namespaces that the WindowsDesktop SDK
+    adds automatically when <UseWindowsForms>true</UseWindowsForms> is set:
+      • System.Windows.Forms — collides with WPF on UserControl, KeyEventArgs,
+                               MouseEventArgs, Application, etc.
+      • System.Drawing       — collides with WPF on Color, Pen, Brush.
+    All WinForms / GDI usage in this project is already fully-qualified
+    (System.Windows.Forms.ColorDialog, System.Windows.Forms.Screen, etc.) so
+    nothing relies on these being implicit. The assemblies stay referenced for
+    those fully-qualified callers; we just stop pulling them into every .cs file.
+  -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
 </Project>

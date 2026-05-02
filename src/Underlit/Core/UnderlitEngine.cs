@@ -274,11 +274,23 @@ public sealed class UnderlitEngine : IDisposable
     /// committing the value to <see cref="AppSettings.WarmthKelvin"/>. Pair
     /// with <see cref="EndWarmthPreview"/> on mouse-up; the scheduler's next
     /// tick (≤30 s) will reassert the schedule's actual current-time warmth.
+    ///
+    /// v0.6.34: snaps directly to the target instead of starting a fresh
+    /// ramp on every mouse-move. The previous behaviour kicked
+    /// <see cref="StartRamp"/> ~60 times per second, which restarted the
+    /// gamma lerp's start point each frame and made the screen visibly
+    /// flicker during a drag. Snap + a single immediate gamma write per
+    /// tick gives smooth tracking.
     /// </summary>
     public void PreviewWarmth(int kelvin)
     {
-        _targetWarmth = Math.Clamp(kelvin, 1500, 6500);
-        StartRamp();
+        int newTarget = Math.Clamp(kelvin, 1500, 6500);
+        if (newTarget == _targetWarmth && _currentWarmthRendered == newTarget) return;
+        _targetWarmth = newTarget;
+        _currentWarmthRendered = newTarget;
+        // Stop any in-flight ramp — we're now snapping per-frame.
+        _rampTimer?.Stop();
+        ApplySoftwareNow();
         LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
     }
 

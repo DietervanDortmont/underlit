@@ -130,15 +130,35 @@ public partial class SettingsWindow : Window
         ScheduleGraph.SizeChanged += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
-        // Night-warmth slider drives BOTH deep-warmth anchors (BedtimeKelvin
-        // + WakeupStartKelvin) in lockstep when the USER moves it. Programmatic
-        // updates (e.g. after a per-anchor vertical drag, where we want to
-        // reflect the dragged kelvin in the slider position) suppress this
-        // handler so the per-anchor values aren't stomped.
+        // v0.6.34: night-warmth slider only writes to the per-anchor kelvins
+        // when the USER is actively interacting with it (mouse-down or
+        // keyboard focus). Programmatic value changes — from a graph drag,
+        // from LoadActiveProfileIntoFields, from a profile switch — must NOT
+        // touch the per-anchor kelvins, otherwise the user's independent
+        // per-anchor edits get auto-linked behind their back.
+        //
+        // The previous boolean-flag suppression had subtle holes: any code
+        // path that forgot to wrap a programmatic Value assignment in the
+        // suppression scope would silently re-link the bottom anchors. The
+        // new gate uses Mouse.Captured / IsKeyboardFocused, which only ever
+        // resolves to true during real user input, never during code-driven
+        // updates.
+        SldNightWarmth.PreviewMouseLeftButtonDown += (_, _) => _nightSliderUserActive = true;
+        SldNightWarmth.PreviewMouseLeftButtonUp   += (_, _) => _nightSliderUserActive = false;
+        SldNightWarmth.LostMouseCapture           += (_, _) => _nightSliderUserActive = false;
         SldNightWarmth.ValueChanged += (_, _) =>
         {
-            if (_suppressNightWarmthSliderEvents) return;
+            // Always update the legacy NightWarmthKelvin so the value
+            // chip + tint preview track the slider. The per-anchor write
+            // below is gated on real user interaction.
             int k = (int)SldNightWarmth.Value;
+            _snapshot.NightWarmthKelvin = k;
+            UpdateAllValueChips();
+
+            bool userIsDriving = _nightSliderUserActive
+                              || SldNightWarmth.IsKeyboardFocusWithin;
+            if (!userIsDriving) return;
+
             var p = _snapshot.ActiveProfile();
             p.NightWarmthKelvin   = k;
             p.BedtimeKelvin       = k;
@@ -492,6 +512,12 @@ public partial class SettingsWindow : Window
     /// X-coordinate calculations on the graph offset by this much from the
     /// left edge so the curve doesn't draw under the labels.</summary>
     private const double GraphYAxisWidth = 36;
+    /// <summary>Top breathing-room margin (dip). v0.6.34: dots and the curve
+    /// at 6500 K (the maximum) used to draw flush against the top edge of the
+    /// card, so they read as cramped. Reserving a small strip lets the
+    /// 6500 K anchor circles sit fully inside the gradient backdrop with a
+    /// visible halo above them.</summary>
+    private const double GraphTopPadding = 10;
 
     /// <summary>Hit radius (dip) for the draggable circles. Larger than the visual
     /// radius so the user has a generous click target.</summary>
@@ -516,8 +542,11 @@ public partial class SettingsWindow : Window
         // Carve out reserved strips:
         //   • Bottom GraphLabelHeight dip → X-axis time labels.
         //   • Left   GraphYAxisWidth dip → Y-axis kelvin labels.
-        // The curve area is everything else.
-        double curveH    = Math.Max(1, h - GraphLabelHeight);
+        //   • Top    GraphTopPadding dip → halo above the 6500 K row so dots
+        //                                  there don't draw flush to the card edge.
+        // The curve area is what's left in the middle.
+        double curveTop  = GraphTopPadding;
+        double curveH    = Math.Max(1, h - GraphLabelHeight - GraphTopPadding);
         double curveLeft = GraphYAxisWidth;
         double curveW    = Math.Max(1, w - curveLeft);
 
@@ -533,7 +562,7 @@ public partial class SettingsWindow : Window
                 Color.FromArgb(0x28, 0xFF, 0xA0, 0x50),  // warm wash at bottom
                 90),
         };
-        Canvas.SetLeft(bg, curveLeft); Canvas.SetTop(bg, 0);
+        Canvas.SetLeft(bg, curveLeft); Canvas.SetTop(bg, curveTop);
         ScheduleGraph.Children.Add(bg);
 
         // Faint vertical hour markers at 6, 12, 18 — orientation cues.
@@ -542,7 +571,7 @@ public partial class SettingsWindow : Window
             double x = curveLeft + hour / 24.0 * curveW;
             var marker = new System.Windows.Shapes.Line
             {
-                X1 = x, Y1 = 0, X2 = x, Y2 = curveH,
+                X1 = x, Y1 = curveTop, X2 = x, Y2 = curveTop + curveH,
                 Stroke = new SolidColorBrush(Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF)),
                 StrokeThickness = 1,
             };
@@ -565,7 +594,7 @@ public partial class SettingsWindow : Window
             // Clamp to the graph's full width so the leftmost/rightmost labels don't clip.
             double labelX = Math.Max(0, Math.Min(w - labelW, x - labelW / 2));
             Canvas.SetLeft(label, labelX);
-            Canvas.SetTop(label, curveH + 2);
+            Canvas.SetTop(label, curveTop + curveH + 2);
             ScheduleGraph.Children.Add(label);
         }
 
@@ -574,7 +603,7 @@ public partial class SettingsWindow : Window
         // matching the y-mapping used by both the curve and the drag handler.
         foreach (int kelvin in new[] { 6500, 5250, 4000, 2750, 1500 })
         {
-            double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
+            double y = curveTop + curveH - ((kelvin - 1500) / 5000.0) * curveH;
             var label = new TextBlock
             {
                 Text = $"{kelvin} K",
@@ -587,7 +616,7 @@ public partial class SettingsWindow : Window
             // Right-align inside the reserved left strip, with a 4 dip gutter.
             double labelX = Math.Max(0, curveLeft - labelW - 4);
             // Clamp vertically so the top/bottom labels don't get cut off.
-            double labelY = Math.Max(0, Math.Min(curveH - labelH, y - labelH / 2));
+            double labelY = Math.Max(0, Math.Min(h - labelH, y - labelH / 2));
             Canvas.SetLeft(label, labelX);
             Canvas.SetTop(label, labelY);
             ScheduleGraph.Children.Add(label);
@@ -604,7 +633,7 @@ public partial class SettingsWindow : Window
             DateTime t = DateTime.Today.AddHours(hour);
             int k = Underlit.Core.Scheduler.ComputeWarmth(t, s);
             double x = curveLeft + hour / 24.0 * curveW;
-            double y = curveH - ((k - 1500) / 5000.0) * curveH;
+            double y = curveTop + curveH - ((k - 1500) / 5000.0) * curveH;
             pts.Add(new Point(x, y));
         }
 
@@ -619,10 +648,10 @@ public partial class SettingsWindow : Window
 
         // Draggable anchor points — each pulls its kelvin from the active
         // profile so vertical drag really retargets warmth at that anchor.
-        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.WakeupStartKelvin,  curveLeft, curveW, curveH);
-        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   s.WakeupEndKelvin,    curveLeft, curveW, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, curveLeft, curveW, curveH);
-        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   curveLeft, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupStart, s.WakeupStart, s.WakeupStartKelvin,  curveLeft, curveTop, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.WakeupEnd,   s.WakeupEnd,   s.WakeupEndKelvin,    curveLeft, curveTop, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeStart, s.BedtimeStart, s.BedtimeStartKelvin, curveLeft, curveTop, curveW, curveH);
+        DrawSchedulePoint(SchedulePointId.BedtimeEnd,   s.BedtimeEnd,   s.BedtimeEndKelvin,   curveLeft, curveTop, curveW, curveH);
 
         // "Now" indicator — a vertical line at the current time so the user can
         // read off "what kelvin am I targeting right now" at a glance.
@@ -630,7 +659,7 @@ public partial class SettingsWindow : Window
         double nowX = curveLeft + (now.Hour + now.Minute / 60.0) / 24.0 * curveW;
         var nowLine = new System.Windows.Shapes.Line
         {
-            X1 = nowX, Y1 = 0, X2 = nowX, Y2 = curveH,
+            X1 = nowX, Y1 = curveTop, X2 = nowX, Y2 = curveTop + curveH,
             Stroke = new SolidColorBrush(Color.FromArgb(0xC0, 0xFF, 0xFF, 0xFF)),
             StrokeThickness = 1.5,
             StrokeDashArray = new System.Windows.Media.DoubleCollection(new[] { 3.0, 3.0 }),
@@ -644,10 +673,10 @@ public partial class SettingsWindow : Window
     /// point was grabbed. v0.6.30: takes the curve area's left offset and width
     /// so dots draw aligned with the (now Y-axis-labelled) curve, not the raw
     /// canvas left edge.</summary>
-    private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double curveLeft, double curveW, double curveH)
+    private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double curveLeft, double curveTop, double curveW, double curveH)
     {
         double x = curveLeft + t.AsHourFractional / 24.0 * curveW;
-        double y = curveH - ((kelvin - 1500) / 5000.0) * curveH;
+        double y = curveTop + curveH - ((kelvin - 1500) / 5000.0) * curveH;
 
         // Larger transparent hit-target — improves drag affordance without
         // making the visible marker bulky. Cursor is "SizeAll" because each
@@ -701,7 +730,15 @@ public partial class SettingsWindow : Window
         {
             _draggingSchedulePoint = id;
             ScheduleGraph.CaptureMouse();
-            UpdatePointFromMouse(id, pos.X, pos.Y);
+            // v0.6.34: deliberately do NOT call UpdatePointFromMouse here.
+            // The previous version applied the click position immediately,
+            // which fired a WarmthPreviewRequested with the dot's existing
+            // kelvin → the engine ramped from whatever the screen was
+            // showing to (e.g.) 6500 K on a click of the BedtimeStart
+            // anchor. That mid-evening "screen flashes neutral, then ramps
+            // back as you drag" sequence was the flicker the user reported.
+            // OnGraphMouseMove handles the first real update once the user
+            // actually moves; clicks-without-drag are now a true no-op.
             e.Handled = true;
         }
     }
@@ -744,15 +781,17 @@ public partial class SettingsWindow : Window
         double w = ScheduleGraph.ActualWidth;
         double h = ScheduleGraph.ActualHeight;
         if (w <= 0 || h <= 0) return;
-        double curveH    = Math.Max(1, h - GraphLabelHeight);
+        double curveTop  = GraphTopPadding;
+        double curveH    = Math.Max(1, h - GraphLabelHeight - GraphTopPadding);
         double curveLeft = GraphYAxisWidth;
         double curveW    = Math.Max(1, w - curveLeft);
 
-        // Subtract the Y-axis label strip before mapping x → hour, otherwise
-        // a click at canvas x=0 would resolve to "00:00" but the curve at
-        // hour 0 actually draws at x=curveLeft.
+        // Subtract the Y-axis label strip + the top breathing-room strip
+        // before mapping into curve-space, otherwise a click at canvas
+        // (0,0) would resolve to (00:00, 6500K) but the curve at that
+        // anchor actually draws at (curveLeft, curveTop).
         double clampedX = Math.Clamp(mouseX - curveLeft, 0, curveW);
-        double clampedY = Math.Clamp(mouseY, 0, curveH);
+        double clampedY = Math.Clamp(mouseY - curveTop, 0, curveH);
         double hour = clampedX / curveW * 24.0;
         TimeOfDay t = TimeOfDayFromHourFractional(hour);
         // Invert: top of curve area = max kelvin (6500), bottom = 1500.
@@ -789,13 +828,13 @@ public partial class SettingsWindow : Window
         // still reads back something sensible after a drag.
         p.NightWarmthKelvin = Math.Min(p.BedtimeKelvin, p.WakeupStartKelvin);
 
-        // Mirror the post-drag deepest kelvin into the slider POSITION (visual
-        // only — handler is suppressed). This is what the user reported was
-        // missing in v0.6.28: the slider stayed at its pre-drag position even
-        // after the user released, making it look like nothing had changed.
-        _suppressNightWarmthSliderEvents = true;
-        try { SldNightWarmth.Value = p.NightWarmthKelvin; }
-        finally { _suppressNightWarmthSliderEvents = false; }
+        // Mirror the post-drag deepest kelvin into the slider's visual
+        // position so the slider stays in sync with whichever anchor is
+        // deeper. v0.6.34: no need to suppress — the slider's ValueChanged
+        // handler now gates the per-anchor write on
+        // _nightSliderUserActive / IsKeyboardFocusWithin, both of which
+        // are false during this programmatic assignment.
+        SldNightWarmth.Value = p.NightWarmthKelvin;
 
         _snapshot.EnsureScheduleCurveDerived();
         RedrawScheduleGraph();
@@ -1119,11 +1158,14 @@ public partial class SettingsWindow : Window
     // ---- Profile management ----
 
     private bool _suppressProfileSelectionEvents;
-    /// <summary>While true, the SldNightWarmth ValueChanged handler skips its
-    /// "set both deep anchors" logic. Set during programmatic slider updates
-    /// (e.g., after a per-anchor graph drag) so the dragged-in kelvin isn't
-    /// instantly stomped back to the slider's pre-drag value.</summary>
-    private bool _suppressNightWarmthSliderEvents;
+    /// <summary>v0.6.34: true while the user is actively pressing the mouse
+    /// on the night-warmth slider. Used by the slider's ValueChanged handler
+    /// to decide whether to write the new value into BedtimeKelvin /
+    /// WakeupStartKelvin (= link the bottom anchors to the slider). Only true
+    /// during real user interaction, never during programmatic Value writes,
+    /// so per-anchor edits made via graph drag survive any subsequent
+    /// programmatic slider updates.</summary>
+    private bool _nightSliderUserActive;
 
     /// <summary>Repopulate the profile dropdown from <c>_snapshot.WarmthProfiles</c>.
     /// Keeps the active selection on whichever profile name matches
@@ -1170,17 +1212,10 @@ public partial class SettingsWindow : Window
         TxtWakeupStart.Text  = Fmt(active.WakeupStart);
         TxtWakeTime.Text     = Fmt(active.WakeTime);
 
-        // Programmatic slider update — suppress the ValueChanged handler so
-        // it doesn't stomp the per-anchor kelvins back to the slider value.
-        _suppressNightWarmthSliderEvents = true;
-        try
-        {
-            SldNightWarmth.Value = Math.Min(active.BedtimeKelvin, active.WakeupStartKelvin);
-        }
-        finally
-        {
-            _suppressNightWarmthSliderEvents = false;
-        }
+        // Programmatic slider update — the handler gates the per-anchor
+        // write on _nightSliderUserActive / IsKeyboardFocusWithin, both of
+        // which are false here, so nothing gets stomped.
+        SldNightWarmth.Value = Math.Min(active.BedtimeKelvin, active.WakeupStartKelvin);
     }
 
     /// <summary>Push the four time-of-day input fields into the active profile.

@@ -41,9 +41,17 @@ public sealed class LiveGlassController : IDisposable
 
     private readonly Window _window;
     private readonly ImageBrush _targetBrush;
+    /// <summary>v0.6.30: separate brush for the highlights overlay layer (rim +
+    /// specular). Sits ABOVE the brightness bar fill in the OSD's z-order so
+    /// the bar can never cover the rim/spec. Optional — if the caller passes
+    /// null, the renderer's highlight buffer is simply not surfaced and the
+    /// behaviour falls back to the v0.6.29 "all-in-one" body bitmap. New
+    /// XAML always passes a brush, so null path is just legacy safety.</summary>
+    private readonly ImageBrush? _highlightsBrush;
     private readonly GlassRenderer.Scratch _scratch = new();
 
     private WriteableBitmap? _bitmap;
+    private WriteableBitmap? _highlightsBitmap;
     private bool _disposed;
 
     public float LastPillLuminance { get; private set; } = 0.5f;
@@ -72,10 +80,11 @@ public sealed class LiveGlassController : IDisposable
     private int _cropBmpW;
     private int _cropBmpH;
 
-    public LiveGlassController(Window window, ImageBrush targetBrush)
+    public LiveGlassController(Window window, ImageBrush targetBrush, ImageBrush? highlightsBrush = null)
     {
         _window = window ?? throw new ArgumentNullException(nameof(window));
         _targetBrush = targetBrush ?? throw new ArgumentNullException(nameof(targetBrush));
+        _highlightsBrush = highlightsBrush;
     }
 
     /// <summary>
@@ -330,9 +339,9 @@ public sealed class LiveGlassController : IDisposable
         if (!GlassRenderer.Render(capture, _scratch, parameters)) return;
         LastPillLuminance = GlassRenderer.LastPillLuminance;
 
+        double bitmapDpi = 96.0 * scale;
         if (_bitmap == null || _bitmap.PixelWidth != physFullW || _bitmap.PixelHeight != physFullH)
         {
-            double bitmapDpi = 96.0 * scale;
             _bitmap = new WriteableBitmap(physFullW, physFullH, bitmapDpi, bitmapDpi,
                                             PixelFormats.Bgra32, null);
         }
@@ -349,6 +358,32 @@ public sealed class LiveGlassController : IDisposable
             _bitmap.Unlock();
         }
         _targetBrush.ImageSource = _bitmap;
+
+        // Highlights overlay — second WriteableBitmap fed from
+        // scratch.OutputHighlights. Sits ABOVE the brightness bar fill so the
+        // bar can't cover the rim/spec.
+        if (_highlightsBrush != null)
+        {
+            if (_highlightsBitmap == null
+                || _highlightsBitmap.PixelWidth != physFullW
+                || _highlightsBitmap.PixelHeight != physFullH)
+            {
+                _highlightsBitmap = new WriteableBitmap(physFullW, physFullH, bitmapDpi, bitmapDpi,
+                                                          PixelFormats.Bgra32, null);
+            }
+            _highlightsBitmap.Lock();
+            try
+            {
+                int totalBytes = _scratch.FullStride * _scratch.FullH;
+                Marshal.Copy(_scratch.OutputHighlights, 0, _highlightsBitmap.BackBuffer, totalBytes);
+                _highlightsBitmap.AddDirtyRect(new Int32Rect(0, 0, physFullW, physFullH));
+            }
+            finally
+            {
+                _highlightsBitmap.Unlock();
+            }
+            _highlightsBrush.ImageSource = _highlightsBitmap;
+        }
     }
 
     public void Dispose()
@@ -361,6 +396,7 @@ public sealed class LiveGlassController : IDisposable
         try { _cropBmp?.Dispose(); } catch { }
         _cropBmp = null;
         _bitmap = null;
+        _highlightsBitmap = null;
     }
 
     private const int MONITOR_DEFAULTTOPRIMARY = 1;

@@ -46,13 +46,26 @@ public partial class OsdWindow : Window
     private const int ShowDurationMs = 1300;
 
     // ---- Dynamic-Island entry animation tunables ----
-    // The pill morphs from a circle (height×height, fully rounded) into the full
-    // pill shape via animating WindowRoot.Clip's RectangleGeometry — this gives a
-    // TRUE shape morph with the corners staying perfectly rounded throughout
-    // (a ScaleTransform would distort the corner radii in screen space).
-    // Combined with a Y-translate slide and a back-ease (overshoot) we get the
-    // spring/bounce feel.
-    private const int    EntryDurationMs = 460;
+    // The entry plays in two distinct phases so the seed circle reads as a real
+    // shape rather than a fleeting in-between:
+    //   Phase 1 (0..SlidePhaseMs)   — pure CIRCLE rises from below the taskbar
+    //                                 to its rest Y. The clip rect stays at
+    //                                 SeedCircleRect the whole time, so the
+    //                                 user clearly sees a small round seed
+    //                                 swimming up from behind the taskbar.
+    //   Phase 2 (SlidePhaseMs..end) — circle MORPHS into the full pill. Slide
+    //                                 has already settled (or is settling
+    //                                 with overshoot) so the morph is the only
+    //                                 large motion. Total entry takes
+    //                                 SlidePhaseMs + MorphPhaseMs to play.
+    //
+    // The two animations overlap by MorphOverlapMs so the morph kicks in
+    // slightly before the slide settles — keeps the motion continuous instead
+    // of feeling like two strict phases bolted together.
+    private const int    SlidePhaseMs    = 380;   // pure circle slide up
+    private const int    MorphPhaseMs    = 380;   // circle → pill morph
+    private const int    MorphOverlapMs  = 60;    // morph starts this many ms before slide ends
+    private const int    EntryDurationMs = SlidePhaseMs + MorphPhaseMs - MorphOverlapMs;
     private const int    FadeInDurationMs = 240;
     private const int    ExitDurationMs   = 220;
     /// <summary>
@@ -324,6 +337,30 @@ public partial class OsdWindow : Window
 
         _entrySlide = new TranslateTransform();
         WindowRoot.RenderTransform = _entrySlide;
+    }
+
+    /// <summary>
+    /// Slot the OSD window into z-order just BELOW the Windows taskbar
+    /// (Shell_TrayWnd) so the entry/exit slide animation passes BEHIND the
+    /// taskbar rather than drawing on top of it. Both windows are in the
+    /// topmost group, so Windows respects the explicit insert-after request
+    /// inside that group — meaning the OSD still floats above normal app
+    /// windows, just not above the taskbar.
+    ///
+    /// Called every Show() because Windows tends to re-promote topmost
+    /// windows to the front of the topmost group on activation, which would
+    /// undo our placement.
+    /// </summary>
+    private void DropBelowTaskbar()
+    {
+        if (Hwnd == IntPtr.Zero) return;
+        IntPtr tray = NativeMethods.FindWindow("Shell_TrayWnd", null);
+        if (tray == IntPtr.Zero) return;
+        NativeMethods.SetWindowPos(
+            Hwnd, tray,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE
+            | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
     }
 
     /// <summary>The Rect that, used with the WindowRoot clip, exposes the entire visible
@@ -728,8 +765,10 @@ public partial class OsdWindow : Window
         // mode flip — the next Flash() will repaint cleanly.
         if (!isGlass)
         {
-            GlassBackdrop.Visibility = Visibility.Collapsed;
+            GlassBackdrop.Visibility   = Visibility.Collapsed;
             GlassBackdropBrush.ImageSource = null;
+            GlassHighlights.Visibility = Visibility.Collapsed;
+            GlassHighlightsBrush.ImageSource = null;
         }
 
         // Bar elements
@@ -839,9 +878,10 @@ public partial class OsdWindow : Window
     {
         if (_liveGlass == null)
         {
-            _liveGlass = new LiveGlassController(this, GlassBackdropBrush);
+            _liveGlass = new LiveGlassController(this, GlassBackdropBrush, GlassHighlightsBrush);
         }
-        GlassBackdrop.Visibility = Visibility.Visible;
+        GlassBackdrop.Visibility   = Visibility.Visible;
+        GlassHighlights.Visibility = Visibility.Visible;
 
         if (_glassLiveCapture)
         {
@@ -1024,29 +1064,44 @@ public partial class OsdWindow : Window
             _entrySlide.Y   = SlideFromBelowDip;
             Opacity         = 0;
             Show();
+            // Drop us into z-order just BELOW the taskbar so the slide rises
+            // FROM BEHIND it rather than over it. Has to be after Show() because
+            // before that the window has no z-order to manipulate.
+            DropBelowTaskbar();
 
-            var spring = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = EntryBackAmplitude };
+            var spring  = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = EntryBackAmplitude };
+            var smooth  = new QuadraticEase { EasingMode = EasingMode.EaseOut };
 
-            var rectAnim = new RectAnimation
-            {
-                From = SeedCircleRect(),
-                To   = FullPillRect(),
-                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
-                EasingFunction = spring,
-            };
+            // Phase 1: circle slides up from below the taskbar to rest. No
+            // shape morph during this leg — the rect stays at SeedCircleRect
+            // because we haven't started the rect animation yet.
             var slideAnim = new DoubleAnimation
             {
                 From = SlideFromBelowDip,
                 To   = 0,
-                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
+                Duration = TimeSpan.FromMilliseconds(SlidePhaseMs),
                 EasingFunction = spring,
             };
+
+            // Phase 2: circle morphs into the full pill, beginning a hair
+            // before the slide finishes so the motion feels continuous.
+            // Smooth ease (not Back) here — overshoot looks weird when a wide
+            // pill is springing to its width.
+            var rectAnim = new RectAnimation
+            {
+                From = SeedCircleRect(),
+                To   = FullPillRect(),
+                BeginTime = TimeSpan.FromMilliseconds(SlidePhaseMs - MorphOverlapMs),
+                Duration = TimeSpan.FromMilliseconds(MorphPhaseMs),
+                EasingFunction = smooth,
+            };
+
             var fadeIn = new DoubleAnimation
             {
                 From = 0,
                 To   = 1.0,
                 Duration = TimeSpan.FromMilliseconds(FadeInDurationMs),
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+                EasingFunction = smooth,
             };
 
             _entryClip.BeginAnimation(RectangleGeometry.RectProperty, rectAnim);

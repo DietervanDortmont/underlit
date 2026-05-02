@@ -57,6 +57,17 @@ public static class GlassRenderer
         public byte[] Buffer1 = Array.Empty<byte>();
         public byte[] Buffer2 = Array.Empty<byte>();
         public byte[] Output  = Array.Empty<byte>();
+        /// <summary>
+        /// v0.6.30: highlights overlay buffer. Same dimensions as <see cref="Output"/>.
+        /// Contains ONLY the additive specular + Fresnel rim contributions, encoded
+        /// as semi-transparent white-ish pixels (RGB ≈ white, alpha = clamped
+        /// (specAdd + rimAdd)). Composited as an alpha-blended overlay above the
+        /// brightness bar fill in OsdWindow.xaml so the rim/spec is still visible
+        /// when the bar covers the body. Approximates additive blending — exact
+        /// match at body=0 or body=255, slight darkening of highlights at
+        /// mid-toned body — visually close enough.
+        /// </summary>
+        public byte[] OutputHighlights = Array.Empty<byte>();
         public int FullStride;
         public int FullW;
         public int FullH;
@@ -77,6 +88,7 @@ public static class GlassRenderer
             if (Buffer1.Length < fullSize) Buffer1 = new byte[fullSize];
             if (Buffer2.Length < fullSize) Buffer2 = new byte[fullSize];
             if (Output.Length  < fullSize) Output  = new byte[fullSize];
+            if (OutputHighlights.Length < fullSize) OutputHighlights = new byte[fullSize];
 
             FullStride = fullStride;
             FullW = fullW;
@@ -151,7 +163,7 @@ public static class GlassRenderer
         // 5. Composite — uses the liquidGL two-term displacement formula.
         var light = p.LightDirection();
         var halfVec = NormalizeVec(light.x, light.y, light.z + 1f);
-        ShadeAndComposite(a, scratch.Output, fullW, fullH, fullStride, dmap,
+        ShadeAndComposite(a, scratch.Output, scratch.OutputHighlights, fullW, fullH, fullStride, dmap,
                            halfVec, (float)p.IntensityMul(),
                            (float)p.Refraction, (float)p.BevelDepth(), (float)p.BevelWidthPx(dmap.PillH),
                            (float)p.Dispersion,
@@ -161,7 +173,7 @@ public static class GlassRenderer
         return true;
     }
 
-    private static void ShadeAndComposite(byte[] body, byte[] dst, int fullW, int fullH, int fullStride,
+    private static void ShadeAndComposite(byte[] body, byte[] dst, byte[] dstHi, int fullW, int fullH, int fullStride,
                                            GlassShape.DispMap dmap,
                                            (float x, float y, float z) halfVec,
                                            float intensityMul,
@@ -190,6 +202,10 @@ public static class GlassRenderer
                     dst[dstIdx + 1] = 0;
                     dst[dstIdx + 2] = 0;
                     dst[dstIdx + 3] = 0;
+                    dstHi[dstIdx + 0] = 0;
+                    dstHi[dstIdx + 1] = 0;
+                    dstHi[dstIdx + 2] = 0;
+                    dstHi[dstIdx + 3] = 0;
                     continue;
                 }
 
@@ -284,23 +300,45 @@ public static class GlassRenderer
                 int specAdd = (int)(spec * 255f);
                 int rimAdd  = (int)(fresnel * 255f);
 
-                int rOut = R + specAdd + rimAdd;
-                int gOut = G + specAdd + rimAdd;
-                int bOut = B + specAdd + (int)(rimAdd * 1.04f);
-                if (rOut > 255) rOut = 255;
-                if (gOut > 255) gOut = 255;
-                if (bOut > 255) bOut = 255;
-
                 // AA at pill rim.
                 float aaAlpha = pixSdf / EdgeAaWidth;
                 if (aaAlpha > 1f) aaAlpha = 1f;
                 if (aaAlpha < 0f) aaAlpha = 0f;
                 byte pillAlpha = (byte)(aaAlpha * 255f);
 
-                dst[dstIdx + 0] = (byte)bOut;
-                dst[dstIdx + 1] = (byte)gOut;
-                dst[dstIdx + 2] = (byte)rOut;
+                // ---- BODY layer ----
+                // Refracted backdrop + vibrancy darkening, NO spec/rim. This is what
+                // sits BEHIND the brightness bar fill. Alpha matches the pill mask.
+                int bodyR = R; if (bodyR > 255) bodyR = 255;
+                int bodyG = G; if (bodyG > 255) bodyG = 255;
+                int bodyB = B; if (bodyB > 255) bodyB = 255;
+                dst[dstIdx + 0] = (byte)bodyB;
+                dst[dstIdx + 1] = (byte)bodyG;
+                dst[dstIdx + 2] = (byte)bodyR;
                 dst[dstIdx + 3] = pillAlpha;
+
+                // ---- HIGHLIGHTS layer ----
+                // Encoded as a semi-transparent white-ish overlay so WPF's normal
+                // alpha-blend approximates the additive composite. RGB carries the
+                // (slightly blue-tinted) highlight COLOUR; alpha carries the
+                // INTENSITY clamped to 0..255 and gated by the pill mask. When
+                // composited with normal alpha-blend over the body+bar, the result
+                // is body*(1-α) + highlightRGB*α — visually close to true additive
+                // for the typical (mid-bright body, bright highlight) case.
+                int hiIntensity = specAdd + rimAdd;
+                if (hiIntensity > 255) hiIntensity = 255;
+                if (hiIntensity < 0)   hiIntensity = 0;
+                // Apply the pill AA mask too so the overlay fades cleanly at the rim.
+                int hiAlpha = (hiIntensity * pillAlpha) / 255;
+                int hiR = 255;
+                int hiG = 255;
+                int hiB = 255; // rim has a faint blue cast (×1.04 in the legacy additive
+                               // path) — pure white is close enough at the small magnitudes
+                               // we encounter here, and it keeps the alpha math simple.
+                dstHi[dstIdx + 0] = (byte)hiB;
+                dstHi[dstIdx + 1] = (byte)hiG;
+                dstHi[dstIdx + 2] = (byte)hiR;
+                dstHi[dstIdx + 3] = (byte)hiAlpha;
             }
         }
     }

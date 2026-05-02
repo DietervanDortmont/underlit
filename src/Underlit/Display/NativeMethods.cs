@@ -57,7 +57,15 @@ internal static class NativeMethods
     public const uint SWP_NOACTIVATE  = 0x0010;
     public const uint SWP_NOOWNERZORDER = 0x0200;
     public const uint SWP_SHOWWINDOW  = 0x0040;
-    public static readonly IntPtr HWND_TOPMOST = new(-1);
+    public static readonly IntPtr HWND_TOPMOST    = new(-1);
+    public static readonly IntPtr HWND_NOTOPMOST  = new(-2);
+    public static readonly IntPtr HWND_TOP        = new(0);
+    public static readonly IntPtr HWND_BOTTOM     = new(1);
+
+    /// <summary>FindWindow — used to locate Shell_TrayWnd (the Windows taskbar)
+    /// so the OSD can be slid into z-order just BELOW the taskbar.</summary>
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
     // ---------- Monitor enumeration ----------
 

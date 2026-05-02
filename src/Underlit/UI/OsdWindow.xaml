@@ -61,6 +61,60 @@
         <!-- Tint layer for Solid/Subtle modes (NOT used in LiquidGlass — it's transparent). -->
         <Border x:Name="TintLayer" CornerRadius="23" Margin="10"/>
 
+        <!-- ====== Solid-fill bar layer (OsdBarStyle.SolidFill) ======
+             v0.6.30: moved UP in the z-order. Used to sit just below ContentRoot,
+             which meant the brightness bar's solid fill covered the static glass
+             gradients (Specular/SideRefraction/BottomSheen/EdgeRing) AND the
+             renderer-produced rim/highlights. Now sits BELOW the static
+             gradients and BELOW the new GlassHighlights overlay (added below
+             ContentRoot), so the bar colour acts as a backdrop layer and all
+             the lighting effects are still visible on top of it.
+
+             Spans the FULL pill width — beginning to end, not just the column
+             after the icon. The pill's SetWindowRgn clip handles the rounded
+             outer corners, so the fills themselves are dead-rectangular: the
+             leading edge (where each fill meets the centre) is a straight
+             vertical line and the outer edge is whatever the pill clips it to.
+
+             Brightness 0 corresponds to the GEOMETRIC centre of the pill —
+             neg fill grows leftward (covering the icon area), pos fill grows
+             rightward — same model Apple uses for its brightness bar. -->
+        <Grid x:Name="SolidFillRoot" Margin="10" Visibility="Collapsed"
+              IsHitTestVisible="False">
+            <!-- Brightness: split into two halves so the fill grows outward
+                 from the geometric centre. Fill widths are driven from
+                 UpdateBrightnessBar(). -->
+            <Grid x:Name="SolidFillBrightness">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <!-- v0.6.19: same 0..100 grow-from-left logic as the thin bar.
+                     SolidFillNeg is the dim-shade half, SolidFillPos is the accent
+                     half. Both anchored Left, growing rightward into their column. -->
+                <Border Grid.Column="0" x:Name="SolidFillNeg"
+                        HorizontalAlignment="Left" Width="0"
+                        Background="#FFE5B675"/>
+                <Border Grid.Column="1" x:Name="SolidFillPos"
+                        HorizontalAlignment="Left" Width="0"
+                        Background="#FFFFFFFF"/>
+            </Grid>
+            <!-- Warmth: single fill that grows from the left edge of the pill
+                 toward the right as kelvin increases. Uses the same warmth
+                 gradient brush the small bar does. -->
+            <Border x:Name="SolidFillWarmthBar"
+                    HorizontalAlignment="Left" Width="0"
+                    Visibility="Collapsed">
+                <Border.Background>
+                    <LinearGradientBrush x:Name="SolidFillWarmthGradient"
+                                         StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop x:Name="SolidFillWarmthStartStop" Offset="0" Color="#FFFF5A00"/>
+                        <GradientStop x:Name="SolidFillWarmthEndStop"   Offset="1" Color="#FFFFF9FB"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+        </Grid>
+
         <!-- ====== Liquid Glass overlay stack ======
              We can't access the DWM-blurred backdrop pixels for a real refraction
              shader, so we simulate the visual cues a glass surface produces:
@@ -126,56 +180,19 @@
                 BorderThickness="1"
                 IsHitTestVisible="False"/>
 
-        <!-- ====== Solid-fill bar layer (OsdBarStyle.SolidFill) ======
-             Spans the FULL pill width — beginning to end, not just the column
-             after the icon. The pill's SetWindowRgn clip handles the rounded
-             outer corners, so the fills themselves are dead-rectangular: the
-             leading edge (where each fill meets the centre) is a straight
-             vertical line and the outer edge is whatever the pill clips it to.
-
-             Brightness 0 corresponds to the GEOMETRIC centre of the pill —
-             neg fill grows leftward (covering the icon area), pos fill grows
-             rightward — same model Apple uses for its brightness bar.
-
-             This layer sits ABOVE TintLayer/EdgeRing but BELOW ContentRoot, so
-             the icon and the existing thin-bar widgets overlay on top of it
-             when both are visible. (In Solid-fill mode the thin-bar widgets
-             are hidden via ApplyBarStyle.) -->
-        <Grid x:Name="SolidFillRoot" Margin="10" Visibility="Collapsed"
-              IsHitTestVisible="False">
-            <!-- Brightness: split into two halves so the fill grows outward
-                 from the geometric centre. Fill widths are driven from
-                 UpdateBrightnessBar(). -->
-            <Grid x:Name="SolidFillBrightness">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <!-- v0.6.19: same 0..100 grow-from-left logic as the thin bar.
-                     SolidFillNeg is the dim-shade half, SolidFillPos is the accent
-                     half. Both anchored Left, growing rightward into their column. -->
-                <Border Grid.Column="0" x:Name="SolidFillNeg"
-                        HorizontalAlignment="Left" Width="0"
-                        Background="#FFE5B675"/>
-                <Border Grid.Column="1" x:Name="SolidFillPos"
-                        HorizontalAlignment="Left" Width="0"
-                        Background="#FFFFFFFF"/>
-            </Grid>
-            <!-- Warmth: single fill that grows from the left edge of the pill
-                 toward the right as kelvin increases. Uses the same warmth
-                 gradient brush the small bar does. -->
-            <Border x:Name="SolidFillWarmthBar"
-                    HorizontalAlignment="Left" Width="0"
-                    Visibility="Collapsed">
-                <Border.Background>
-                    <LinearGradientBrush x:Name="SolidFillWarmthGradient"
-                                         StartPoint="0,0" EndPoint="1,0">
-                        <GradientStop x:Name="SolidFillWarmthStartStop" Offset="0" Color="#FFFF5A00"/>
-                        <GradientStop x:Name="SolidFillWarmthEndStop"   Offset="1" Color="#FFFFF9FB"/>
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
-        </Grid>
+        <!-- ===== Liquid Glass HIGHLIGHTS overlay =====
+             v0.6.30: rim + specular layer split out from GlassBackdrop. Sits
+             ABOVE SolidFillRoot, the static glass gradients, and the EdgeRing —
+             so the brightness bar fill never covers the rim line or the
+             specular highlights. Same Stretch=Fill / 300×66 footprint as
+             GlassBackdrop. Hidden in Solid/Subtle modes. -->
+        <Border x:Name="GlassHighlights"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border.Background>
+                <ImageBrush x:Name="GlassHighlightsBrush" Stretch="Fill"/>
+            </Border.Background>
+        </Border>
 
         <!-- Content: icon + bar. No DropShadowEffect — it was casting a faint
              rectangular halo around the bar/icon shapes that read as "weird shadow

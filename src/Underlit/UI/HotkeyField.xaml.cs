@@ -60,20 +60,36 @@ public partial class HotkeyField : UserControl
     {
         InitializeComponent();
 
-        // Click-to-listen anywhere on the field, plus keyboard activation.
-        FieldBorder.MouseLeftButtonDown += (_, e) =>
+        // v0.6.31: hook PreviewMouseLeftButtonDown on `this` (the UserControl
+        // itself) instead of bubbling MouseLeftButtonDown on FieldBorder.
+        // Bubbling was being eaten somewhere between FieldBorder and us in the
+        // SettingsWindow chain, so the click never reached BeginListening.
+        // Tunneling on `this` fires unconditionally for any click inside the
+        // control, regardless of which child element gets hit first.
+        PreviewMouseLeftButtonDown += (_, e) =>
         {
-            // Don't enter listen mode if the user clicked the explicit clear button.
+            // Don't enter listen mode if the user clicked the explicit clear
+            // button — let its own Click handler do the clearing.
             if (e.OriginalSource is DependencyObject d && IsDescendantOf(d, ClearButton))
                 return;
             BeginListening();
+            // Mark handled so the click doesn't bubble out and trigger the
+            // window's focus-shuffle logic, which would fire our
+            // LostKeyboardFocus and immediately cancel listening.
+            e.Handled = true;
         };
         ClearButton.Click += (_, _) => SetValueAndNotify(string.Empty);
 
         // Keyboard accessibility: Space/Enter while focused (but not listening) starts listening.
         PreviewKeyDown += OnPreviewKeyDown;
-        LostFocus      += (_, _) => CancelListening();
-        GotFocus       += (_, _) => UpdateVisuals();
+
+        // LostKeyboardFocus (not LostFocus) — logical LostFocus can spuriously
+        // fire during the click-to-focus handshake before BeginListening even
+        // settles, which would cancel listening before the user can press a
+        // key. Keyboard focus only moves when the user actually navigates away
+        // (Tab, click on another control), which is the right cancel trigger.
+        LostKeyboardFocus += (_, _) => CancelListening();
+        GotFocus          += (_, _) => UpdateVisuals();
 
         Loaded += (_, _) => UpdateVisuals();
     }
@@ -90,9 +106,19 @@ public partial class HotkeyField : UserControl
         if (_listening) return;
         _listening = true;
         _preListenValue = Value;
-        Focus();                  // capture key events on this control
-        Keyboard.Focus(this);
         UpdateVisuals();
+        // Defer focus assignment to the next dispatcher tick. Calling Focus()
+        // inside the click handler races with WPF's internal click-to-focus
+        // logic; once in a while focus would land on the SettingsWindow root
+        // instead of us, key events would never arrive, and the user's first
+        // key-press would do nothing. Pinning to Input priority makes sure we
+        // run before the next user input event is processed.
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_listening) return;
+            Focus();
+            Keyboard.Focus(this);
+        }), DispatcherPriority.Input);
     }
 
     private void CancelListening()

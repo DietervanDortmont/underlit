@@ -120,7 +120,12 @@
 
         <Style x:Key="AppleSlider" TargetType="Slider">
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="MinWidth" Value="180"/>
+            <!-- v0.6.31: dropped from 180 → 80. A 180-dip floor meant the
+                 row's natural width was ~470 dip; narrower windows clipped
+                 the slider's right edge instead of shrinking it. 80 still
+                 leaves the thumb addressable while letting the window narrow
+                 to ~370 dip without overflow. -->
+            <Setter Property="MinWidth" Value="80"/>
             <Setter Property="Margin" Value="0,0,8,0"/>
             <Setter Property="Foreground" Value="{DynamicResource App.Accent}"/>
             <Setter Property="Background" Value="{DynamicResource App.TrackBg}"/>
@@ -1031,7 +1036,7 @@
                                                        Text="How bright the selected groups should be. Independent of screen brightness."/>
                                         </StackPanel>
                                         <Slider Grid.Column="1" x:Name="SldHueBrightness" Style="{StaticResource AppleSlider}"
-                                                Minimum="1" Maximum="254" TickFrequency="10"/>
+                                                Minimum="0" Maximum="100" TickFrequency="5"/>
                                         <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblHueBrightness"/>
                                     </Grid>
                                     <Border Style="{StaticResource RowDivider}"/>

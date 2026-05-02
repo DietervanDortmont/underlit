@@ -104,7 +104,7 @@ public partial class SettingsWindow : Window
 
         // Hue brightness/warmth-offset sliders push settings live (so the
         // HueController in UnderlitHost picks up the new values immediately).
-        SldHueBrightness.ValueChanged   += (_, _) => { LblHueBrightness.Text   = ((int)SldHueBrightness.Value).ToString(); PushSettings(); };
+        SldHueBrightness.ValueChanged   += (_, _) => { LblHueBrightness.Text   = ((int)SldHueBrightness.Value) + "%"; PushSettings(); };
         SldHueWarmthOffset.ValueChanged += (_, _) => { LblHueWarmthOffset.Text = FormatKelvinOffset((int)SldHueWarmthOffset.Value); PushSettings(); };
         ChkHueIgnoreBoost.Checked   += (_, _) => PushSettings();
         ChkHueIgnoreBoost.Unchecked += (_, _) => PushSettings();
@@ -1334,10 +1334,12 @@ public partial class SettingsWindow : Window
         TxtHkToggle.Value = _snapshot.HotkeyToggle         ?? string.Empty;
 
         // Hue Phase 3: brightness slider, warmth-offset slider, ignore-boost toggle, four hotkeys.
-        SldHueBrightness.Value          = _snapshot.HueBrightness;
+        // v0.6.31: slider is 0..100 (user-friendly), AppSettings.HueBrightness
+        // stays in the bridge's native 1..254 range. Convert each direction.
+        SldHueBrightness.Value          = HueBriNativeToPercent(_snapshot.HueBrightness);
         SldHueWarmthOffset.Value        = _snapshot.HueWarmthOffsetKelvin;
         ChkHueIgnoreBoost.IsChecked     = _snapshot.HueIgnoreBoost;
-        LblHueBrightness.Text           = ((int)SldHueBrightness.Value).ToString();
+        LblHueBrightness.Text           = ((int)SldHueBrightness.Value) + "%";
         LblHueWarmthOffset.Text         = FormatKelvinOffset((int)SldHueWarmthOffset.Value);
         TxtHkHueBrDown.Value = _snapshot.HotkeyHueBrightnessDown ?? string.Empty;
         TxtHkHueBrUp.Value   = _snapshot.HotkeyHueBrightnessUp   ?? string.Empty;
@@ -1410,6 +1412,24 @@ public partial class SettingsWindow : Window
         > 0 => $"+{k} K",
         _   => $"{k} K",
     };
+
+    /// <summary>v0.6.31: convert the Hue brightness slider's 0..100 user value
+    /// into the bridge's native 1..254 range. We never emit 0 because the
+    /// bridge's <c>bri</c> field has min=1; treat slider=0 as the dimmest
+    /// usable level.</summary>
+    private static int HueBriPercentToNative(double percent)
+    {
+        int n = (int)Math.Round(percent / 100.0 * 254.0);
+        return Math.Clamp(n, 1, 254);
+    }
+
+    /// <summary>Inverse of <see cref="HueBriPercentToNative"/>: bridge native
+    /// 1..254 → 0..100 for the slider's display value.</summary>
+    private static int HueBriNativeToPercent(int native)
+    {
+        int p = (int)Math.Round(Math.Clamp(native, 1, 254) / 254.0 * 100.0);
+        return Math.Clamp(p, 0, 100);
+    }
 
     /// <summary>Parse a time string the user typed in either the locale-current
     /// short-time format ("9:30 PM" or "21:30" depending on Windows setting),
@@ -1492,7 +1512,7 @@ public partial class SettingsWindow : Window
         _snapshot.HotkeyToggle         = TxtHkToggle.Value.Trim();
 
         // Hue Phase 3: live-pushed sliders + ignore-boost toggle + four hotkeys.
-        _snapshot.HueBrightness            = (int)SldHueBrightness.Value;
+        _snapshot.HueBrightness            = HueBriPercentToNative(SldHueBrightness.Value);
         _snapshot.HueWarmthOffsetKelvin    = (int)SldHueWarmthOffset.Value;
         _snapshot.HueIgnoreBoost           = ChkHueIgnoreBoost.IsChecked == true;
         _snapshot.HotkeyHueBrightnessDown  = TxtHkHueBrDown.Value.Trim();

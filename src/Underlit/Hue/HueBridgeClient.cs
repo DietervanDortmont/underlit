@@ -148,6 +148,7 @@ public sealed class HueBridgeClient : IDisposable
     /// </summary>
     public async Task<bool> SetGroupStateAsync(
         string groupId, bool? on, int? mireds, int? brightness254,
+        int? transitionDeciseconds = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(Username)) throw new InvalidOperationException("Bridge not paired");
@@ -156,6 +157,11 @@ public sealed class HueBridgeClient : IDisposable
         if (on.HasValue)            state["on"]  = on.Value;
         if (mireds.HasValue)        state["ct"]  = Math.Clamp(mireds.Value, 153, 500);
         if (brightness254.HasValue) state["bri"] = Math.Clamp(brightness254.Value, 1, 254);
+        // Hue's default transitiontime is 4 (400 ms) which feels laggy for
+        // interactive slider drags. Callers can pass 0–1 for snappy feedback
+        // or omit to use the bridge default.
+        if (transitionDeciseconds.HasValue)
+            state["transitiontime"] = Math.Max(0, transitionDeciseconds.Value);
 
         return await PutGroupAction(groupId, state, ct);
     }

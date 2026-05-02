@@ -139,19 +139,47 @@ public sealed class HueController : IDisposable
                 }
                 int mireds = HueBridgeClient.KelvinToMireds(effectiveKelvin);
 
+                // Snappy 100 ms transition (vs the bridge default 400 ms) so
+                // slider drags + hotkey taps feel responsive instead of laggy.
+                // Schedule transitions are gentle on their own (warmth shifts
+                // by a few K per minute), so 100 ms is fine there too.
+                const int snappyTransition = 1;
+
+                // v0.6.31: write all selected groups in parallel instead of
+                // sequentially. With N groups the previous code took N × HTTP
+                // round-trips before the next pending value could be picked
+                // up, which made fast slider drags update the bulb roughly
+                // every Nx100ms instead of every 100ms. Parallel writes
+                // collapse that to ~1 round-trip regardless of group count.
+                var writes = new List<Task>(work.Groups.Count);
                 foreach (var groupId in work.Groups)
                 {
-                    try
-                    {
-                        await client.SetGroupStateAsync(groupId, on: null, mireds: mireds, brightness254: work.Brightness);
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Warn($"Hue write failed for group {groupId}", ex);
-                    }
+                    writes.Add(WriteGroupSafeAsync(client, groupId, mireds,
+                                                     work.Brightness, snappyTransition));
                 }
+                await Task.WhenAll(writes);
             }
         });
+    }
+
+    /// <summary>
+    /// PUT one group's new state, swallowing failures (transient network
+    /// hiccups, bridge command-rate limits, etc.) so a single bad group
+    /// doesn't block the others when we're firing in parallel.
+    /// </summary>
+    private static async Task WriteGroupSafeAsync(HueBridgeClient client, string groupId,
+                                                    int mireds, int brightness, int transitionDeciseconds)
+    {
+        try
+        {
+            await client.SetGroupStateAsync(groupId, on: null, mireds: mireds,
+                                              brightness254: brightness,
+                                              transitionDeciseconds: transitionDeciseconds);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Hue write failed for group {groupId}", ex);
+        }
     }
 
     public void Dispose()

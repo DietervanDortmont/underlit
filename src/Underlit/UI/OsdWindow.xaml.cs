@@ -47,42 +47,33 @@ public partial class OsdWindow : Window
     private const int ShowDurationMs = 1300;
 
     // ---- Dynamic-Island entry/exit animation tunables ----
-    // v0.6.32: entry and exit are now mirrors — same total duration, slide and
-    // morph run in parallel with one slightly leading the other. The "fully
-    // slide up first, wait, then morph" choreography felt robotic.
-    //
-    //   Entry — slide leads, morph trails (matches Apple's pill: a round seed
-    //           rises and stretches into the pill near the top of its arc):
-    //     • Slide  0   .. EntryDurationMs    (Y: SlideFromBelowDip → 0, BackEase)
-    //     • Morph  MorphLeadMs .. EntryDurationMs (Rect: circle → pill, smooth)
-    //
-    //   Exit  — morph leads, slide trails (mirror of entry; the pill compresses
-    //           back to a circle and the circle drops behind the taskbar):
-    //     • Morph  0   .. EntryDurationMs - MorphLeadMs (Rect: pill → circle, smooth)
-    //     • Slide  0   .. EntryDurationMs              (Y: 0 → SlideFromBelowDip, smooth)
-    //
-    // MorphLeadMs is the asymmetry between slide and morph — small enough that
-    // both feel simultaneous, large enough that the user sees the order
-    // (seed-shape on entry, pill-shape on exit) clearly.
-    private const int    EntryDurationMs = 460;
-    private const int    MorphLeadMs     = 120;
-    private const int    FadeInDurationMs = 240;
+    // v0.6.32: entry and exit are mirrors — same total duration, slide and
+    // morph run in parallel with one slightly leading the other.
+    // v0.6.39: durations dropped to roughly match Windows' Fluent
+    // "Normal" enter timing (~250 ms), with a little extra room for the
+    // BackEase spring overshoot. Old 460 ms felt sluggish next to Windows
+    // brightness/volume flyouts.
+    private const int    EntryDurationMs = 320;
+    private const int    MorphLeadMs     = 60;
+    private const int    FadeInDurationMs = 200;
     /// <summary>Exit total duration. Mirror of <see cref="EntryDurationMs"/>.</summary>
-    private const int    ExitDurationMs   = EntryDurationMs;
+    private const int    ExitDurationMs   = 280;
     /// <summary>
-    /// Initial Y-offset for the entry slide, in dip. The seed circle sits at
-    /// local y=10–56 inside the PillContainer (which is pinned to the top
-    /// 66 dip of the now-160-dip-tall window). Anything past window y=66 is
-    /// behind the taskbar (the window's lower portion overlaps the taskbar
-    /// because we positioned its top so the PillContainer's bottom (y=66 in
-    /// window coords) sits at the taskbar edge).
+    /// Initial Y-offset for the entry slide, in dip. v0.6.39: this is no
+    /// longer a constant — it scales with the user's distance-above-taskbar
+    /// setting so the seed circle ALWAYS starts from the top of the
+    /// taskbar regardless of how far above it the rest position sits.
     ///
-    /// At slide=80 the circle is rendered at y=90–136 — fully behind the
-    /// taskbar, invisible. As the spring pulls slide to 0, the circle emerges
-    /// from below and rises up into the rest position with a BackEase
-    /// overshoot of about 32 dip past rest (80 × 0.4) for a bouncy spring.
+    /// Computed as <c>pillHeight + taskbarGap</c>: at this slide offset the
+    /// seed circle's top edge is exactly at the taskbar's top in window
+    /// coordinates (= where VisibleClip's bottom is), so the seed is fully
+    /// below the visible zone — invisible. Sliding to 0 raises the seed
+    /// from "just below the taskbar" up to its rest position above the
+    /// taskbar; the larger the gap, the longer the visible travel, but
+    /// the duration stays fixed so a bigger gap just feels like a slightly
+    /// longer arc rather than a slower animation.
     /// </summary>
-    private const double SlideFromBelowDip = 80;
+    private double _slideFromBelowDip = 80;
     private const double EntryBackAmplitude = 0.4; // BackEase amplitude — overshoot strength
     /// <summary>
     /// Gap between the WPF window's bottom edge and the working area's bottom
@@ -450,6 +441,12 @@ public partial class OsdWindow : Window
     /// </summary>
     private void PositionAboveTaskbar()
     {
+        // v0.6.39: window + visible-clip + slide all derived from the
+        // current gap setting, so the seed always emerges from the
+        // taskbar's top edge regardless of how far above it the rest
+        // position sits.
+        ApplyGapDependentGeometry();
+
         var dpi = VisualTreeHelper.GetDpi(this);
         double scale = dpi.DpiScaleX;
         if (scale <= 0) scale = 1.0;
@@ -557,6 +554,45 @@ public partial class OsdWindow : Window
         if (!NativeMethods.GetMonitorInfo(hMon, ref info)) return false;
         monitorRectPx = info.rcMonitor;
         return true;
+    }
+
+    /// <summary>
+    /// Resize the window + VisibleClip + slide-distance to all match the
+    /// current <see cref="_taskbarGapDip"/>. The visible clip's bottom
+    /// edge is positioned EXACTLY at the taskbar's top in window
+    /// coordinates, so the seed circle's slide animation appears to
+    /// emerge from behind the taskbar regardless of how high above the
+    /// taskbar the OSD's rest position sits.
+    ///
+    /// Geometry, in window-local DIP:
+    ///   • Pill rests at y = 10 .. <see cref="PillBottomYDip"/> (= 56), so
+    ///     pill height = 46 dip.
+    ///   • Taskbar top in window coords = <see cref="PillBottomYDip"/> +
+    ///     <see cref="_taskbarGapDip"/> (the pill bottom is `gap` dip
+    ///     above the taskbar).
+    ///   • <see cref="VisibleClip"/>.Height clips everything below the
+    ///     taskbar top, so set Height = PillBottomYDip + gap.
+    ///   • Slide's "fully hidden" position needs the seed top at or below
+    ///     VisibleClip's bottom: 10 + slide ≥ PillBottomYDip + gap →
+    ///     slide ≥ pillHeight + gap = 46 + gap.
+    ///   • Window.Height needs to host the lowest rendered pixel of the
+    ///     animating pill: PillBottomYDip + slide = 56 + 46 + gap = 102 + gap.
+    /// </summary>
+    private void ApplyGapDependentGeometry()
+    {
+        const double pillHeight = 46;  // PillBottomYDip - paddingTop = 56 - 10
+        double gap = Math.Max(0, _taskbarGapDip);
+
+        _slideFromBelowDip = pillHeight + gap;
+        VisibleClip.Height = PillBottomYDip + gap;
+        // Window's drawable region needs to be exactly as tall as
+        // VisibleClip — anything past that is clipped anyway (and would
+        // overlap the taskbar/screen edge if it weren't).
+        Height = PillBottomYDip + gap;
+
+        // The OS-level window region tracks the new height; the animation
+        // slides through the full window rect.
+        ApplyPillRegion();
     }
 
     /// <summary>Last-resort positioning if the appbar API or monitor query
@@ -1199,7 +1235,7 @@ public partial class OsdWindow : Window
 
             // Seed the start state, then Show() and animate to rest.
             _entryClip.Rect = SeedCircleRect();
-            _entrySlide.Y   = SlideFromBelowDip;
+            _entrySlide.Y   = _slideFromBelowDip;
             Opacity         = 0;
             Show();
             // Place us at the right z-order layer (just below the taskbar if
@@ -1216,7 +1252,7 @@ public partial class OsdWindow : Window
             // place rather than locking on the rest position.
             var slideAnim = new DoubleAnimation
             {
-                From = SlideFromBelowDip,
+                From = _slideFromBelowDip,
                 To   = 0,
                 Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
                 EasingFunction = spring,
@@ -1297,7 +1333,7 @@ public partial class OsdWindow : Window
         var slideAnim = new DoubleAnimation
         {
             From = 0,
-            To   = SlideFromBelowDip,
+            To   = _slideFromBelowDip,
             Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
             EasingFunction = ease,
         };

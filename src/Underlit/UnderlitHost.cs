@@ -164,8 +164,13 @@ public sealed class UnderlitHost : IDisposable
             _settings.StartWithWindows = registryHasAutoStart;
             _settings.Save();
         }
-        Logger.Info($"AutoStart: settings={_settings.StartWithWindows}, registered={AutoStart.GetRegisteredCommand() ?? "<absent>"}, currentExe={AutoStart.GetCurrentExePath() ?? "<unknown>"}");
-        AutoStart.Set(_settings.StartWithWindows);
+        // v0.6.50: log the full diagnostic block, then call EnsureValid so
+        // the registry path + Startup-folder shortcut are repaired in one
+        // call if either is missing or stale. This is the primary defense
+        // against the "Task Manager Enabled but doesn't actually launch on
+        // boot" failure mode — one manual launch self-heals everything.
+        Logger.Info("AutoStart diagnostics:\n" + AutoStart.GetDiagnostics());
+        AutoStart.EnsureValid(_settings.StartWithWindows);
 
         // Listen for display changes (add/remove monitor, resolution change)
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
@@ -377,7 +382,8 @@ public sealed class UnderlitHost : IDisposable
 
         if (next.DisableWindowsNightLight) NightLightControl.Disable();
 
-        AutoStart.Set(next.StartWithWindows);
+        // v0.6.50: write through both Run-key and Startup-folder shortcut.
+        AutoStart.EnsureValid(next.StartWithWindows);
 
         _osd?.UpdateVisualSettings(
             next.FollowWindowsAccent,

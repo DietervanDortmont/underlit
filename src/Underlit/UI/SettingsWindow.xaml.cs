@@ -111,6 +111,13 @@ public partial class SettingsWindow : Window
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
+        // v0.6.50: refresh the auto-start status line whenever the toggle
+        // changes, plus a manual Repair button that force-rewrites the
+        // registry entry + Startup-folder shortcut to the running EXE.
+        ChkStartWithWindows.Checked   += (_, _) => RefreshAutoStartStatus();
+        ChkStartWithWindows.Unchecked += (_, _) => RefreshAutoStartStatus();
+        BtnAutoStartRepair.Click      += (_, _) => RepairAutoStart();
+        RefreshAutoStartStatus();
         foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth, SldOsdGap })
         {
             sld.ValueChanged += (_, _) => { PushSettings(); UpdateAllValueChips(); };
@@ -2059,6 +2066,72 @@ public partial class SettingsWindow : Window
     /// so the host applies the reset everywhere downstream. Confirmation
     /// dialog because there's no undo.
     /// </summary>
+    /// <summary>
+    /// v0.6.50: refresh the "Start with Windows" status line. Three states:
+    ///   1. <b>Off</b> — the user has the toggle disabled. Just show "Off".
+    ///   2. <b>Healthy</b> — the toggle is on AND the registry/shortcut
+    ///      mechanisms both point at the running EXE. Show a tick + path.
+    ///   3. <b>Stale</b> — the toggle is on but the registry path is missing
+    ///      or stale. This is the "Task Manager Enabled but doesn't actually
+    ///      launch on boot" failure mode. Tell the user to click Repair.
+    /// </summary>
+    private void RefreshAutoStartStatus()
+    {
+        bool desired = ChkStartWithWindows.IsChecked == true;
+        if (!desired)
+        {
+            LblAutoStartStatus.Text = "Underlit will not start automatically with Windows.";
+            BtnAutoStartRepair.IsEnabled = false;
+            return;
+        }
+
+        bool regOk = AutoStart.IsRegistryEntryValid();
+        bool lnkOk = AutoStart.IsShortcutValid();
+
+        if (regOk && lnkOk)
+        {
+            LblAutoStartStatus.Text = "Underlit will launch with Windows. Registry entry verified.";
+            BtnAutoStartRepair.IsEnabled = true; // still allow a manual rewrite
+        }
+        else
+        {
+            // Stale or missing — surface the actual values so the user can
+            // see what Windows is currently pointing at vs. what it should
+            // be pointing at.
+            string reg = AutoStart.GetRegisteredCommand() ?? "(absent)";
+            string cur = AutoStart.GetCurrentExePath() ?? "(unknown)";
+            LblAutoStartStatus.Text =
+                $"Heads up: the Windows startup entry doesn't match this Underlit. " +
+                $"Click Repair to fix it.\n  registered: {reg}\n  this EXE:   {cur}";
+            BtnAutoStartRepair.IsEnabled = true;
+        }
+    }
+
+    /// <summary>v0.6.50: force-rewrite both auto-start mechanisms to point
+    /// at the currently-running EXE. Mirrors the in-process changes Underlit
+    /// already does at every launch, but lets the user trigger a heal from
+    /// inside Settings without having to manually relaunch.</summary>
+    private void RepairAutoStart()
+    {
+        bool desired = ChkStartWithWindows.IsChecked == true;
+        // Force a rewrite even if EnsureValid would have decided the entry
+        // is fine — the user is asking for a manual repair, so just do it.
+        AutoStart.Set(desired);
+        RefreshAutoStartStatus();
+
+        // Confirm to the user so they know the click did something. Show
+        // the diagnostic so support tickets can paste it directly.
+        MessageBox.Show(
+            this,
+            (desired
+                ? "Windows startup entry repaired. Underlit should now launch on the next reboot.\n\n"
+                : "Windows startup entry removed.\n\n")
+            + AutoStart.GetDiagnostics(),
+            "Auto-start",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
     private void RestoreAllDefaults()
     {
         var result = MessageBox.Show(

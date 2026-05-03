@@ -831,9 +831,29 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="Start with Windows"/>
-                                    <CheckBox Grid.Column="1" x:Name="ChkStartWithWindows" Style="{StaticResource ToggleSwitch}"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Start with Windows"/>
+                                        <!-- v0.6.50: live status of the auto-start
+                                             registration. Green = healthy, amber =
+                                             stale path or missing entry, grey =
+                                             disabled. The Repair button forces a
+                                             rewrite from the running EXE's path. -->
+                                        <TextBlock x:Name="LblAutoStartStatus"
+                                                   Margin="0,2,0,0"
+                                                   FontSize="11"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text=""/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnAutoStartRepair"
+                                            Style="{StaticResource PillButton}"
+                                            Margin="0,0,12,0"
+                                            VerticalAlignment="Center"
+                                            Content="Repair"
+                                            ToolTip="Rewrite the Windows startup entry to point at this Underlit installation. Use this if the Task Manager says Underlit is enabled but it doesn't actually launch on boot."/>
+                                    <CheckBox Grid.Column="2" x:Name="ChkStartWithWindows" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">

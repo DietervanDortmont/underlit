@@ -39,6 +39,9 @@ internal static class WindowsWallpaperSwitcher
     private const uint SPIF_SENDCHANGE      = 0x02;
     private const int  COLOR_BACKGROUND     = 1;
 
+    [DllImport("user32.dll")]
+    private static extern uint GetSysColor(int nIndex);
+
     /// <summary>Paint the desktop with the supplied image file. Returns
     /// false if the file doesn't exist or the API call fails.</summary>
     public static bool SetImage(string imagePath)
@@ -48,8 +51,14 @@ internal static class WindowsWallpaperSwitcher
             Logger.Warn($"WindowsWallpaperSwitcher.SetImage: file not found at '{imagePath}'");
             return false;
         }
+        // v0.7.2: this is called every 30 s. Setting the wallpaper broadcasts
+        // WM_SETTINGCHANGE to every window (Explorer refreshes and jumps), so
+        // only do it when the wallpaper really is something else.
+        if (string.Equals(GetCurrentWallpaperPath(), imagePath, StringComparison.OrdinalIgnoreCase))
+            return true;
         try
         {
+            Logger.Info($"WindowsWallpaperSwitcher: setting wallpaper to '{imagePath}'");
             bool ok = SystemParametersInfo(
                 SPI_SETDESKWALLPAPER, 0, imagePath,
                 SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
@@ -76,15 +85,27 @@ internal static class WindowsWallpaperSwitcher
         bool anyOk = false;
         try
         {
+            uint rgb = (uint)r | ((uint)g << 8) | ((uint)b << 16);
+
+            // v0.7.2: called every 30 s. Both steps below broadcast to every
+            // window (WM_SETTINGCHANGE / WM_SYSCOLORCHANGE) and made Explorer
+            // and other apps redraw and lose their scroll position twice a
+            // minute. Skip each step when it's already in the wanted state.
+            bool wallpaperClear = string.IsNullOrEmpty(GetCurrentWallpaperPath());
+            bool colourRight    = (GetSysColor(COLOR_BACKGROUND) & 0xFFFFFF) == rgb;
+            if (wallpaperClear && colourRight) return true;
+            Logger.Info($"WindowsWallpaperSwitcher: setting solid desktop colour {r},{g},{b}");
+
             // 1) Clear wallpaper - if a wallpaper file is set, the solid
             //    colour underneath is invisible.
-            SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, "",
-                                  SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            if (!wallpaperClear)
+                SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, "",
+                                      SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
 
             // 2) Live-set the desktop colour. Note Windows' RGB encoding
             //    is little-endian: 0xBBGGRR.
-            uint rgb = (uint)r | ((uint)g << 8) | ((uint)b << 16);
-            SetSysColors(1, new[] { COLOR_BACKGROUND }, new[] { rgb });
+            if (!colourRight)
+                SetSysColors(1, new[] { COLOR_BACKGROUND }, new[] { rgb });
 
             // 3) Persist via registry so the colour survives reboot.
             //    HKCU\Control Panel\Colors\Background is the documented

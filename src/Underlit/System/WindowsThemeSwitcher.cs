@@ -82,14 +82,17 @@ internal static class WindowsThemeSwitcher
             return false;
         }
 
-        // Always broadcast - cheap and ensures observers refresh even
-        // when we didn't write anything new.
+        // v0.7.2: broadcast ONLY when we actually changed something. This
+        // runs every 30 s; the unconditional WM_SETTINGCHANGE broadcast made
+        // every top-level window (Explorer in particular) refresh twice a
+        // minute, which reset scroll positions and interrupted typing.
+        if (!changed) return false;
+
         try { BroadcastThemeChange(); }
         catch (Exception ex) { Logger.Warn("WindowsThemeSwitcher: broadcast failed", ex); }
 
-        if (changed)
-            Logger.Info($"WindowsThemeSwitcher: set theme to {theme}");
-        return changed;
+        Logger.Info($"WindowsThemeSwitcher: set theme to {theme}");
+        return true;
     }
 
     // --- WM_SETTINGCHANGE broadcast ---

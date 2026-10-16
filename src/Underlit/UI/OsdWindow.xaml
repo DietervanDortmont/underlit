@@ -9,8 +9,8 @@
         ShowActivated="False"
         Focusable="False"
         ResizeMode="NoResize"
-        Width="300"
-        Height="160"
+        Width="480"
+        Height="200"
         Opacity="0"
         WindowStartupLocation="Manual"
         Title="Underlit">
@@ -45,11 +45,44 @@
          on Windows). No Shell_TrayWnd z-order dance needed. -->
     <Grid x:Name="WindowRoot" Background="Transparent">
 
-        <!-- VisibleClip — fake "behind taskbar" mask (see comment above). -->
+        <!-- v0.6.68: shadow is now a PRE-RENDERED BITMAP, not a live
+             DropShadowEffect with an OpacityMask cutout. The old approach
+             had a hard-edged transparent cutout at the pill outline,
+             which was visible at extreme settings (high blur, spread).
+             The bitmap is rendered once per settings change:
+               1. DrawingVisual with a black pill + DropShadowEffect
+                  rasterised to a RenderTargetBitmap
+               2. Pixel pass that soft-fades alpha to zero across a 6 dip
+                  band inside the pill outline, so the opaque source
+                  doesn't bleed through the translucent glass AND the
+                  transition is smooth (no hard cutout edge)
+             See OsdWindow.xaml.cs / RenderShadowBitmap for the details.
+
+             Trade-off: the shadow no longer morphs from seed to full
+             during the entry animation (the bitmap is static). It
+             still slides up and fades in. The pill itself still
+             morphs underneath. -->
+        <Image x:Name="ShadowImage"
+               Width="480" Height="200"
+               HorizontalAlignment="Left" VerticalAlignment="Top"
+               IsHitTestVisible="False"
+               Stretch="None"/>
+
+        <!-- VisibleClip — fake "behind taskbar" mask (see comment above).
+             v0.6.64: Margin pushed to (90, 60) so the surrounding window
+             padding houses the OSD's drop shadow halo without being
+             clipped by the window's outer edges.
+             v0.6.70: ClipToBounds is now FALSE — the bounds-hit pop
+             animation needs to stretch the pill 2.5 % horizontally
+             without getting cropped at x=300. The "behind taskbar"
+             mask is now a custom horizontal-only Clip set in code
+             (see ApplyGapDependentGeometry) that clips at y=Height
+             but allows generous horizontal room. -->
         <Border x:Name="VisibleClip"
                 Width="300" Height="66"
                 VerticalAlignment="Top" HorizontalAlignment="Left"
-                ClipToBounds="True"
+                Margin="90,60,0,0"
+                ClipToBounds="False"
                 Background="Transparent">
         <!-- ClipRoot — owns the animated entry clip (WindowRoot.Clip → ClipRoot.Clip)
              and the slide TranslateTransform. Its layout is the 300×66 pill rect;
@@ -62,6 +95,9 @@
              of ClipRoot. -->
         <Grid x:Name="PillContainer" Width="300" Height="66"
               VerticalAlignment="Top" HorizontalAlignment="Left">
+
+        <!-- ShadowOnlyLayer was moved to WindowRoot in v0.6.59 so it
+             isn't clipped by VisibleClip. -->
 
         <!-- ===== Liquid Glass full bitmap =====
              ImageBrush is 300x66; the renderer fills it with the pill body
@@ -78,19 +114,9 @@
         <Border x:Name="GlassBackdrop"
                 IsHitTestVisible="False"
                 Visibility="Collapsed">
-            <Border.Effect>
-                <!-- v0.6.43: stronger shadow so the pill reads clearly on
-                     bright backgrounds (white / pale wallpapers). 0.30
-                     opacity disappeared on white; 0.55 + a wider blur
-                     gives a clean caustic-ish halo without making the pill
-                     look heavy on dark backdrops (the existing rim/spec
-                     highlights still dominate there). -->
-                <DropShadowEffect Color="#FF000000"
-                                  BlurRadius="28"
-                                  ShadowDepth="6"
-                                  Direction="270"
-                                  Opacity="0.55"/>
-            </Border.Effect>
+            <!-- v0.6.57: shadow moved to the universal ShadowOnlyLayer
+                 above so all backdrop modes share the same configurable
+                 shadow. The hardcoded one used to live here. -->
             <Border.Background>
                 <ImageBrush x:Name="GlassBackdropBrush" Stretch="Fill"/>
             </Border.Background>
@@ -251,6 +277,64 @@
                            VerticalAlignment="Center"
                            HorizontalAlignment="Center"
                            Text="&#xE706;"/>
+                <!-- v0.6.70: filled sun icon. Replaces the Fluent Icons
+                     U+E706 "Brightness" glyph for brightness mode — the
+                     glyph rendered with a hollow centre, and the user
+                     wanted a solid centre. Shown for ShowBrightness;
+                     IconText still renders pause/play glyphs for
+                     ShowPaused. Centre is a filled circle plus eight
+                     rays at 45° increments, each ray a tiny rounded
+                     rectangle rotated around the icon centre. -->
+                <Path x:Name="SunIconFilled"
+                      Visibility="Collapsed"
+                      Fill="#FFFEC80F"
+                      Stretch="Uniform"
+                      Width="22" Height="22"
+                      VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <Path.Data>
+                        <GeometryGroup FillRule="Nonzero">
+                            <!-- Filled centre -->
+                            <EllipseGeometry Center="11,11" RadiusX="4.2" RadiusY="4.2"/>
+                            <!-- 8 rays — one geometry rotated 0/45/90/.../315° -->
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7"/>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="45" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="90" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="135" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="180" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="225" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="270" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                            <RectangleGeometry Rect="10.1,1,1.8,3.4" RadiusX="0.7" RadiusY="0.7">
+                                <RectangleGeometry.Transform>
+                                    <RotateTransform Angle="315" CenterX="11" CenterY="11"/>
+                                </RectangleGeometry.Transform>
+                            </RectangleGeometry>
+                        </GeometryGroup>
+                    </Path.Data>
+                </Path>
                 <Path x:Name="CandleIcon"
                       Visibility="Collapsed"
                       Fill="#FFFFFFFF"
@@ -323,6 +407,21 @@
                 </Grid>
             </Grid>
         </Grid>
+
+        <!-- v0.6.78: dim-overlay match. The desktop's dim overlay window
+             is excluded from screen captures (so screenshots stay clean
+             per v0.6.72), which means the OSD's WGC-captured glass
+             refraction shows the pre-overlay (undimmed) desktop. Without
+             this tint the OSD pill reads as brighter than the rest of
+             the screen during extended-dim. Opacity is driven from the
+             engine's CurrentOverlayOpacity (UnderlitHost forwards it
+             via SetDimOverlayLevel). Lives above every glass + content
+             layer so the entire pill — bar, icon, refraction — darkens
+             together. -->
+        <Border x:Name="DimTint"
+                Background="#FF000000"
+                Opacity="0"
+                IsHitTestVisible="False"/>
         </Grid>  <!-- /PillContainer -->
         </Grid>  <!-- /ClipRoot -->
         </Border>  <!-- /VisibleClip -->

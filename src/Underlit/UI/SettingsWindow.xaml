@@ -784,6 +784,23 @@
                                 HorizontalAlignment="Stretch"
                                 Style="{StaticResource PillButton}"
                                 Content="Check for updates"/>
+                        <!-- v0.6.54: feedback button. Opens a prefilled
+                             GitHub issue in the user's browser so any
+                             "I wish Underlit could..." thoughts have a
+                             zero-friction path to the developer. -->
+                        <Button x:Name="BtnAboutFeedback"
+                                Margin="0,6,0,0"
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource PillButton}"
+                                Content="Send feedback"
+                                ToolTip="Tell the developer what you wish Underlit did. Opens a prefilled GitHub issue in your browser - no account needed to read, sign in to send."/>
+                        <!-- v0.6.56: donate button. -->
+                        <Button x:Name="BtnAboutDonate"
+                                Margin="0,6,0,0"
+                                HorizontalAlignment="Stretch"
+                                Style="{StaticResource PillButton}"
+                                Content="Donate"
+                                ToolTip="Support development. Opens the project's sponsorship page in your browser."/>
                         <TextBlock x:Name="LblAboutUpdateStatus"
                                    Margin="0,6,0,0"
                                    FontSize="11"
@@ -827,33 +844,22 @@
                         <TextBlock Style="{StaticResource CardCaption}" Text="BEHAVIOR"/>
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
-                                <Grid Style="{StaticResource Row}">
+                                <!-- v0.6.56: simplified row. Autostart now
+                                     self-heals on every launch (registry +
+                                     scheduled task), so the explicit Repair
+                                     button isn't needed. Status copy lives
+                                     on the row's tooltip - the tooltip text
+                                     is set in code by RefreshAutoStartStatus(). -->
+                                <Grid x:Name="AutoStartRow" Style="{StaticResource Row}"
+                                      ToolTipService.InitialShowDelay="350"
+                                      ToolTipService.BetweenShowDelay="250"
+                                      ToolTipService.ShowDuration="12000">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Start with Windows"/>
-                                        <!-- v0.6.50: live status of the auto-start
-                                             registration. Green = healthy, amber =
-                                             stale path or missing entry, grey =
-                                             disabled. The Repair button forces a
-                                             rewrite from the running EXE's path. -->
-                                        <TextBlock x:Name="LblAutoStartStatus"
-                                                   Margin="0,2,0,0"
-                                                   FontSize="11"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{DynamicResource App.TextSecondary}"
-                                                   Text=""/>
-                                    </StackPanel>
-                                    <Button Grid.Column="1" x:Name="BtnAutoStartRepair"
-                                            Style="{StaticResource PillButton}"
-                                            Margin="0,0,12,0"
-                                            VerticalAlignment="Center"
-                                            Content="Repair"
-                                            ToolTip="Rewrite the Windows startup entry to point at this Underlit installation. Use this if the Task Manager says Underlit is enabled but it doesn't actually launch on boot."/>
-                                    <CheckBox Grid.Column="2" x:Name="ChkStartWithWindows" Style="{StaticResource ToggleSwitch}"/>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Start with Windows"/>
+                                    <CheckBox Grid.Column="1" x:Name="ChkStartWithWindows" Style="{StaticResource ToggleSwitch}"/>
                                 </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
@@ -873,6 +879,201 @@
                                      is now a no-op regardless of this setting. The CheckBox stays in the
                                      visual tree (Collapsed) so existing code-behind references still bind. -->
                                 <CheckBox x:Name="ChkHookNativeKeys" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- v0.6.56: auto Windows theme switching. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="WINDOWS THEME"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Switch Windows light/dark theme automatically"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Underlit follows the schedule's current warmth - cooler than the threshold = light theme, warmer = dark theme. Re-applied at startup, on every warmth change, and every 30 seconds, so other tools / Windows quirks can't outlast it."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkAutoTheme" Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Light/dark threshold"/>
+                                    <Slider Grid.Column="1" x:Name="SldAutoThemeThreshold"
+                                            Style="{StaticResource AppleSlider}"
+                                            Minimum="2200" Maximum="6500"
+                                            SmallChange="100" LargeChange="500"
+                                            IsSnapToTickEnabled="True" TickFrequency="100"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
+                                               x:Name="LblAutoThemeThreshold"/>
+                                </Grid>
+                                <!-- v0.6.63: per-mode wallpaper / solid
+                                     colour. Light mode and dark mode each
+                                     get a None / Image / Solid Colour
+                                     choice, an image-file picker, and a
+                                     colour swatch. Applied alongside the
+                                     theme switch. -->
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <TextBlock Style="{StaticResource RowLabel}"
+                                           Margin="0,12,0,4"
+                                           Text="Light-mode background"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="CboLightBgChoice" Grid.Column="0"
+                                              Margin="0,0,8,0" MinWidth="140">
+                                        <ComboBoxItem Content="Don't change"/>
+                                        <ComboBoxItem Content="Image"/>
+                                        <ComboBoxItem Content="Solid colour"/>
+                                    </ComboBox>
+                                    <TextBox Grid.Column="1" x:Name="TxtLightBgImagePath"
+                                             Margin="0,0,8,0"
+                                             Padding="6,4"
+                                             Background="#22FFFFFF"
+                                             Foreground="{DynamicResource App.TextPrimary}"
+                                             BorderBrush="{DynamicResource App.CardBorder}"
+                                             BorderThickness="1"
+                                             VerticalContentAlignment="Center"
+                                             ToolTip="Path to the image file used as the light-mode wallpaper. Use Browse to pick one."/>
+                                    <Button Grid.Column="2" x:Name="BtnLightBgBrowse"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Browse..."/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Style="{StaticResource RowLabel}"
+                                               Text="Solid colour"/>
+                                    <Button Grid.Column="1" x:Name="BtnLightBgColor"
+                                            Style="{StaticResource IconButton}"
+                                            Padding="2"
+                                            ToolTip="Solid background colour for light mode.">
+                                        <Border x:Name="LightBgColorSwatch"
+                                                Width="36" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}"
+                                                BorderThickness="1"/>
+                                    </Button>
+                                </Grid>
+
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <TextBlock Style="{StaticResource RowLabel}"
+                                           Margin="0,12,0,4"
+                                           Text="Dark-mode background"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="CboDarkBgChoice" Grid.Column="0"
+                                              Margin="0,0,8,0" MinWidth="140">
+                                        <ComboBoxItem Content="Don't change"/>
+                                        <ComboBoxItem Content="Image"/>
+                                        <ComboBoxItem Content="Solid colour"/>
+                                    </ComboBox>
+                                    <TextBox Grid.Column="1" x:Name="TxtDarkBgImagePath"
+                                             Margin="0,0,8,0"
+                                             Padding="6,4"
+                                             Background="#22FFFFFF"
+                                             Foreground="{DynamicResource App.TextPrimary}"
+                                             BorderBrush="{DynamicResource App.CardBorder}"
+                                             BorderThickness="1"
+                                             VerticalContentAlignment="Center"
+                                             ToolTip="Path to the image file used as the dark-mode wallpaper."/>
+                                    <Button Grid.Column="2" x:Name="BtnDarkBgBrowse"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Browse..."/>
+                                </Grid>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="160"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Style="{StaticResource RowLabel}"
+                                               Text="Solid colour"/>
+                                    <Button Grid.Column="1" x:Name="BtnDarkBgColor"
+                                            Style="{StaticResource IconButton}"
+                                            Padding="2"
+                                            ToolTip="Solid background colour for dark mode.">
+                                        <Border x:Name="DarkBgColorSwatch"
+                                                Width="36" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}"
+                                                BorderThickness="1"/>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- v0.6.55: wind-down notifications. Opt-in by
+                             default. When the toggle is on, the minutes-
+                             before-bedtime slider + message textbox govern
+                             a tray balloon that fires once per day. -->
+                        <TextBlock Style="{StaticResource CardCaption}" Text="WIND-DOWN REMINDER"/>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Notify me before bedtime"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Underlit pops a small tray notification at the configured time relative to your bedtime - a gentle nudge to start winding down."/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" x:Name="ChkWindDownEnabled"
+                                              Style="{StaticResource ToggleSwitch}"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Minutes before bedtime"/>
+                                    <Slider Grid.Column="1" x:Name="SldWindDownMinutes"
+                                            Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="120"
+                                            SmallChange="5" LargeChange="15"
+                                            IsSnapToTickEnabled="True" TickFrequency="5"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}"
+                                               x:Name="LblWindDownMinutes"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Notification text"/>
+                                    <TextBox Grid.Column="1" x:Name="TxtWindDownMessage"
+                                             Margin="0,0,14,0"
+                                             Padding="8,6"
+                                             Background="#22FFFFFF"
+                                             Foreground="{DynamicResource App.TextPrimary}"
+                                             BorderBrush="{DynamicResource App.CardBorder}"
+                                             BorderThickness="1"
+                                             VerticalAlignment="Center"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -952,6 +1153,25 @@
                                                 BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
                                     </Button>
                                 </Grid>
+                                <!-- v0.6.69: user-pickable sun (brightness) icon colour. -->
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Sun icon color"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Colour of the brightness icon in the OSD pill. Defaults to amber (#FEC80F); set to whatever reads well against your usual backdrop."/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnPickSunIcon" Margin="0,0,14,0" Padding="6"
+                                            Cursor="Hand" Background="Transparent" BorderThickness="0">
+                                        <Border x:Name="SunIconSwatch"
+                                                Width="32" Height="22" CornerRadius="4"
+                                                BorderBrush="{DynamicResource App.CardBorder}" BorderThickness="1"/>
+                                    </Button>
+                                </Grid>
                                 <Border Style="{StaticResource RowDivider}"/>
                                 <Grid Style="{StaticResource Row}">
                                     <Grid.ColumnDefinitions>
@@ -1015,6 +1235,78 @@
                                     <Slider Grid.Column="1" x:Name="SldOsdGap" Style="{StaticResource AppleSlider}"
                                             Minimum="0" Maximum="200" TickFrequency="10"/>
                                     <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdGap"/>
+                                </Grid>
+                                <!-- v0.6.71: bar right inset slider. -->
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Bar inset (right)"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="Right-side padding between the brightness/warmth bar and the pill's right edge. Smaller value = wider bar."/>
+                                    </StackPanel>
+                                    <Slider Grid.Column="1" x:Name="SldOsdBarInset" Style="{StaticResource AppleSlider}"
+                                            Minimum="12" Maximum="120" TickFrequency="4" SmallChange="2"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdBarInset"/>
+                                </Grid>
+                                <!-- v0.6.57: OSD shadow controls. Universal
+                                     drop shadow under the pill so it reads
+                                     against bright backgrounds. Four
+                                     sliders: opacity, blur, offset, angle. -->
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="OSD shadow opacity"/>
+                                    <Slider Grid.Column="1" x:Name="SldOsdShadowOpacity" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="100" TickFrequency="5" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdShadowOpacity"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="OSD shadow blur"/>
+                                    <Slider Grid.Column="1" x:Name="SldOsdShadowBlur" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="60" TickFrequency="2" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdShadowBlur"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="OSD shadow offset"/>
+                                    <Slider Grid.Column="1" x:Name="SldOsdShadowOffset" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="30" TickFrequency="1" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdShadowOffset"/>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="OSD shadow angle"/>
+                                    <Slider Grid.Column="1" x:Name="SldOsdShadowAngle" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="359" TickFrequency="15" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdShadowAngle"/>
+                                </Grid>
+                                <!-- v0.6.64: spread / size. Grows the source pill outward
+                                     before blur, giving a beefier halo without smear. -->
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="OSD shadow size"
+                                               ToolTip="Grows the shadow's source pill outward before the blur is applied (CSS box-shadow 'spread'). Use this for a beefier halo when cranking up Blur alone makes the shadow look smeary."/>
+                                    <Slider Grid.Column="1" x:Name="SldOsdShadowSpread" Style="{StaticResource AppleSlider}"
+                                            Minimum="0" Maximum="60" TickFrequency="2" SmallChange="1"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblOsdShadowSpread"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -1442,6 +1734,37 @@
                                 <Grid Margin="14,12,14,8" Height="120">
                                     <Canvas x:Name="ScheduleGraph" ClipToBounds="True"/>
                                 </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <!-- v0.6.53: 24h cycle simulator. Walks through a
+                                     full schedule day in 15 seconds, pushing the
+                                     synthesized warmth to the engine + Hue lights
+                                     so the user can see exactly how their curve
+                                     looks at every hour without waiting all day. -->
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Simulate 24h cycle"/>
+                                        <!-- v0.6.56: status only appears
+                                             during simulation. The default
+                                             explanation is now a tooltip
+                                             on the Simulate button. -->
+                                        <TextBlock x:Name="LblSimulateStatus"
+                                                   Margin="0,2,0,0"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Visibility="Collapsed"
+                                                   Text=""/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="BtnSimulateCycle"
+                                            Margin="0,0,14,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource PillButton}"
+                                            Content="Simulate"
+                                            ToolTip="Plays a full day's worth of warmth changes through your screen and Hue lights in about 10 seconds. Click anywhere on the graph during playback to jump to that time."/>
+                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -1539,6 +1862,41 @@
 
                         <!-- DISCONNECTED: discovery + manual IP entry -->
                         <StackPanel x:Name="HuePanelDisconnected" Visibility="Collapsed">
+                            <!-- v0.6.54: walkthrough card. Three numbered
+                                 steps so first-time users know what's about
+                                 to happen rather than facing four buttons
+                                 with no narrative. -->
+                            <TextBlock Style="{StaticResource CardCaption}" Text="GETTING STARTED"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel Margin="0,2,0,2">
+                                    <TextBlock FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource App.TextPrimary}"
+                                               Margin="0,0,0,8"
+                                               Text="Connect Underlit to your Hue Bridge in three steps:"/>
+                                    <TextBlock FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Margin="0,0,0,6"
+                                               Text="1. Click Discover below. Underlit asks Philips' service for the IP of any Hue Bridge on your network. (If that fails, type the bridge IP manually - you'll find it in the Hue app under Settings -> My Hue System.)"/>
+                                    <TextBlock FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Margin="0,0,0,6"
+                                               Text="2. Press the round button on top of your Hue Bridge - this gives Underlit a 30-second window to authorise itself."/>
+                                    <TextBlock FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Margin="0,0,0,6"
+                                               Text="3. Pick which rooms or individual bulbs Underlit should follow. Mixing Hue with IKEA Tradfri is fine - IKEA bulbs that can't reach the schedule's deepest warmth will fade out gracefully."/>
+                                    <TextBlock FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Margin="0,8,0,0"
+                                               FontStyle="Italic"
+                                               Text="Underlit only ever modifies bulbs you tick. It also respects manual on/off - turn a bulb off via Google Home or a wall switch and Underlit leaves it alone until you turn it back on."/>
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock Style="{StaticResource CardCaption}" Text="FIND YOUR BRIDGE"/>
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
@@ -1641,17 +1999,27 @@
                                 </Grid>
                             </Border>
 
-                            <TextBlock Style="{StaticResource CardCaption}" Text="GROUPS"/>
+                            <!-- v0.6.55: grouped tree-flavoured layout.
+                                 Each room/zone shows as a section header
+                                 with its own toggle (select-all for the
+                                 group); member lights sit indented below
+                                 with their individual toggles. Plugs and
+                                 ungrouped bulbs go in their own sections
+                                 below. -->
+                            <TextBlock Style="{StaticResource CardCaption}" Text="ROOMS &amp; LIGHTS"/>
                             <Border Style="{StaticResource Card}" Padding="0">
                                 <StackPanel>
                                     <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
-                                               Text="Tick any rooms / zones / groups Underlit should follow. Lights you don't tick are left alone."/>
-                                    <ItemsControl x:Name="HueGroupsList" Margin="14,4,14,12">
+                                               Text="Tick rooms or individual bulbs Underlit should follow. Tick the room header to select every bulb in it at once. The CT range is shown next to each bulb; CT-limited bulbs (e.g. IKEA Tradfri) fade out gracefully when the schedule passes their warmth limit."/>
+                                    <ItemsControl x:Name="HueLightsList" Margin="14,4,14,12">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <!-- v0.6.42: switch on the right, label on the
-                                                     left, mirroring the rest of the toggle rows. -->
-                                                <Grid Margin="0,4">
+                                                <!-- We bind a flat list of mixed-kind rows
+                                                     (group headers + indented light rows),
+                                                     differentiated by the IsHeader flag on
+                                                     the row's view-model. Indent is via
+                                                     Margin.Left on the inner Grid. -->
+                                                <Grid Margin="{Binding RowMargin}">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
@@ -1659,7 +2027,9 @@
                                                     <TextBlock Text="{Binding DisplayName}"
                                                                VerticalAlignment="Center"
                                                                Foreground="{DynamicResource App.TextPrimary}"
-                                                               FontSize="13"/>
+                                                               FontSize="{Binding FontSize}"
+                                                               FontWeight="{Binding FontWeight}"
+                                                               TextTrimming="CharacterEllipsis"/>
                                                     <CheckBox Grid.Column="1"
                                                               Style="{StaticResource ToggleSwitch}"
                                                               Margin="0"
@@ -1668,21 +2038,519 @@
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
-                                    <Border Style="{StaticResource RowDivider}"/>
-                                    <Grid Style="{StaticResource Row}">
+                                </StackPanel>
+                            </Border>
+
+                            <!-- v0.6.55: smart plugs in their own card so
+                                 they can be wired into routines (e.g. SAD
+                                 lamp at wake time) without joining the CT
+                                 schedule push. -->
+                            <TextBlock Style="{StaticResource CardCaption}" Text="SMART PLUGS"/>
+                            <Border Style="{StaticResource Card}" Padding="0">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="14,12,14,8"
+                                               Text="Hue / IKEA on-off plugs found on your bridge. Plugs aren't part of the warmth schedule (they only do on/off) - tick them here to make them available to Quick Scenes and Routines."/>
+                                    <ItemsControl x:Name="HuePlugsList" Margin="14,4,14,12">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource App.TextPrimary}"
+                                                               FontSize="13"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <CheckBox Grid.Column="1"
+                                                              Style="{StaticResource ToggleSwitch}"
+                                                              Margin="0"
+                                                              IsChecked="{Binding IsSelected, Mode=TwoWay}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock x:Name="LblNoPlugs"
+                                               Margin="14,0,14,12"
+                                               FontSize="11" FontStyle="Italic"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Text="No smart plugs found on your bridge."
+                                               Visibility="Collapsed"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Hidden legacy element. The new HueLightsList
+                                 unifies the old GROUPS + INDIVIDUAL LIGHTS
+                                 into one tree-style list, but the code-behind
+                                 still references HueGroupsList in a couple
+                                 of places (e.g. Test selection). Keep an
+                                 invisible ItemsControl with the old name so
+                                 those references resolve. -->
+                            <ItemsControl x:Name="HueGroupsList" Visibility="Collapsed"/>
+
+                            <!-- Refresh + test pill row, shared by both lists. -->
+                            <Border Style="{StaticResource Card}">
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource RowLabel}" Text="Refresh groups + lights / test selection"/>
+                                    <Button Grid.Column="1" x:Name="BtnHueRefreshGroups"
+                                            Margin="0,0,8,0"
+                                            Style="{StaticResource PillButton}" Content="Refresh"/>
+                                    <Button Grid.Column="2" x:Name="BtnHueTest"
+                                            Margin="0,0,14,0"
+                                            Style="{StaticResource PillButton}" Content="Test"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- v0.6.55: quick scenes overhaul. Built-in
+                                 + custom scenes share one ItemsControl;
+                                 right-click a custom scene for Edit/Delete.
+                                 Spacing is via per-button Margin so the
+                                 wrap behaviour stays predictable across
+                                 window widths. -->
+                            <!-- v0.6.75: COLOUR GROUPS card removed. The
+                                 colour-group editor was moved INTO the
+                                 LIGHTS TIMELINE card below (see GroupsEditorPanel
+                                 + BtnAddColorProfile pinned to the bottom-right)
+                                 so the user manages groups in the same place
+                                 they see their timeline visualisation. -->
+
+                            <TextBlock Style="{StaticResource CardCaption}" Text="QUICK SCENES"/>
+                            <Border Style="{StaticResource Card}" Padding="14,12,14,8">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                               Text="One-click overrides for your selected groups + lights. The schedule resumes at the next tick (~30 seconds) so these are momentary tweaks. Right-click a custom scene to edit or delete it."/>
+                                    <!-- v0.6.56: top scenes shown by
+                                         default. The rest live in a hidden
+                                         WrapPanel that the "Show more"
+                                         button reveals. -->
+                                    <ItemsControl x:Name="QuickScenesList">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Content="{Binding Name}"
+                                                        Tag="{Binding Id}"
+                                                        Margin="0,0,10,10"
+                                                        Padding="16,6"
+                                                        MinHeight="32"
+                                                        Style="{StaticResource PillButton}"
+                                                        ToolTip="{Binding Tooltip}"
+                                                        Click="OnQuickSceneClicked"
+                                                        MouseRightButtonUp="OnQuickSceneRightClicked"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <ItemsControl x:Name="QuickScenesMoreList" Visibility="Collapsed">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Content="{Binding Name}"
+                                                        Tag="{Binding Id}"
+                                                        Margin="0,0,10,10"
+                                                        Padding="16,6"
+                                                        MinHeight="32"
+                                                        Style="{StaticResource PillButton}"
+                                                        ToolTip="{Binding Tooltip}"
+                                                        Click="OnQuickSceneClicked"
+                                                        MouseRightButtonUp="OnQuickSceneRightClicked"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Grid Margin="0,2,0,0">
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button x:Name="BtnAddQuickScene"
+                                                Grid.Column="0"
+                                                Padding="14,4"
+                                                MinHeight="28"
+                                                Style="{StaticResource PillButton}"
+                                                Content="+ Add scene"
+                                                ToolTip="Create a custom Quick Scene with your own kelvin and brightness."/>
+                                        <!-- v0.6.57: Show-more pushed to
+                                             bottom-right and given a muted
+                                             background so it reads as a
+                                             secondary control. -->
+                                        <Button x:Name="BtnQuickScenesShowMore"
+                                                Grid.Column="2"
+                                                Padding="12,4"
+                                                MinHeight="28"
+                                                Background="#22FFFFFF"
+                                                Foreground="{DynamicResource App.TextSecondary}"
+                                                BorderThickness="0"
+                                                FontSize="12"
+                                                Cursor="Hand"
+                                                Visibility="Collapsed"
+                                                Content="Show more"
+                                                ToolTip="Reveal the rest of the available scenes (custom + bridge-imported).">
+                                            <Button.Template>
+                                                <ControlTemplate TargetType="Button">
+                                                    <Border x:Name="Bd"
+                                                            CornerRadius="14"
+                                                            Background="{TemplateBinding Background}"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter HorizontalAlignment="Center"
+                                                                          VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Button.Template>
+                                        </Button>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- v0.6.57: lights timeline. Per-group
+                                 visualisation of how each Hue group's
+                                 effective colour changes through the
+                                 day. Each row's gradient is constrained
+                                 by the most-restrictive bulb in the
+                                 group (so an IKEA Tradfri in a mixed
+                                 group caps the group's deepest warmth).
+                                 Click Simulate to run a vertical
+                                 playhead across all rows. -->
+                            <TextBlock Style="{StaticResource CardCaption}" Text="LIGHTS TIMELINE"/>
+                            <Border Style="{StaticResource Card}" Padding="14,12">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                               Text="A 'profile' is a complete lights timeline (all rows). Switch profiles to swap the whole set of colour-group gradients at once — e.g. one profile for everyday, one for movie nights. The Default profile is built-in; create your own profiles via the + button and rename, delete, or reset them from the same row."/>
+                                    <!-- v0.6.73: profile selector + management,
+                                         inline at the top of the timeline card
+                                         (no separate popup). The active profile's
+                                         colour groups drive the timeline rows
+                                         below; switching profiles swaps the whole
+                                         set in one click. -->
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Style="{StaticResource RowLabel}" Text="Refresh group list / test selection"/>
-                                        <Button Grid.Column="1" x:Name="BtnHueRefreshGroups"
-                                                Margin="0,0,8,0"
-                                                Style="{StaticResource PillButton}" Content="Refresh"/>
-                                        <Button Grid.Column="2" x:Name="BtnHueTest"
-                                                Margin="0,0,14,0"
-                                                Style="{StaticResource PillButton}" Content="Test"/>
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                                   Margin="0,0,8,0"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="Profile"/>
+                                        <ComboBox Grid.Column="1"
+                                                  x:Name="CboLightsProfile"
+                                                  Margin="0,0,8,0"
+                                                  MinWidth="160"
+                                                  DisplayMemberPath="Label"
+                                                  SelectedValuePath="Id"
+                                                  ToolTip="Switch between lights timeline profiles. The selected profile's colour groups drive your Hue lights and populate the timeline rows below."/>
+                                        <Button Grid.Column="2" x:Name="BtnLightsProfileAdd"
+                                                Padding="10,4" MinHeight="28" Margin="0,0,6,0"
+                                                Style="{StaticResource PillButton}"
+                                                Content="+ New"
+                                                ToolTip="Create a new custom profile. Starts as a copy of the currently-selected one so you have something to tweak."/>
+                                        <Button Grid.Column="3" x:Name="BtnLightsProfileRename"
+                                                Padding="10,4" MinHeight="28" Margin="0,0,6,0"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Rename"
+                                                ToolTip="Rename the current profile."/>
+                                        <Button Grid.Column="4" x:Name="BtnLightsProfileDelete"
+                                                Padding="10,4" MinHeight="28" Margin="0,0,6,0"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Delete"
+                                                ToolTip="Delete the current profile. Disabled for the built-in Default profile (use Reset for that)."/>
+                                        <Button Grid.Column="5" x:Name="BtnLightsProfileReset"
+                                                Padding="10,4" MinHeight="28"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Reset"
+                                                ToolTip="Reset the Default profile back to its recommended factory contents. Only available for the built-in Default profile."/>
                                     </Grid>
+                                    <!-- v0.7.0: colour source. "Time of day" turns
+                                         every row below into an editable 24 h bar
+                                         of colour stops. -->
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                                   Margin="0,0,8,0" FontSize="12"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   Text="Colour lights by"/>
+                                        <ComboBox Grid.Column="1" x:Name="CboHueColorSource"
+                                                  HorizontalAlignment="Left" MinWidth="300"
+                                                  ToolTip="Screen warmth: lamps follow the screen's warmth curve. Time of day: you place colour stops on a 24-hour clock for each row.">
+                                            <ComboBoxItem Content="Screen warmth (follow the screen schedule)"/>
+                                            <ComboBoxItem Content="Time of day (colour stops on a 24 h clock)"/>
+                                        </ComboBox>
+                                    </Grid>
+                                    <TextBlock x:Name="LblTimeModeHint"
+                                               Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                               Visibility="Collapsed"
+                                               Text="Click a bar to add a colour stop. Drag a stop sideways to move it, click it to change its colour, brightness or time. Lights fade from stop to stop."/>
+                                    <Canvas x:Name="LightsTimelineCanvas"
+                                            Height="260"
+                                            ClipToBounds="True"/>
+                                    <Grid Margin="0,8,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="LblTimelineStatus"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource App.TextSecondary}"
+                                                   VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1" x:Name="BtnTimelineSimulate"
+                                                Style="{StaticResource PillButton}"
+                                                Content="Simulate"
+                                                ToolTip="Sweep a vertical playhead across the timeline at the same speed as the Schedule simulator. Lets you see all groups change in lockstep."/>
+                                    </Grid>
+
+                                    <!-- v0.7.1: bulbs per row. Drag a chip onto another
+                                         row (here or on the timeline bars) to move the
+                                         bulb; drop on "New group" to start a group. -->
+                                    <StackPanel x:Name="BulbZonesSection" Margin="0,12,0,0">
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock FontSize="11" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource App.TextSecondary}"
+                                                           Text="BULBS"/>
+                                                <TextBlock Style="{StaticResource RowHint}"
+                                                           Text="Drag a bulb onto another group (or onto its bar above) to move it. The dot shows what the bulb is doing right now. Right-click a row's name above for more options."/>
+                                            </StackPanel>
+                                            <Button Grid.Column="1" x:Name="BtnSplitByBulbType"
+                                                    Style="{StaticResource PillButton}"
+                                                    Padding="12,4" MinHeight="28" Margin="12,0,0,0"
+                                                    Content="Split into colour + white groups"
+                                                    ToolTip="Put every bulb Underlit controls into two groups: one for full-colour bulbs and one for white-only bulbs, each with its own colour stops."/>
+                                        </Grid>
+                                        <StackPanel x:Name="BulbZonesPanel"/>
+                                        <Grid x:Name="WhiteFollowRow" Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="230"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                                <TextBlock FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource App.TextPrimary}"
+                                                           Text="White-only bulbs fade out"/>
+                                                <TextBlock Style="{StaticResource RowHint}"
+                                                           Text="They can't make orange or red, so they dim and switch off as the colour moves past warm white. The thin strip under a bar shows them."/>
+                                            </StackPanel>
+                                            <Slider Grid.Column="1" x:Name="SldWhiteFollow"
+                                                    Style="{StaticResource AppleSlider}" VerticalAlignment="Center"
+                                                    Minimum="0" Maximum="100" SmallChange="5" LargeChange="10"
+                                                    IsSnapToTickEnabled="True" TickFrequency="5"/>
+                                            <TextBlock Grid.Column="2" x:Name="LblWhiteFollow"
+                                                       Style="{StaticResource ValueChip}" MinWidth="110"/>
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <!-- v0.7.0: what to do when Google Home / the
+                                         Hue app / a switch changes a light. -->
+                                    <Grid Margin="0,10,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource App.TextPrimary}"
+                                                       Text="When Google Home or the Hue app changes a light"/>
+                                            <TextBlock Style="{StaticResource RowHint}"
+                                                       Text="Underlit stops changing that light right away. Choose when it takes the light back. You can always use Resume lights schedule in the tray menu."/>
+                                        </StackPanel>
+                                        <ComboBox Grid.Column="1" x:Name="CboHueOverrideRelease"
+                                                  MinWidth="230" VerticalAlignment="Center">
+                                            <ComboBoxItem Content="Until it's switched off"/>
+                                            <ComboBoxItem Content="Until the next colour stop"/>
+                                            <ComboBoxItem Content="Until I resume it myself"/>
+                                        </ComboBox>
+                                    </Grid>
+
+                                    <!-- v0.6.75: inline colour-group editor.
+                                         Lives under the timeline canvas so the
+                                         user manages the rows in the same place
+                                         they see them visualised. Each row
+                                         shows: name, light count, bulb kelvin
+                                         range, then inline buttons for Lights
+                                         (popup), Edit gradient, Delete. The
+                                         "+ Add group" pill pins to the bottom-
+                                         right of the card per the user's spec. -->
+                                    <Border Margin="0,10,0,0"
+                                            Padding="0"
+                                            Background="Transparent">
+                                        <StackPanel>
+                                            <TextBlock Margin="0,0,0,6"
+                                                       FontSize="11"
+                                                       FontWeight="SemiBold"
+                                                       Foreground="{DynamicResource App.TextSecondary}"
+                                                       Text="COLOUR GROUPS"/>
+                                            <ItemsControl x:Name="ColorProfilesList">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,0,0,6"
+                                                                Padding="12,8"
+                                                                Background="#11FFFFFF"
+                                                                CornerRadius="8"
+                                                                Tag="{Binding Id}"
+                                                                MouseRightButtonUp="OnColorProfileRightClicked">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding Name}"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource App.TextPrimary}"/>
+                                                                    <TextBlock Text="{Binding Summary}"
+                                                                               FontSize="11"
+                                                                               Margin="0,2,0,0"
+                                                                               Foreground="{DynamicResource App.TextSecondary}"
+                                                                               TextWrapping="Wrap"/>
+                                                                </StackPanel>
+                                                                <Button Grid.Column="1"
+                                                                        Padding="10,3" MinHeight="26" Margin="0,0,6,0"
+                                                                        Style="{StaticResource PillButton}"
+                                                                        Content="Lights"
+                                                                        Tag="{Binding Id}"
+                                                                        Click="OnColorProfileLightsClicked"
+                                                                        ToolTip="Show which bulbs are in this group and the kelvin range they can collectively reach."/>
+                                                                <Button Grid.Column="2"
+                                                                        Padding="10,3" MinHeight="26" Margin="0,0,6,0"
+                                                                        Style="{StaticResource PillButton}"
+                                                                        Content="Edit"
+                                                                        Tag="{Binding Id}"
+                                                                        Click="OnColorProfileEditClicked"
+                                                                        ToolTip="Open the gradient editor for this group."/>
+                                                                <Button Grid.Column="3"
+                                                                        Padding="10,3" MinHeight="26" Margin="0,0,8,0"
+                                                                        Style="{StaticResource PillButton}"
+                                                                        Content="Delete"
+                                                                        Tag="{Binding Id}"
+                                                                        Click="OnColorProfileDeleteClicked"
+                                                                        ToolTip="Remove this group from the profile. The bulbs revert to the default schedule."/>
+                                                                <CheckBox Grid.Column="4"
+                                                                          VerticalAlignment="Center"
+                                                                          Style="{StaticResource ToggleSwitch}"
+                                                                          IsChecked="{Binding Enabled, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <TextBlock x:Name="LblNoColorProfiles"
+                                                       Margin="0,4,0,8"
+                                                       FontSize="11" FontStyle="Italic"
+                                                       Foreground="{DynamicResource App.TextSecondary}"
+                                                       Text="No groups in this profile yet. Use the + button on the right to add one."
+                                                       Visibility="Collapsed"/>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="1"
+                                                        x:Name="BtnAddColorProfile"
+                                                        Padding="14,4"
+                                                        MinHeight="30"
+                                                        Style="{StaticResource PillButton}"
+                                                        Content="+ Add group"
+                                                        ToolTip="Add a new colour group (subset of your bulbs with its own gradient) to the active profile."/>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- v0.6.55: time-triggered routines.
+                                 Useful primarily for SAD lamps on Hue
+                                 plugs ("turn on at wake, off after 25
+                                 min") but also for any "lights on at X,
+                                 off at Y" automation. -->
+                            <TextBlock Style="{StaticResource CardCaption}" Text="ROUTINES"/>
+                            <Border Style="{StaticResource Card}" Padding="14,12,14,10">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource RowHint}" Margin="0,0,0,8"
+                                               Text="Time-triggered actions on your lights and plugs. Run at a wall-clock time, or relative to your wake or bedtime. Right-click a routine to edit or delete."/>
+                                    <ItemsControl x:Name="RoutinesList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Margin="0,0,0,6"
+                                                        Padding="12,8"
+                                                        Background="#11FFFFFF"
+                                                        CornerRadius="8"
+                                                        Tag="{Binding Id}"
+                                                        MouseRightButtonUp="OnRoutineRightClicked">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Name}"
+                                                                       FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource App.TextPrimary}"/>
+                                                            <TextBlock Text="{Binding Summary}"
+                                                                       FontSize="11"
+                                                                       Margin="0,2,0,0"
+                                                                       Foreground="{DynamicResource App.TextSecondary}"
+                                                                       TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                        <CheckBox Grid.Column="1"
+                                                                  Style="{StaticResource ToggleSwitch}"
+                                                                  IsChecked="{Binding Enabled, Mode=TwoWay}"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock x:Name="LblNoRoutines"
+                                               Margin="0,4,0,8"
+                                               FontSize="11" FontStyle="Italic"
+                                               Foreground="{DynamicResource App.TextSecondary}"
+                                               Text="No routines yet. Use the buttons below to add one."
+                                               Visibility="Collapsed"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <Button x:Name="BtnAddRoutine"
+                                                Margin="0,0,8,0"
+                                                Padding="14,4"
+                                                MinHeight="28"
+                                                Style="{StaticResource PillButton}"
+                                                Content="+ Add routine"
+                                                ToolTip="Create a new time-triggered routine."/>
+                                        <Button x:Name="BtnAddSadRoutine"
+                                                Padding="14,4"
+                                                MinHeight="28"
+                                                Style="{StaticResource PillButton}"
+                                                Content="+ Add SAD-lamp routine"
+                                                ToolTip="Pre-filled routine: turn on selected plugs / lights at wake time, off 25 minutes later. Tweak after creation if needed."/>
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
 
@@ -1710,6 +2578,33 @@
                                         <ComboBoxItem Content="Custom gradient"/>
                                         <ComboBoxItem Content="Warm white only"/>
                                     </ComboBox>
+                                </Grid>
+                                <Border Style="{StaticResource RowDivider}"/>
+                                <!-- v0.6.55: limited-bulb fade onset.
+                                     Controls how early CT-limited bulbs
+                                     (IKEA Tradfri etc.) start dimming
+                                     as the schedule passes their warmth
+                                     limit. Higher = smoother (eases in
+                                     earlier), lower = sharper cliff at
+                                     the bulb's actual limit. -->
+                                <Grid Style="{StaticResource Row}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="220"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Style="{StaticResource RowLabel}" Text="Limited-bulb fade onset"/>
+                                        <TextBlock Style="{StaticResource RowHint}"
+                                                   Text="How much earlier than each bulb's CT limit it starts dimming. CT-limited bulbs (IKEA Tradfri, etc.) ramp brightness from full to off between this point and the schedule's deepest warmth, so they don't visually clash with full-range Hue bulbs at bedtime. Higher = smoother dim, lower = sharper cliff."/>
+                                    </StackPanel>
+                                    <Slider Grid.Column="1" x:Name="SldHueBulbFadeOnset"
+                                            Style="{StaticResource AppleSlider}"
+                                            VerticalAlignment="Center"
+                                            Minimum="0" Maximum="1500"
+                                            SmallChange="50" LargeChange="100"
+                                            IsSnapToTickEnabled="True" TickFrequency="50"/>
+                                    <TextBlock Grid.Column="2" Style="{StaticResource ValueChip}" x:Name="LblHueBulbFadeOnset"/>
                                 </Grid>
                                 <!-- v0.6.49: multi-stop gradient editor, only visible
                                      when "Custom gradient" is selected. Photoshop-
@@ -1800,11 +2695,13 @@
                                                 x:Name="BtnHueGradientEditStop"
                                                 Style="{StaticResource PillButton}"
                                                 Margin="0,0,8,0"
-                                                Content="Edit colour"/>
+                                                Content="Edit colour"
+                                                ToolTip="Open the colour picker to change the colour of the selected gradient stop."/>
                                         <Button Grid.Column="4"
                                                 x:Name="BtnHueGradientRemoveStop"
                                                 Style="{StaticResource PillButton}"
-                                                Content="Remove"/>
+                                                Content="Remove"
+                                                ToolTip="Delete the selected gradient stop. The gradient must keep at least two stops."/>
                                     </Grid>
                                 </StackPanel>
                                 </StackPanel>

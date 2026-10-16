@@ -39,6 +39,20 @@ public sealed class LiveGlassController : IDisposable
     public const int FullWidthDip  = PillWidthDip  + PaddingDip * 2;
     public const int FullHeightDip = PillHeightDip + PaddingDip * 2;
 
+    /// <summary>v0.6.70: offset of the PillContainer's top-left inside
+    /// the OSD window. Must match the VisibleClip margin in
+    /// OsdWindow.xaml (currently "90,60,0,0" because we widened the
+    /// window in v0.6.64 to give the drop shadow halo room).
+    ///
+    /// Without this offset, the WGC desktop capture was sampling at
+    /// (window.Left, window.Top) — i.e. 90 dip left of and 60 dip above
+    /// where the pill actually sits on screen — so the live-glass
+    /// refraction was showing desktop content that wasn't behind the
+    /// OSD at all. Adding the offsets puts the capture region right
+    /// under the pill.</summary>
+    public const int PillContainerOffsetXDip = 90;
+    public const int PillContainerOffsetYDip = 60;
+
     private readonly Window _window;
     private readonly ImageBrush _targetBrush;
     /// <summary>v0.6.30: separate brush for the highlights overlay layer (rim +
@@ -238,8 +252,12 @@ public sealed class LiveGlassController : IDisposable
     {
         var src = PresentationSource.FromVisual(_window);
         double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-        int physWinX = (int)Math.Round(_window.Left * scale);
-        int physWinY = (int)Math.Round(_window.Top  * scale);
+        // v0.6.70: shift the capture origin to where the PillContainer
+        // actually sits inside the window (see PillContainerOffsetXDip/
+        // YDip), not the window's outer top-left. Fixes the long-standing
+        // "refraction shows the wrong content" bug.
+        int physWinX = (int)Math.Round((_window.Left + PillContainerOffsetXDip) * scale);
+        int physWinY = (int)Math.Round((_window.Top  + PillContainerOffsetYDip) * scale);
         int physFullW = (int)Math.Round(FullWidthDip  * scale);
         int physFullH = (int)Math.Round(FullHeightDip * scale);
 
@@ -306,8 +324,12 @@ public sealed class LiveGlassController : IDisposable
         {
             var src = PresentationSource.FromVisual(_window);
             double scale = src?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
-            int physWinX = (int)Math.Round(_window.Left * scale);
-            int physWinY = (int)Math.Round(_window.Top  * scale);
+            // v0.6.70: shift to the PillContainer's actual screen position
+            // (window-relative offset 90,60) so the BitBlt captures the
+            // strip of desktop directly behind the pill, not the area
+            // above-and-left of it.
+            int physWinX = (int)Math.Round((_window.Left + PillContainerOffsetXDip) * scale);
+            int physWinY = (int)Math.Round((_window.Top  + PillContainerOffsetYDip) * scale);
             int physFullW = (int)Math.Round(FullWidthDip  * scale);
             int physFullH = (int)Math.Round(FullHeightDip * scale);
             if (physFullW <= 0 || physFullH <= 0) return;

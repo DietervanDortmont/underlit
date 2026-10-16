@@ -98,6 +98,11 @@ public partial class SettingsWindow : Window
         // Restore from settings on construction; save on Closed.
         RestoreWindowGeometry();
         Closed += (_, _) => SaveWindowGeometry();
+        // v0.6.53: end the 24h simulation if the user closes Settings
+        // mid-simulation. Otherwise the host's regular Scheduler would
+        // stay stopped (it was paused by SimulationStarted) and the
+        // schedule would silently die until the next app launch.
+        Closed += (_, _) => { if (_simulationTimer != null) EndSimulation(); };
 
         // Populate the sidebar logo. Render our programmatic icon to a WPF ImageSource.
         AppLogo.Source = RenderLogoToImageSource(56);
@@ -106,17 +111,39 @@ public partial class SettingsWindow : Window
         UpdateAllValueChips();
 
         // Live-apply: push as you change, don't require save/close
-        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled, ChkFollowAccent, ChkGlassLiveCapture })
+        foreach (var cb in new[] { ChkStartWithWindows, ChkDisableNightLight, ChkHookNativeKeys, ChkScheduleEnabled, ChkFollowAccent, ChkGlassLiveCapture, ChkWindDownEnabled, ChkAutoTheme })
         {
             cb.Checked   += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
             cb.Unchecked += (_, _) => { PushSettings(); RefreshAccentSwatch(); };
         }
+        // v0.6.55: wind-down notification controls.
+        SldWindDownMinutes.ValueChanged += (_, _) =>
+        {
+            LblWindDownMinutes.Text = ((int)SldWindDownMinutes.Value) + " min";
+            PushSettings();
+        };
+        TxtWindDownMessage.LostFocus += (_, _) => PushSettings();
+        // v0.6.56: auto-theme threshold slider.
+        SldAutoThemeThreshold.ValueChanged += (_, _) =>
+        {
+            LblAutoThemeThreshold.Text = ((int)SldAutoThemeThreshold.Value) + " K";
+            PushSettings();
+        };
+        // v0.6.63: per-mode wallpaper / colour wiring.
+        CboLightBgChoice.SelectionChanged += (_, _) => { UpdateBgUiVisibility(); PushSettings(); };
+        CboDarkBgChoice.SelectionChanged  += (_, _) => { UpdateBgUiVisibility(); PushSettings(); };
+        TxtLightBgImagePath.LostFocus     += (_, _) => PushSettings();
+        TxtDarkBgImagePath.LostFocus      += (_, _) => PushSettings();
+        BtnLightBgBrowse.Click            += (_, _) => BrowseForBgImage(isLight: true);
+        BtnDarkBgBrowse.Click             += (_, _) => BrowseForBgImage(isLight: false);
+        BtnLightBgColor.Click             += (_, _) => PickBgColor(isLight: true);
+        BtnDarkBgColor.Click              += (_, _) => PickBgColor(isLight: false);
         // v0.6.50: refresh the auto-start status line whenever the toggle
         // changes, plus a manual Repair button that force-rewrites the
         // registry entry + Startup-folder shortcut to the running EXE.
         ChkStartWithWindows.Checked   += (_, _) => RefreshAutoStartStatus();
         ChkStartWithWindows.Unchecked += (_, _) => RefreshAutoStartStatus();
-        BtnAutoStartRepair.Click      += (_, _) => RepairAutoStart();
+        // v0.6.56: Repair button removed - autostart self-heals on every launch.
         RefreshAutoStartStatus();
         foreach (var sld in new[] { SldBrightnessStep, SldWarmthStep, SldRampDuration, SldNightWarmth, SldOsdGap })
         {
@@ -125,18 +152,44 @@ public partial class SettingsWindow : Window
         // Glass sliders also fire GlassPreviewRequested so the host can keep
         // the OSD on screen while the user tweaks them — otherwise they'd be
         // tweaking blind, only seeing the result on the next hotkey press.
-        foreach (var sld in new[] { SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
-                                     SldGlassDepth, SldGlassDispersion, SldGlassFrost,
-                                     SldGlassCornerRadius, SldGlassBevelWidth,
-                                     SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth,
-                                     SldGlassRimSecondary, SldGlassTintStrength })
+        var osdAffectingSliders = new[]
         {
-            sld.ValueChanged += (_, _) =>
-            {
-                PushSettings();
-                UpdateAllValueChips();
-                GlassPreviewRequested?.Invoke();
-            };
+            SldGlassLightAngle, SldGlassLightIntensity, SldGlassRefraction,
+            SldGlassDepth, SldGlassDispersion, SldGlassFrost,
+            SldGlassCornerRadius, SldGlassBevelWidth,
+            SldGlassBevelDepth, SldGlassRimBrightness, SldGlassRimWidth,
+            SldGlassRimSecondary, SldGlassTintStrength,
+            SldOsdGap,
+            // v0.6.57: shadow sliders are also OSD-affecting. v0.6.64: + spread.
+            SldOsdShadowOpacity, SldOsdShadowBlur, SldOsdShadowOffset, SldOsdShadowAngle,
+            SldOsdShadowSpread,
+            // v0.6.71: bar inset slider also belongs here — adjusts the
+            // OSD's internal ContentRoot margin live.
+            SldOsdBarInset,
+        };
+        foreach (var sld in osdAffectingSliders)
+        {
+            // v0.6.57: throttled push so a fast slider drag doesn't queue
+            // 60-100 OSD redraws per second. SchedulePushAndPreview caps
+            // PushSettings + GlassPreviewRequested at ~30 fps.
+            sld.ValueChanged += (_, _) => SchedulePushAndPreview();
+            // v0.6.56: live preview pin. Hold the OSD visible from the
+            // moment the user clicks/focuses the slider until they let go
+            // and focus leaves. Mouse-based slider drags don't reliably
+            // fire keyboard-focus events, so we use mouse capture +
+            // keyboard focus together.
+            sld.PreviewMouseLeftButtonDown += (_, _) => SetOsdPreviewPinFromControl(sld, pinned: true);
+            sld.PreviewMouseLeftButtonUp   += (_, _) => { FlushThrottledPush(); SetOsdPreviewPinFromControl(sld, pinned: false); };
+            sld.GotKeyboardFocus            += (_, _) => SetOsdPreviewPinFromControl(sld, pinned: true);
+            sld.LostKeyboardFocus           += (_, _) => { FlushThrottledPush(); SetOsdPreviewPinFromControl(sld, pinned: false); };
+        }
+        // Combo-boxes that change OSD look (transparency, backdrop, bar
+        // style, accent colour, high-colour pickers): pin while open.
+        foreach (var cbo in new[] { CboTransparency, CboBackdrop, CboBarStyle })
+        {
+            cbo.DropDownOpened  += (_, _) => SetOsdPreviewPinFromControl(cbo, pinned: true);
+            cbo.DropDownClosed  += (_, _) => SetOsdPreviewPinFromControl(cbo, pinned: false);
+            cbo.SelectionChanged += (_, _) => GlassPreviewRequested?.Invoke();
         }
         // Schedule/exclusion textboxes still commit on lost-focus.
         foreach (var tb in new TextBox[] { TxtBedtimeStart, TxtBedtime, TxtWakeupStart, TxtWakeTime, TxtExclusions })
@@ -166,6 +219,13 @@ public partial class SettingsWindow : Window
             if (_suppressHueSync) return;
             PushSettings();
         };
+        // v0.6.55: limited-bulb fade onset slider.
+        SldHueBulbFadeOnset.ValueChanged += (_, _) =>
+        {
+            LblHueBulbFadeOnset.Text = ((int)SldHueBulbFadeOnset.Value) + " K";
+            if (_suppressHueSync) return;
+            PushSettings();
+        };
         ChkHueIgnoreBoost.Checked   += (_, _) => PushSettings();
         ChkHueIgnoreBoost.Unchecked += (_, _) => PushSettings();
 
@@ -179,11 +239,17 @@ public partial class SettingsWindow : Window
         // so the handler knows which slider to nudge.
         WireValueChipDragAndEdit(LblMonBr, SldMonBrOffset, scalePerPixel: 0.20);
         WireValueChipDragAndEdit(LblMonWr, SldMonWrOffset, scalePerPixel: 8.0);
+        // v0.6.52: Hue brightness % and warmth-offset K become drag/edit
+        // value chips too. scalePerPixel matches each slider's range:
+        // brightness 0..100 = 0.5/px, warmth offset -2000..+2000 K = 20/px.
+        WireValueChipDragAndEdit(LblHueBrightness,   SldHueBrightness,   scalePerPixel: 0.5);
+        WireValueChipDragAndEdit(LblHueWarmthOffset, SldHueWarmthOffset, scalePerPixel: 20.0);
 
         BtnPickAccent.Click += OnPickAccent;
         BtnPickTint.Click   += OnPickTint;
         BtnPickHighColor.Click  += OnPickHighColor;
         BtnResetHighColor.Click += OnResetHighColor;
+        BtnPickSunIcon.Click    += OnPickSunIcon;
 
         // Profile management buttons.
         BtnAddProfile.Click    += OnAddProfile;
@@ -200,6 +266,10 @@ public partial class SettingsWindow : Window
         // these in addition to the existing PushSettings hooks so the redraw is
         // immediate (PushSettings updates _snapshot, the graph re-samples it).
         ScheduleGraph.SizeChanged += (_, _) => RedrawScheduleGraph();
+        // v0.6.53: 24h cycle simulator. Click starts; another click while
+        // running stops. Disabled when the schedule itself is disabled
+        // (nothing to simulate).
+        BtnSimulateCycle.Click += (_, _) => ToggleSimulation();
         ChkScheduleEnabled.Checked   += (_, _) => RedrawScheduleGraph();
         ChkScheduleEnabled.Unchecked += (_, _) => RedrawScheduleGraph();
         // v0.6.34: night-warmth slider only writes to the per-anchor kelvins
@@ -295,6 +365,8 @@ public partial class SettingsWindow : Window
         BtnAboutGithub.Click       += (_, _) => OpenUrl(GitHubReleasesUrl);
         BtnAboutLog.Click          += (_, _) => OpenLogFolder();
         BtnAboutCheckUpdate.Click  += async (_, _) => await CheckForUpdatesAsync();
+        BtnAboutFeedback.Click     += (_, _) => OpenFeedbackUrl();
+        BtnAboutDonate.Click       += (_, _) => OpenUrl(DonateUrl);
         BtnRestoreDefaults.Click   += (_, _) => RestoreAllDefaults();
 
         // v0.6.40: every inline RowHint TextBlock turns into a hover
@@ -303,6 +375,11 @@ public partial class SettingsWindow : Window
         // wall of small explanatory text. Done at Loaded so the visual
         // tree is fully populated.
         Loaded += (_, _) => MigrateRowHintsToTooltips();
+        // v0.6.57: make every CardCaption clickable to collapse/expand
+        // its associated card (the next sibling element). Photoshop-style
+        // grouping. State is per-session - not persisted - so users always
+        // start with everything expanded after a restart.
+        Loaded += (_, _) => MakeCardsCollapsible();
     }
 
     /// <summary>
@@ -353,6 +430,50 @@ public partial class SettingsWindow : Window
     private static bool IsInteractiveControl(DependencyObject d) =>
         d is CheckBox || d is Slider || d is ComboBox || d is TextBox || d is Button
         || d is HotkeyField || d is ListBox;
+
+    /// <summary>v0.6.57: walk the visual tree, find every TextBlock
+    /// using the CardCaption style, and turn it into a click target
+    /// that toggles the next sibling element's visibility (the card
+    /// the caption introduces). Adds a small chevron prefix that flips
+    /// based on expanded state. State is per-session so users always
+    /// land on a fully-expanded layout after restart.</summary>
+    private void MakeCardsCollapsible()
+    {
+        var captionStyle = TryFindResource("CardCaption") as Style;
+        if (captionStyle == null) return;
+
+        // Snapshot first - mutating the tree while enumerating crashes WPF.
+        var captions = EnumerateVisualDescendants(this).OfType<TextBlock>()
+            .Where(tb => ReferenceEquals(tb.Style, captionStyle))
+            .ToList();
+
+        foreach (var caption in captions)
+        {
+            if (VisualTreeHelper.GetParent(caption) is not Panel parent) continue;
+            int idx = parent.Children.IndexOf(caption);
+            if (idx < 0 || idx + 1 >= parent.Children.Count) continue;
+            if (parent.Children[idx + 1] is not FrameworkElement card) continue;
+
+            string originalText = caption.Text;
+            // Use a small triangle glyph so it reads as an expander
+            // marker without needing a Segoe Fluent Icons fallback.
+            void Render(bool expanded)
+            {
+                caption.Text = (expanded ? "▾  " : "▸  ") + originalText;
+            }
+
+            bool expanded = true;
+            Render(expanded);
+            caption.Cursor = System.Windows.Input.Cursors.Hand;
+            caption.MouseLeftButtonDown += (_, e) =>
+            {
+                expanded = !expanded;
+                card.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+                Render(expanded);
+                e.Handled = true;
+            };
+        }
+    }
 
     private static IEnumerable<DependencyObject> EnumerateVisualDescendants(DependencyObject root)
     {
@@ -437,6 +558,37 @@ public partial class SettingsWindow : Window
             ? c
             : Color.FromRgb(0xFF, 0xFF, 0xFF);
         TintSwatch.Background = new SolidColorBrush(color);
+    }
+
+    /// <summary>v0.6.69: pick the sun (brightness) icon colour. The
+    /// icon used to follow the OSD's auto luminance-based colour; now
+    /// it's fully user-controlled with a default of #FFFEC80F (amber).</summary>
+    private void OnPickSunIcon(object sender, RoutedEventArgs e)
+    {
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+        };
+        if (TryParseHex(_snapshot.OsdSunIconColor, out var current))
+        {
+            dlg.Color = System.Drawing.Color.FromArgb(current.A, current.R, current.G, current.B);
+        }
+        if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            var c = dlg.Color;
+            _snapshot.OsdSunIconColor = $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+            RefreshSunIconSwatch();
+            PushSettings();
+        }
+    }
+
+    private void RefreshSunIconSwatch()
+    {
+        Color color = TryParseHex(_snapshot.OsdSunIconColor, out var c)
+            ? c
+            : Color.FromArgb(0xFF, 0xFE, 0xC8, 0x0F);
+        SunIconSwatch.Background = new SolidColorBrush(color);
     }
 
     private void OnPickHighColor(object sender, RoutedEventArgs e)
@@ -642,6 +794,13 @@ public partial class SettingsWindow : Window
         LblRampDuration.Text   = ((int)SldRampDuration.Value) + " ms";
         LblNightWarmth.Text    = ((int)SldNightWarmth.Value) + " K";
         LblOsdGap.Text         = ((int)SldOsdGap.Value) + " dip";
+        // v0.6.57: OSD shadow chip labels.
+        LblOsdShadowOpacity.Text = ((int)SldOsdShadowOpacity.Value) + " %";
+        LblOsdShadowBlur.Text    = ((int)SldOsdShadowBlur.Value)    + " px";
+        LblOsdShadowOffset.Text  = ((int)SldOsdShadowOffset.Value)  + " px";
+        LblOsdShadowAngle.Text   = ((int)SldOsdShadowAngle.Value)   + "°";
+        LblOsdShadowSpread.Text  = ((int)SldOsdShadowSpread.Value)  + " px";
+        LblOsdBarInset.Text      = ((int)SldOsdBarInset.Value)      + " dip";
         // Always integer + signed format so a +3 monitor offset and a 0
         // baseline read identically; matches the GridView's StringFormat.
         int monBr = (int)Math.Round(SldMonBrOffset.Value);
@@ -699,6 +858,38 @@ public partial class SettingsWindow : Window
     private enum SchedulePointId { BedtimeStart, BedtimeEnd, WakeupStart, WakeupEnd }
 
     private SchedulePointId? _draggingSchedulePoint;
+
+    // ---- 24h cycle simulator (v0.6.53, retuned in v0.6.54) ----
+    /// <summary>When non-null, RedrawScheduleGraph uses this in place of
+    /// DateTime.Now for the "now" indicator line and label. Set during
+    /// the simulation so the line scrolls across the day.</summary>
+    private DateTime? _simulatedNow;
+    private DispatcherTimer? _simulationTimer;
+    private DateTime _simulationStartedUtc;
+    /// <summary>Pre-computed sample timeline for the current simulation
+    /// run. Each sample carries (fakeTime, kelvin) plus the cumulative
+    /// real-time offset at which it should display, in milliseconds.
+    /// Built once at start of simulation; the tick handler does an O(1)
+    /// lookup based on real elapsed time.</summary>
+    private (DateTime FakeTime, int Kelvin, int CumulativeMs)[]? _simulationSamples;
+    private int _simulationTotalMs;
+    /// <summary>Real-time offset (in ms from simulation start) the user
+    /// last scrubbed to via click. Treated as a positive seek - subsequent
+    /// real elapsed time is added on top to continue auto-play from the
+    /// scrubbed position.</summary>
+    private int _simulationScrubBaseMs;
+    /// <summary>Number of warmth samples across the 24h window. 240 = one
+    /// every 6 simulated minutes - fine enough that smooth-stepped ramps
+    /// don't show step artefacts, coarse enough to keep weight math cheap.</summary>
+    private const int SimulationSampleCount = 240;
+    /// <summary>Per-sample display time, in ms, for a sample with no warmth
+    /// change. Sets the floor speed so flat plateaus skim by visibly but
+    /// don't waste time. 25 ms = 40 fps through the long day plateau.</summary>
+    private const int SimulationBaseDelayMs = 25;
+    /// <summary>v0.6.56: dropped from 8 → 4 (≈2x faster ramps). With a
+    /// typical 24h schedule the total playback is now ~9-10 s; ramps
+    /// still feel watchable, just less leisurely.</summary>
+    private const int SimulationMsPerKelvin = 4;
 
     private void RedrawScheduleGraph()
     {
@@ -835,8 +1026,10 @@ public partial class SettingsWindow : Window
         // the user can read off "what kelvin am I targeting right now"
         // at a glance. v0.6.45: bumped from a faint white dotted line to
         // the app accent colour, thicker, and with a label so it reads
-        // clearly in both light and dark mode.
-        DateTime now = DateTime.Now;
+        // clearly in both light and dark mode. v0.6.53: during a 24h
+        // simulation, the line scrolls across the graph showing the
+        // synthesized "now" rather than the wall-clock now.
+        DateTime now = _simulatedNow ?? DateTime.Now;
         double nowX = curveLeft + (now.Hour + now.Minute / 60.0) / 24.0 * curveW;
         var nowAccent = (Brush?)TryFindResource("App.Accent")
                         ?? new SolidColorBrush(Color.FromRgb(0x60, 0xCD, 0xFF));
@@ -853,9 +1046,14 @@ public partial class SettingsWindow : Window
         // label so the user can read off "what colour temperature am I
         // targeting right now" at a glance.
         int nowKelvin = Underlit.Core.Scheduler.ComputeWarmth(now, s);
+        // v0.6.53: include the synthesized clock time during simulation,
+        // otherwise just show "now". Real-time mode still reads "now · 4200 K".
+        string nowPrefix = _simulatedNow.HasValue
+            ? now.ToString("HH:mm")
+            : "now";
         var nowLabel = new TextBlock
         {
-            Text = $"now · {nowKelvin} K",
+            Text = $"{nowPrefix} · {nowKelvin} K",
             FontSize = 10,
             FontWeight = FontWeights.SemiBold,
             Foreground = nowAccent,
@@ -872,6 +1070,191 @@ public partial class SettingsWindow : Window
     /// point was grabbed. v0.6.30: takes the curve area's left offset and width
     /// so dots draw aligned with the (now Y-axis-labelled) curve, not the raw
     /// canvas left edge.</summary>
+    /// <summary>Start or stop the 24h cycle simulation. Click once to
+    /// start (button label flips to "Stop"); click again or wait for
+    /// playback to finish to return to normal scheduled operation.
+    ///
+    /// <para>v0.6.54: variable-speed playback. Pre-computes a 240-sample
+    /// timeline of (time, kelvin) for the next 24 simulated hours starting
+    /// at the active profile's WakeupStart, then allocates display time
+    /// proportional to per-sample kelvin change. Result: flat plateaus
+    /// skim, ramps dwell, total playback ~15-18 seconds. Click on the
+    /// schedule graph during playback to scrub to that fake time.</para></summary>
+    private void ToggleSimulation()
+    {
+        if (_simulationTimer != null)
+        {
+            EndSimulation();
+            return;
+        }
+
+        if (_snapshot == null || !_snapshot.ScheduleEnabled)
+        {
+            LblSimulateStatus.Text =
+                "Enable the schedule first - there's nothing to simulate when the schedule is off.";
+            return;
+        }
+
+        // Snapshot the schedule once and build the sample timeline.
+        var schedSnapshot = SnapshotForSchedule();
+        BuildSimulationTimeline(schedSnapshot);
+        if (_simulationSamples is null || _simulationSamples.Length == 0) return;
+
+        SimulationStarted?.Invoke();
+
+        BtnSimulateCycle.Content = "Stop";
+        LblSimulateStatus.Visibility = Visibility.Visible;
+        _simulationStartedUtc   = DateTime.UtcNow;
+        _simulationScrubBaseMs  = 0;
+        _simulationTimer = new DispatcherTimer(DispatcherPriority.Render)
+        {
+            Interval = TimeSpan.FromMilliseconds(16) // ~60 fps render rate
+        };
+        _simulationTimer.Tick += OnSimulationTick;
+        _simulationTimer.Start();
+
+        // Render once so the now-line jumps to the WakeupStart sample
+        // immediately instead of waiting for the first tick.
+        OnSimulationTick(this, EventArgs.Empty);
+    }
+
+    /// <summary>Build the (FakeTime, Kelvin, CumulativeMs) array for the
+    /// upcoming simulation. Anchored at the schedule's WakeupStart so
+    /// the user sees the morning ramp first - that's the most visually
+    /// interesting moment, and starting on a flat plateau (midnight) was
+    /// boring.</summary>
+    private void BuildSimulationTimeline(AppSettings schedSnapshot)
+    {
+        // Anchor: today at the active profile's WakeupStart hour:minute.
+        var p = schedSnapshot.ActiveProfile();
+        var anchor = DateTime.Today
+            .AddHours(p.WakeupStart.Hour)
+            .AddMinutes(p.WakeupStart.Minute);
+
+        int n = SimulationSampleCount;
+        double minutesPerSample = 1440.0 / n;
+
+        var samples = new (DateTime, int, int)[n];
+        // First pass: time + kelvin.
+        for (int i = 0; i < n; i++)
+        {
+            var t = anchor.AddMinutes(i * minutesPerSample);
+            samples[i] = (t, Underlit.Core.Scheduler.ComputeWarmth(t, schedSnapshot), 0);
+        }
+        // Second pass: per-sample display ms + cumulative offset. Display
+        // time for sample i is base + msPerKelvin * |kelvin[i+1] - kelvin[i]|,
+        // so the time spent ON sample i scales with the change LEAVING it.
+        int cumMs = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int next = (i + 1) % n;
+            int dk = Math.Abs(samples[next].Item2 - samples[i].Item2);
+            int displayMs = SimulationBaseDelayMs + dk * SimulationMsPerKelvin;
+            samples[i].Item3 = cumMs;
+            cumMs += displayMs;
+        }
+        _simulationSamples = samples;
+        _simulationTotalMs = cumMs;
+    }
+
+    private void OnSimulationTick(object? sender, EventArgs e)
+    {
+        if (_snapshot == null || _simulationSamples is null) { EndSimulation(); return; }
+
+        // Effective elapsed = scrub-base + real time since the most recent
+        // (re)start. Scrubbing resets the base to the clicked offset and
+        // restarts the real clock so playback continues from there.
+        int realElapsedMs = (int)Math.Max(0, (DateTime.UtcNow - _simulationStartedUtc).TotalMilliseconds);
+        int effectiveMs = _simulationScrubBaseMs + realElapsedMs;
+
+        if (effectiveMs >= _simulationTotalMs)
+        {
+            EndSimulation();
+            return;
+        }
+
+        // Find the sample whose [cumulative, cumulative+display) window
+        // contains effectiveMs. Linear scan from the previous index would
+        // be cheaper, but the array is only 240 entries - binary search
+        // is fast enough and immune to scrubs that jump backward.
+        int idx = FindSampleIndex(effectiveMs);
+        var sample = _simulationSamples[idx];
+
+        _simulatedNow = sample.FakeTime;
+        SimulationTimeAt?.Invoke(sample.FakeTime);
+        SimulationWarmthAt?.Invoke(sample.Kelvin);
+        RedrawScheduleGraph();
+        RedrawLightsTimeline(); // v0.6.57: keep the timeline playhead in sync
+
+        int progress = (int)Math.Round(effectiveMs * 100.0 / _simulationTotalMs);
+        LblSimulateStatus.Text =
+            $"Simulating - {sample.FakeTime:HH:mm} - {sample.Kelvin} K ({Math.Clamp(progress, 0, 100)}%) - " +
+            "click on the graph to jump to a specific time";
+    }
+
+    private int FindSampleIndex(int targetMs)
+    {
+        var s = _simulationSamples!;
+        int lo = 0, hi = s.Length - 1;
+        while (lo < hi)
+        {
+            int mid = (lo + hi + 1) / 2;
+            if (s[mid].CumulativeMs <= targetMs) lo = mid;
+            else                                  hi = mid - 1;
+        }
+        return lo;
+    }
+
+    /// <summary>v0.6.54: scrub. Called when the user clicks anywhere on
+    /// the schedule graph during simulation - jumps the fake time to the
+    /// clicked x position and resumes auto-play from there.
+    ///
+    /// <para>Tricky bit: the schedule graph's X axis runs 00:00 - 24:00,
+    /// but our sample array is anchored at WakeupStart (so the user sees
+    /// the morning ramp first when auto-playing). We map the click's
+    /// time-of-day, then find the sample whose FakeTime.TimeOfDay matches,
+    /// rather than mapping clicked-fraction directly to sample index.</para></summary>
+    private void HandleSimulationScrub(double mouseXInGraph, double graphLeft, double graphWidth)
+    {
+        if (_simulationTimer == null || _simulationSamples is null) return;
+
+        double frac = Math.Clamp((mouseXInGraph - graphLeft) / Math.Max(1, graphWidth), 0.0, 0.999);
+        double clickedHourOfDay = frac * 24.0;
+
+        // Find the sample whose time-of-day is closest to the clicked
+        // hour, accounting for the 24h wrap (samples can span midnight).
+        int bestIdx = 0;
+        double bestDist = double.MaxValue;
+        for (int i = 0; i < _simulationSamples.Length; i++)
+        {
+            double sampleHour = _simulationSamples[i].FakeTime.TimeOfDay.TotalHours;
+            double dist = Math.Abs(sampleHour - clickedHourOfDay);
+            if (dist > 12.0) dist = 24.0 - dist;
+            if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+
+        _simulationScrubBaseMs = _simulationSamples[bestIdx].CumulativeMs;
+        _simulationStartedUtc  = DateTime.UtcNow;
+        OnSimulationTick(this, EventArgs.Empty);
+    }
+
+    private void EndSimulation()
+    {
+        _simulationTimer?.Stop();
+        _simulationTimer = null;
+        _simulatedNow = null;
+        _simulationSamples = null;
+        _simulationScrubBaseMs = 0;
+        BtnSimulateCycle.Content = "Simulate";
+        // v0.6.56: status row is hidden when not simulating; the
+        // descriptive text lives on the button's tooltip.
+        LblSimulateStatus.Text = "";
+        LblSimulateStatus.Visibility = Visibility.Collapsed;
+        SimulationEnded?.Invoke();
+        RedrawScheduleGraph();
+        RedrawLightsTimeline(); // v0.6.57: clear the timeline playhead
+    }
+
     private void DrawSchedulePoint(SchedulePointId id, TimeOfDay t, int kelvin, double curveLeft, double curveTop, double curveW, double curveH)
     {
         double x = curveLeft + t.AsHourFractional / 24.0 * curveW;
@@ -952,6 +1335,24 @@ public partial class SettingsWindow : Window
             // OnGraphMouseMove handles the first real update once the user
             // actually moves; clicks-without-drag are now a true no-op.
             e.Handled = true;
+            return;
+        }
+
+        // v0.6.54: scrub. If a simulation is running and the click was
+        // somewhere in the curve area (not on an anchor), jump fake time
+        // to the clicked x and continue auto-play from there.
+        if (_simulationTimer != null)
+        {
+            double w = ScheduleGraph.ActualWidth;
+            double curveLeft = GraphYAxisWidth;
+            double curveW    = Math.Max(1, w - curveLeft);
+            // Only treat clicks inside the curve area as scrubs; clicks
+            // on the y-axis label strip get ignored.
+            if (pos.X >= curveLeft - 2 && pos.X <= w + 2)
+            {
+                HandleSimulationScrub(pos.X, curveLeft, curveW);
+                e.Handled = true;
+            }
         }
     }
 
@@ -1121,11 +1522,51 @@ public partial class SettingsWindow : Window
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
+    /// <summary>v0.6.55: unified row in the new tree-style HueLightsList.
+    /// One row can be a group header (toggle = add/remove that group from
+    /// the schedule), a member light under a group (toggle = add/remove
+    /// the individual light), an "Other lights" header, or an ungrouped
+    /// light. Visual differences (font weight, indent) come from the
+    /// computed properties so the XAML DataTemplate stays one shape.</summary>
+    private sealed class HueLightRow : System.ComponentModel.INotifyPropertyChanged
+    {
+        public enum RowKind { GroupHeader, OtherHeader, MemberLight, UngroupedLight }
+
+        public string Id { get; init; } = "";
+        public string DisplayName { get; init; } = "";
+        public RowKind Kind { get; init; } = RowKind.MemberLight;
+
+        public bool IsHeader => Kind == RowKind.GroupHeader || Kind == RowKind.OtherHeader;
+
+        // Visual: indent member lights, embolden headers.
+        public Thickness RowMargin => IsHeader
+            ? new Thickness(0, 8, 0, 4)
+            : new Thickness(20, 3, 0, 3);
+        public double FontSize => IsHeader ? 11 : 13;
+        public FontWeight FontWeight => IsHeader ? FontWeights.SemiBold : FontWeights.Normal;
+
+        private bool _isSelected;
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set { if (_isSelected != value) { _isSelected = value; PropertyChanged?.Invoke(this, new(nameof(IsSelected))); } }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    }
+
     private HueBridgeClient? _hueClient;
     private string? _huePairingIp;
     private DispatcherTimer? _huePairTimer;
     private int _huePairSecondsLeft;
     private System.Collections.ObjectModel.ObservableCollection<HueGroupRow>? _hueGroupRows;
+    private System.Collections.ObjectModel.ObservableCollection<HueLightRow>? _hueLightRows;
+
+    /// <summary>v0.6.75: per-light CT capability cache. Populated from
+    /// each <see cref="HueLight.CtMinMireds"/>/<see cref="HueLight.CtMaxMireds"/>
+    /// after a bridge fetch so the inline group editor can show each
+    /// group's collective kelvin range without re-querying. Null values
+    /// mean "no CT control" (RGB-only bulb or plug).</summary>
+    private Dictionary<string, (int? MinK, int? MaxK, string Name)>? _hueLightCaps;
 
     private void WireHuePage()
     {
@@ -1142,6 +1583,29 @@ public partial class SettingsWindow : Window
         BtnHueUnpair.Click         += (_, _) => UnpairHue();
         BtnHueRefreshGroups.Click  += async (_, _) => await LoadHueGroupsAsync();
         BtnHueTest.Click           += async (_, _) => await TestHueGroupsAsync();
+        // v0.6.55: dynamic Quick Scenes (built-in + user-defined).
+        // Item-level handlers are wired via XAML Click="OnQuickSceneClicked".
+        BtnAddQuickScene.Click     += (_, _) => OpenQuickSceneEditor(scene: null);
+        BtnQuickScenesShowMore.Click += (_, _) => ToggleQuickScenesMore();
+        BuildQuickScenesList();
+        // v0.6.55: routines.
+        BtnAddRoutine.Click        += (_, _) => OpenRoutineEditor(routine: null);
+        BtnAddSadRoutine.Click     += (_, _) => AddSadLampRoutineTemplate();
+        BuildRoutinesList();
+        // v0.6.58: per-group colour profiles.
+        BtnAddColorProfile.Click   += (_, _) => OpenColorProfileEditor(profile: null);
+        BuildColorProfilesList();
+        // v0.6.73: lights timeline profiles. The active profile drives
+        // the rows shown in the timeline + the colour groups list above.
+        WireLightsProfileSelector();
+        // v0.6.57: lights timeline. Redraws when the canvas resizes
+        // (initial layout, window resize) and on demand. Simulate
+        // shares the same start/end events as the schedule simulator
+        // so the host pauses the regular Scheduler during playback.
+        LightsTimelineCanvas.SizeChanged += (_, _) => RedrawLightsTimeline();
+        BtnTimelineSimulate.Click        += (_, _) => ToggleSimulation(); // reuse schedule simulator
+        // v0.7.0: time-of-day colour stops + external-change behaviour.
+        WireTimeOfDayLights();
 
         CboHueColorRange.SelectionChanged += (_, _) =>
         {
@@ -1679,6 +2143,26 @@ public partial class SettingsWindow : Window
         finally { BtnHuePair.IsEnabled = true; }
     }
 
+    /// <summary>v0.6.55: tracked separately from <see cref="_hueLightRows"/>
+    /// because plugs aren't part of the warmth-following pipeline. They
+    /// show up in their own settings card and are wired into Quick Scenes
+    /// + Routines without going through the per-bulb fade-out logic.</summary>
+    private System.Collections.ObjectModel.ObservableCollection<HueLightRow>? _huePlugRows;
+
+    /// <summary>v0.6.57: snapshots of the bridge's groups and lights kept
+    /// alongside the row collections. Used by the lights timeline to
+    /// look up each group's member bulbs and their CT-min/max so the
+    /// per-group gradient can apply the same fade-out math the live
+    /// controller uses.</summary>
+    private List<HueGroup>? _hueGroupsSnapshot;
+    private Dictionary<string, HueLight>? _hueLightsByIdSnapshot;
+
+    /// <summary>v0.6.55: scenes stored in the Hue Bridge (curated by the
+    /// user via the official Hue app). Surfaced in Quick Scenes as
+    /// "from Hue" entries so the user can re-trigger their existing
+    /// scenes from Underlit.</summary>
+    private List<HueScene>? _hueBridgeScenes;
+
     private async System.Threading.Tasks.Task LoadHueGroupsAsync()
     {
         if (_hueClient == null) return;
@@ -1686,58 +2170,1664 @@ public partial class SettingsWindow : Window
         try
         {
             List<HueGroup> groups;
-            try { groups = await _hueClient.GetGroupsAsync(); }
+            List<HueLight> lights;
+            List<HueScene> scenes = new();
+            try
+            {
+                // Fetch in parallel - all three endpoints are independent.
+                // /scenes is a bonus; if it fails we just don't surface
+                // bridge scenes (the rest of the page still works).
+                var groupsTask = _hueClient.GetGroupsAsync();
+                var lightsTask = _hueClient.GetLightsAsync();
+                var scenesTask = _hueClient.GetScenesAsync();
+                await System.Threading.Tasks.Task.WhenAll(groupsTask, lightsTask, scenesTask);
+                groups = await groupsTask;
+                lights = await lightsTask;
+                try { scenes = await scenesTask; }
+                catch (Exception sex) { Logger.Warn("Hue: GetScenesAsync failed (non-fatal)", sex); }
+            }
             catch (Exception ex)
             {
                 LblHueBridgeStatus.Text = $"Bridge unreachable: {ex.Message}";
                 return;
             }
-            LblHueBridgeStatus.Text = $"Reachable · {groups.Count} group{(groups.Count == 1 ? "" : "s")}";
+            // Filter out bridge-managed transient scenes - they aren't useful to the user.
+            _hueBridgeScenes = scenes.Where(s => !s.Recycle).ToList();
+            // v0.6.57: snapshot for the lights timeline.
+            _hueGroupsSnapshot = groups;
+            _hueLightsByIdSnapshot = lights.ToDictionary(l => l.Id, l => l, StringComparer.OrdinalIgnoreCase);
 
-            var prevSelected = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
-            _hueGroupRows = new System.Collections.ObjectModel.ObservableCollection<HueGroupRow>();
+            // Split plugs from bulbs up front so the rest of the build
+            // doesn't have to keep checking IsPlug.
+            var bulbs = lights.Where(l => !l.IsPlug).ToList();
+            var plugs = lights.Where(l =>  l.IsPlug).ToList();
+
+            LblHueBridgeStatus.Text =
+                $"Reachable - {groups.Count} group{(groups.Count == 1 ? "" : "s")}, " +
+                $"{bulbs.Count} light{(bulbs.Count == 1 ? "" : "s")}, " +
+                $"{plugs.Count} plug{(plugs.Count == 1 ? "" : "s")}";
+
+            // Hidden compat shim for code paths that still touch HueGroupsList
+            // (e.g. TestHueGroupsAsync). Build it from the same group set
+            // but never display it - it's collapsed in the XAML.
+            var prevSelectedGroups = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
+            _hueGroupRows = new();
             foreach (var g in groups)
             {
-                var row = new HueGroupRow
-                {
-                    Id          = g.Id,
-                    DisplayName = g.ToString(),
-                    IsSelected  = prevSelected.Contains(g.Id),
-                };
-                row.PropertyChanged += (_, _) =>
-                {
-                    _snapshot.HueSelectedGroupIds = _hueGroupRows!
-                        .Where(r => r.IsSelected)
-                        .Select(r => r.Id)
-                        .ToList();
-                    PushSettings();
-                };
+                var row = new HueGroupRow { Id = g.Id, DisplayName = g.ToString(),
+                                              IsSelected = prevSelectedGroups.Contains(g.Id) };
                 _hueGroupRows.Add(row);
             }
             HueGroupsList.ItemsSource = _hueGroupRows;
+
+            // Build the unified tree-style row list.
+            BuildHueLightRows(groups, bulbs);
+
+            // Plugs section.
+            BuildHuePlugRows(plugs);
+
+            // Re-render Quick Scenes so any newly-fetched bridge scenes appear.
+            BuildQuickScenesList();
         }
         finally { BtnHueRefreshGroups.IsEnabled = true; }
     }
 
+    /// <summary>Build the unified rows list for HueLightsList. For each
+    /// Hue group, emit a header row + one row per member bulb. Bulbs in
+    /// no group go under an "Other lights" header at the end. Selecting
+    /// a group header updates HueSelectedGroupIds; selecting a member or
+    /// ungrouped bulb updates HueSelectedLightIds; the two lists are
+    /// independent (HueController takes the union).</summary>
+    private void BuildHueLightRows(List<HueGroup> groups, List<HueLight> bulbs)
+    {
+        var prevGroupSel = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
+        var prevLightSel = new HashSet<string>(_snapshot.HueSelectedLightIds, StringComparer.OrdinalIgnoreCase);
+
+        var bulbsById = bulbs.ToDictionary(b => b.Id, b => b);
+        var bulbsInAGroup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // v0.6.75: build the CT-range cache that the inline group editor
+        // reads to display the per-group kelvin range. K = 1e6 / mireds,
+        // so MIN mireds → MAX kelvin, and MAX mireds → MIN kelvin. We
+        // store kelvin directly to avoid the conversion in every render.
+        _hueLightCaps = new Dictionary<string, (int? MinK, int? MaxK, string Name)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var b in bulbs)
+        {
+            int? minK = b.CtMaxMireds.HasValue && b.CtMaxMireds.Value > 0
+                ? (int)Math.Round(1_000_000.0 / b.CtMaxMireds.Value)
+                : (int?)null;
+            int? maxK = b.CtMinMireds.HasValue && b.CtMinMireds.Value > 0
+                ? (int)Math.Round(1_000_000.0 / b.CtMinMireds.Value)
+                : (int?)null;
+            _hueLightCaps[b.Id] = (minK, maxK, b.Name ?? b.Id);
+        }
+        // v0.6.75: refresh the inline group editor so the new kelvin
+        // ranges show up immediately.
+        BuildColorProfilesList();
+
+        _hueLightRows = new System.Collections.ObjectModel.ObservableCollection<HueLightRow>();
+
+        foreach (var g in groups.OrderBy(g => g.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            // Skip empty groups - showing "Living Room (0 lights)" is just visual noise.
+            if (g.LightIds.Count == 0) continue;
+
+            var headerRow = new HueLightRow
+            {
+                Id = g.Id,
+                DisplayName = g.ToString(),
+                Kind = HueLightRow.RowKind.GroupHeader,
+                IsSelected = prevGroupSel.Contains(g.Id),
+            };
+            headerRow.PropertyChanged += (_, _) => SyncGroupSelectionFromRows();
+            _hueLightRows.Add(headerRow);
+
+            foreach (var lightId in g.LightIds.OrderBy(id => bulbsById.TryGetValue(id, out var l) ? l.Name : id,
+                                                         StringComparer.OrdinalIgnoreCase))
+            {
+                if (!bulbsById.TryGetValue(lightId, out var bulb)) continue;
+                bulbsInAGroup.Add(bulb.Id);
+
+                var memberRow = new HueLightRow
+                {
+                    Id = bulb.Id,
+                    DisplayName = bulb.DisplayLabel,
+                    Kind = HueLightRow.RowKind.MemberLight,
+                    IsSelected = prevLightSel.Contains(bulb.Id),
+                };
+                memberRow.PropertyChanged += (_, _) => SyncLightSelectionFromRows();
+                _hueLightRows.Add(memberRow);
+            }
+        }
+
+        // Ungrouped bulbs (rare but possible - e.g. a freshly-paired
+        // bulb the user hasn't filed into a room yet).
+        var orphans = bulbs.Where(b => !bulbsInAGroup.Contains(b.Id))
+                            .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+        if (orphans.Count > 0)
+        {
+            _hueLightRows.Add(new HueLightRow
+            {
+                DisplayName = "OTHER LIGHTS",
+                Kind = HueLightRow.RowKind.OtherHeader,
+                // The header itself isn't togglable - clicking it should be
+                // a no-op. We could hide the toggle entirely, but it's the
+                // same DataTemplate as group headers; just leave it
+                // unticked. Toggling does nothing because OtherHeader
+                // isn't covered in the sync routines.
+            });
+            foreach (var b in orphans)
+            {
+                var row = new HueLightRow
+                {
+                    Id = b.Id,
+                    DisplayName = b.DisplayLabel,
+                    Kind = HueLightRow.RowKind.UngroupedLight,
+                    IsSelected = prevLightSel.Contains(b.Id),
+                };
+                row.PropertyChanged += (_, _) => SyncLightSelectionFromRows();
+                _hueLightRows.Add(row);
+            }
+        }
+
+        HueLightsList.ItemsSource = _hueLightRows;
+    }
+
+    private void SyncGroupSelectionFromRows()
+    {
+        if (_hueLightRows == null) return;
+        _snapshot.HueSelectedGroupIds = _hueLightRows
+            .Where(r => r.Kind == HueLightRow.RowKind.GroupHeader && r.IsSelected)
+            .Select(r => r.Id)
+            .ToList();
+        // Keep the hidden shim collection in sync so anything still
+        // reading from _hueGroupRows sees the same selection state.
+        if (_hueGroupRows != null)
+        {
+            var sel = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
+            foreach (var g in _hueGroupRows) g.IsSelected = sel.Contains(g.Id);
+        }
+        PushSettings();
+    }
+
+    private void SyncLightSelectionFromRows()
+    {
+        if (_hueLightRows == null) return;
+        _snapshot.HueSelectedLightIds = _hueLightRows
+            .Where(r => (r.Kind == HueLightRow.RowKind.MemberLight
+                         || r.Kind == HueLightRow.RowKind.UngroupedLight)
+                        && r.IsSelected)
+            .Select(r => r.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        PushSettings();
+    }
+
+    private void BuildHuePlugRows(List<HueLight> plugs)
+    {
+        var prevPlugSel = new HashSet<string>(_snapshot.HueSelectedLightIds, StringComparer.OrdinalIgnoreCase);
+        _huePlugRows = new System.Collections.ObjectModel.ObservableCollection<HueLightRow>();
+        foreach (var p in plugs.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var row = new HueLightRow
+            {
+                Id = p.Id,
+                DisplayName = p.DisplayLabel,
+                Kind = HueLightRow.RowKind.UngroupedLight, // not a header; uses light visual
+                IsSelected = prevPlugSel.Contains(p.Id),
+            };
+            row.PropertyChanged += (_, _) => SyncLightSelectionFromRows();
+            _huePlugRows.Add(row);
+        }
+        HuePlugsList.ItemsSource = _huePlugRows;
+        LblNoPlugs.Visibility = plugs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // v0.6.57: timeline depends on the same data we just refreshed.
+        RedrawLightsTimeline();
+    }
+
+    // -------------------------------------------------------------------
+    // Lights timeline (v0.6.57)
+    // -------------------------------------------------------------------
+
+    /// <summary>v0.6.57: per-bulb playhead position during the schedule
+    /// simulator. The timeline's vertical playhead line is drawn here
+    /// when non-null, in canvas coordinates derived from _simulatedNow.</summary>
+    private System.Windows.Shapes.Line? _timelinePlayhead;
+
+    /// <summary>v0.6.61: variable-speed x-axis lookup for the lights
+    /// timeline. Pre-computed once per redraw; sample i corresponds to
+    /// time-of-day i*24/N hours, kelvins[i] is the schedule's warmth at
+    /// that hour, xPositions[i] is the canvas x for that sample.
+    /// Weighting allocates more horizontal space to samples whose
+    /// warmth is changing fast (the dawn/dusk ramps), compressing the
+    /// long flat plateaus.</summary>
+    private sealed class TimelineXMap
+    {
+        public int[] Kelvins = Array.Empty<int>();
+        public double[] XPositions = Array.Empty<double>();
+        public double Width;
+        public int Samples;
+
+        /// <summary>Map an arbitrary hour-of-day [0, 24) to canvas x by
+        /// linear interpolation between the two nearest samples.</summary>
+        public double XForHour(double hourOfDay)
+        {
+            hourOfDay = ((hourOfDay % 24) + 24) % 24;
+            double idxF = hourOfDay / 24.0 * Samples;
+            int i = Math.Clamp((int)idxF, 0, Samples - 1);
+            double frac = idxF - i;
+            return XPositions[i] * (1 - frac) + XPositions[i + 1] * frac;
+        }
+    }
+
+    private TimelineXMap BuildVariableSpeedXMap(AppSettings sched, double width, int samples)
+    {
+        var map = new TimelineXMap { Width = width, Samples = samples };
+        map.Kelvins = new int[samples + 1];
+        for (int i = 0; i <= samples; i++)
+        {
+            double hour = i * 24.0 / samples;
+            var t = DateTime.Today.AddHours(hour);
+            map.Kelvins[i] = Underlit.Core.Scheduler.ComputeWarmth(t, sched);
+        }
+        // Per-segment weight: 1 baseline + warmth-change-rate scaled.
+        // Tuning: 0.04 dip per kelvin of change. A typical 4500 K
+        // bedtime ramp produces ~180 dip of stretch which feels right
+        // on a ~600 dip canvas.
+        double total = 0;
+        var w = new double[samples];
+        for (int i = 0; i < samples; i++)
+        {
+            int dk = Math.Abs(map.Kelvins[i + 1] - map.Kelvins[i]);
+            w[i] = 1.0 + dk * 0.04;
+            total += w[i];
+        }
+        if (total <= 0) total = 1; // schedule disabled - degenerate to uniform
+        map.XPositions = new double[samples + 1];
+        map.XPositions[0] = 0;
+        double cum = 0;
+        for (int i = 0; i < samples; i++)
+        {
+            cum += w[i];
+            map.XPositions[i + 1] = cum / total * width;
+        }
+        return map;
+    }
+
+    /// <summary>(Re)render the lights timeline. Variable-speed x-axis,
+    /// per-colour-profile rows, clickable schedule row, and time-offset
+    /// visualisation per row.</summary>
+    private void RedrawLightsTimeline()
+    {
+        if (LightsTimelineCanvas == null) return;
+        LightsTimelineCanvas.Children.Clear();
+        _timelinePlayhead = null;
+        RebuildBulbZones(); // v0.7.1: bulb chips under the timeline
+
+        double w = LightsTimelineCanvas.ActualWidth;
+        double h = LightsTimelineCanvas.ActualHeight;
+        if (w <= 1 || h <= 1) return;
+
+        // v0.7.0: time-of-day mode has its own editable timeline.
+        if (_snapshot.HueColorSource == HueColorSource.TimeOfDay)
+        {
+            RedrawTimeModeTimeline(w);
+            return;
+        }
+        if (Math.Abs(LightsTimelineCanvas.Height - 260) > 0.5)
+        {
+            LightsTimelineCanvas.Height = 260; // back from time mode; SizeChanged redraws
+            return;
+        }
+
+        // Layout
+        const double LabelWidth = 130;
+        const double ScheduleRowH = 36;
+        const double ProfileRowH  = 26;
+        const double RowSpacing   = 6;
+        const double TimeAxisH    = 16;
+        double timelineX = LabelWidth;
+        double timelineW = Math.Max(1, w - LabelWidth - 4);
+
+        var schedSnapshot = SnapshotForSchedule();
+        int scheduleDeepestMireds = ComputeSnapshotScheduleDeepestMireds(schedSnapshot);
+
+        // Variable-speed x-mapping shared by all rows so they line up.
+        var xmap = BuildVariableSpeedXMap(schedSnapshot, timelineW, samples: 96);
+
+        // Build row list: schedule (top, bigger, clickable) + one per
+        // colour profile + a "default" row catching un-claimed lights.
+        var rows = new List<TimelineRow>();
+        rows.Add(new TimelineRow
+        {
+            Label = "Schedule",
+            Sublabel = "click to edit",
+            IsScheduleRow = true,
+            TimeOffsetMinutes = 0,
+            LimitingMaxMireds = null,
+        });
+
+        // Profile rows.
+        var profiles = _snapshot.ColorGroups ?? new List<LightColorGroup>();
+        var claimedLights = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var claimedGroups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in profiles)
+        {
+            foreach (var lid in p.LightIds) claimedLights.Add(lid);
+            foreach (var gid in p.GroupIds) claimedGroups.Add(gid);
+        }
+        foreach (var p in profiles)
+        {
+            int? worstCt = ComputeWorstCtForProfile(p);
+            int memberCount = p.LightIds.Count + p.GroupIds.Count;
+            string offsetSummary = p.TimeOffsetMinutes == 0
+                ? ""
+                : (p.TimeOffsetMinutes < 0 ? $"−{-p.TimeOffsetMinutes} min" : $"+{p.TimeOffsetMinutes} min");
+            rows.Add(new TimelineRow
+            {
+                Label = string.IsNullOrWhiteSpace(p.Name) ? "(unnamed profile)" : p.Name,
+                Sublabel = memberCount == 0 ? "no targets" : offsetSummary,
+                IsScheduleRow = false,
+                TimeOffsetMinutes = p.TimeOffsetMinutes,
+                LimitingMaxMireds = worstCt,
+                Enabled = p.Enabled,
+            });
+        }
+
+        // Default row: bulbs the user selected but didn't claim with a profile.
+        if (_hueLightsByIdSnapshot != null)
+        {
+            var unclaimedBulbs = _hueLightsByIdSnapshot.Values
+                .Where(b => !b.IsPlug && !claimedLights.Contains(b.Id))
+                .ToList();
+            // Filter to bulbs that ARE actually selected (per HueSelectedLightIds OR via a Hue group).
+            var selectedDirectly = new HashSet<string>(_snapshot.HueSelectedLightIds, StringComparer.OrdinalIgnoreCase);
+            var selectedViaGroup = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (_hueGroupsSnapshot != null)
+            {
+                var selectedGroupIds = new HashSet<string>(_snapshot.HueSelectedGroupIds, StringComparer.OrdinalIgnoreCase);
+                selectedGroupIds.ExceptWith(claimedGroups);
+                foreach (var g in _hueGroupsSnapshot)
+                    if (selectedGroupIds.Contains(g.Id))
+                        foreach (var lid in g.LightIds) selectedViaGroup.Add(lid);
+            }
+            unclaimedBulbs = unclaimedBulbs.Where(b => selectedDirectly.Contains(b.Id) || selectedViaGroup.Contains(b.Id)).ToList();
+            if (unclaimedBulbs.Count > 0)
+            {
+                int? worstCt = null;
+                foreach (var b in unclaimedBulbs)
+                {
+                    if (b.CtMaxMireds.HasValue && (!worstCt.HasValue || b.CtMaxMireds.Value < worstCt.Value))
+                        worstCt = b.CtMaxMireds;
+                }
+                rows.Add(new TimelineRow
+                {
+                    Label = "Default",
+                    Sublabel = $"{unclaimedBulbs.Count} unclaimed bulb{(unclaimedBulbs.Count == 1 ? "" : "s")}",
+                    IsScheduleRow = false,
+                    IsDefaultRow = true,
+                    TimeOffsetMinutes = 0,
+                    LimitingMaxMireds = worstCt,
+                    Enabled = true,
+                });
+            }
+        }
+
+        // Compute total height and clip if too many rows.
+        double totalH = ScheduleRowH;
+        for (int i = 1; i < rows.Count; i++) totalH += RowSpacing + ProfileRowH;
+        totalH += RowSpacing + TimeAxisH;
+        // We don't auto-clip - if the canvas isn't tall enough the user
+        // will see overflow. The Card sizes itself to the canvas, which
+        // is set in XAML. Future iteration could grow the canvas
+        // dynamically based on row count.
+
+        // Draw rows top-down.
+        double y = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            double rowH = rows[i].IsScheduleRow ? ScheduleRowH : ProfileRowH;
+            DrawTimelineRow(rows[i], schedSnapshot, scheduleDeepestMireds,
+                              xmap, 0, y, LabelWidth, rowH, timelineX, timelineW);
+            y += rowH + RowSpacing;
+        }
+
+        // Time axis at the bottom.
+        DrawTimelineTimeAxis(timelineX, h - TimeAxisH, TimeAxisH, xmap);
+
+        // Status text. Highlights the most-restrictive profile/default's bulb.
+        var note = rows.FirstOrDefault(r => r.LimitingMaxMireds.HasValue && !r.IsScheduleRow);
+        if (note != null && note.LimitingMaxMireds.HasValue)
+        {
+            int kelvin = (int)Math.Round(1_000_000.0 / note.LimitingMaxMireds.Value);
+            LblTimelineStatus.Text = $"Most-restrictive bulb caps at {kelvin} K - rows fade past that point.";
+        }
+        else if (rows.Count > 1)
+        {
+            LblTimelineStatus.Text = "All bulbs cover the full schedule range.";
+        }
+        else
+        {
+            LblTimelineStatus.Text = "Tick some bulbs in ROOMS & LIGHTS to see them here.";
+        }
+
+        if (_simulatedNow.HasValue) DrawTimelinePlayhead(timelineX, h, xmap);
+    }
+
+    private int? ComputeWorstCtForProfile(LightColorGroup p)
+    {
+        if (_hueLightsByIdSnapshot == null) return null;
+        int? worst = null;
+        foreach (var lid in p.LightIds)
+        {
+            if (_hueLightsByIdSnapshot.TryGetValue(lid, out var bulb)
+                && bulb.CtMaxMireds.HasValue
+                && (!worst.HasValue || bulb.CtMaxMireds.Value < worst.Value))
+            {
+                worst = bulb.CtMaxMireds;
+            }
+        }
+        if (_hueGroupsSnapshot != null)
+        {
+            foreach (var gid in p.GroupIds)
+            {
+                var grp = _hueGroupsSnapshot.FirstOrDefault(g => string.Equals(g.Id, gid, StringComparison.OrdinalIgnoreCase));
+                if (grp == null) continue;
+                foreach (var lid in grp.LightIds)
+                {
+                    if (_hueLightsByIdSnapshot.TryGetValue(lid, out var bulb)
+                        && bulb.CtMaxMireds.HasValue
+                        && (!worst.HasValue || bulb.CtMaxMireds.Value < worst.Value))
+                    {
+                        worst = bulb.CtMaxMireds;
+                    }
+                }
+            }
+        }
+        return worst;
+    }
+
+    private void DrawTimelineRow(TimelineRow row, AppSettings sched,
+                                  int scheduleDeepestMireds, TimelineXMap xmap,
+                                  double labelX, double y, double labelW, double rowH,
+                                  double gradientX, double gradientW)
+    {
+        // Two-line label: name (top) + sublabel (bottom). For taller
+        // rows like the schedule, the name is bigger.
+        var labelStack = new StackPanel { Orientation = Orientation.Vertical };
+        var nameLine = new TextBlock
+        {
+            Text = row.Label,
+            FontSize = row.IsScheduleRow ? 13 : 12,
+            FontWeight = row.IsScheduleRow ? FontWeights.SemiBold : FontWeights.Normal,
+            Foreground = (Brush?)TryFindResource("App.TextPrimary") ?? new SolidColorBrush(Colors.White),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Width = labelW - 8,
+        };
+        labelStack.Children.Add(nameLine);
+        if (!string.IsNullOrEmpty(row.Sublabel))
+        {
+            var sub = new TextBlock
+            {
+                Text = row.Sublabel,
+                FontSize = 10,
+                Foreground = (Brush?)TryFindResource("App.TextSecondary")
+                              ?? new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Width = labelW - 8,
+            };
+            labelStack.Children.Add(sub);
+        }
+        Canvas.SetLeft(labelStack, labelX);
+        Canvas.SetTop(labelStack, y + (rowH - (row.IsScheduleRow && !string.IsNullOrEmpty(row.Sublabel) ? 30 : 16)) / 2);
+        LightsTimelineCanvas.Children.Add(labelStack);
+
+        // Gradient bar uses the variable-speed x-mapping. Each sample
+        // becomes a stop at xPositions[i] / width. For per-row time
+        // offset, shift the kelvin lookup (NOT the x-mapping) - so all
+        // rows share the same x axis but different rows show different
+        // kelvins at the same x.
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new Point(0, 0.5),
+            EndPoint   = new Point(1, 0.5),
+        };
+        double offsetHours = row.TimeOffsetMinutes / 60.0;
+        double dimming = (row.Enabled && !row.IsScheduleRow) ? 1.0 : (row.IsScheduleRow ? 1.0 : 0.5);
+        for (int i = 0; i <= xmap.Samples; i++)
+        {
+            double sampleHour = i * 24.0 / xmap.Samples;
+            double effHour = ((sampleHour - offsetHours) % 24 + 24) % 24;
+            DateTime t = DateTime.Today.AddHours(effHour);
+            int kelvin = Underlit.Core.Scheduler.ComputeWarmth(t, sched);
+            int mireds = Underlit.Hue.HueBridgeClient.KelvinToMireds(kelvin);
+
+            double fadeFactor = 1.0;
+            if (!row.IsScheduleRow && row.LimitingMaxMireds.HasValue)
+            {
+                int bulbMaxK = (int)Math.Round(1_000_000.0 / row.LimitingMaxMireds.Value);
+                int onsetK = bulbMaxK + Math.Max(0, _snapshot.HueBulbFadeOnsetKelvin);
+                int onsetMireds = (int)Math.Round(1_000_000.0 / onsetK);
+                if (mireds > onsetMireds && scheduleDeepestMireds > onsetMireds)
+                {
+                    if (mireds >= scheduleDeepestMireds) fadeFactor = 0;
+                    else fadeFactor = 1.0 - (mireds - onsetMireds) / (double)(scheduleDeepestMireds - onsetMireds);
+                }
+            }
+            int displayK = kelvin;
+            if (!row.IsScheduleRow && row.LimitingMaxMireds.HasValue)
+            {
+                int bulbMaxK = (int)Math.Round(1_000_000.0 / row.LimitingMaxMireds.Value);
+                if (displayK < bulbMaxK) displayK = bulbMaxK;
+            }
+            var (r, g, b) = Underlit.Display.GammaRampApplier.KelvinToRgbMultipliers(displayK);
+            byte rByte = (byte)Math.Round(r * 255 * fadeFactor * dimming);
+            byte gByte = (byte)Math.Round(g * 255 * fadeFactor * dimming);
+            byte bByte = (byte)Math.Round(b * 255 * fadeFactor * dimming);
+            if (fadeFactor < 1.0)
+            {
+                double towardOff = 1.0 - fadeFactor;
+                rByte = (byte)(rByte + (32 - rByte) * towardOff);
+                gByte = (byte)(gByte + (32 - gByte) * towardOff);
+                bByte = (byte)(bByte + (32 - bByte) * towardOff);
+            }
+            double offset01 = xmap.XPositions[i] / Math.Max(1, gradientW);
+            brush.GradientStops.Add(new GradientStop(Color.FromRgb(rByte, gByte, bByte), Math.Clamp(offset01, 0, 1)));
+        }
+        var bar = new Border
+        {
+            Width = gradientW,
+            Height = rowH,
+            CornerRadius = new CornerRadius(6),
+            Background = brush,
+            BorderBrush = (Brush?)TryFindResource("App.CardBorder") ?? new SolidColorBrush(Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF)),
+            BorderThickness = new Thickness(1),
+            Cursor = row.IsScheduleRow ? System.Windows.Input.Cursors.Hand : null,
+            ToolTip = row.IsScheduleRow
+                ? "Click to jump to the Schedule page where you can edit this curve."
+                : null,
+        };
+        if (row.IsScheduleRow)
+        {
+            bar.MouseLeftButtonDown += (_, e) =>
+            {
+                // Index 0 of the sidebar is the Schedule page (declared
+                // in the constructor's _pages array).
+                NavList.SelectedIndex = 0;
+                e.Handled = true;
+            };
+        }
+        Canvas.SetLeft(bar, gradientX);
+        Canvas.SetTop(bar, y);
+        LightsTimelineCanvas.Children.Add(bar);
+    }
+
+    private void DrawTimelineTimeAxis(double timelineX, double y, double h, TimelineXMap xmap)
+    {
+        var axisBrush = (Brush?)TryFindResource("App.TextSecondary")
+                          ?? new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
+        // Variable-speed: project key hours onto the x-mapping so the
+        // labels sit where the gradient itself sits at that hour.
+        for (int hour = 0; hour <= 24; hour += 6)
+        {
+            double tx = timelineX + xmap.XForHour(hour == 24 ? 23.999 : hour);
+            var label = new TextBlock
+            {
+                Text = $"{hour:D2}:00",
+                FontSize = 10,
+                Foreground = axisBrush,
+            };
+            label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double offsetX = hour == 0 ? 0
+                              : hour == 24 ? -label.DesiredSize.Width
+                              : -label.DesiredSize.Width / 2;
+            Canvas.SetLeft(label, tx + offsetX);
+            Canvas.SetTop(label, y);
+            LightsTimelineCanvas.Children.Add(label);
+        }
+    }
+
+    private void DrawTimelinePlayhead(double timelineX, double canvasH, TimelineXMap xmap)
+    {
+        if (!_simulatedNow.HasValue) return;
+        double hourFrac = _simulatedNow.Value.TimeOfDay.TotalHours;
+        double px = timelineX + xmap.XForHour(hourFrac);
+        var brush = (Brush?)TryFindResource("App.Accent")
+                      ?? new SolidColorBrush(Color.FromRgb(0x60, 0xCD, 0xFF));
+        _timelinePlayhead = new System.Windows.Shapes.Line
+        {
+            X1 = px, Y1 = 0, X2 = px, Y2 = canvasH - 18,
+            Stroke = brush,
+            StrokeThickness = 2,
+            StrokeDashArray = new DoubleCollection(new[] { 4.0, 3.0 }),
+            IsHitTestVisible = false,
+        };
+        LightsTimelineCanvas.Children.Add(_timelinePlayhead);
+    }
+
+    private static int ComputeSnapshotScheduleDeepestMireds(AppSettings s)
+    {
+        int deepestK = Math.Min(
+            Math.Min(s.WakeupStartKelvin, s.WakeupEndKelvin),
+            Math.Min(s.BedtimeStartKelvin, s.BedtimeEndKelvin));
+        deepestK = Math.Clamp(deepestK, 1500, 6500);
+        return Underlit.Hue.HueBridgeClient.KelvinToMireds(deepestK);
+    }
+
+    private sealed class TimelineRow
+    {
+        public string Label = "";
+        public string Sublabel = "";
+        public bool IsScheduleRow;
+        public bool IsDefaultRow;
+        public bool Enabled = true;
+        public int TimeOffsetMinutes;
+        public int? LimitingMaxMireds;
+    }
+
+    /// <summary>v0.6.55: collect every selected per-LIGHT id from both
+    /// the unified rows list (headers excluded) and the plugs list.
+    /// Plugs are intentionally INCLUDED in Test - it's a "blink everything
+    /// I picked" diagnostic, and a clicking plug confirms it's reachable.</summary>
+    private List<string> SelectedLightIdsForActions(bool includePlugs = true)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_hueLightRows != null)
+        {
+            foreach (var r in _hueLightRows)
+            {
+                if (r.Kind == HueLightRow.RowKind.MemberLight ||
+                    r.Kind == HueLightRow.RowKind.UngroupedLight)
+                {
+                    if (r.IsSelected) ids.Add(r.Id);
+                }
+            }
+        }
+        if (includePlugs && _huePlugRows != null)
+        {
+            foreach (var r in _huePlugRows)
+                if (r.IsSelected) ids.Add(r.Id);
+        }
+        return ids.ToList();
+    }
+
+    private List<string> SelectedGroupIds()
+    {
+        if (_hueLightRows == null) return new();
+        return _hueLightRows
+            .Where(r => r.Kind == HueLightRow.RowKind.GroupHeader && r.IsSelected)
+            .Select(r => r.Id).ToList();
+    }
+
     private async System.Threading.Tasks.Task TestHueGroupsAsync()
     {
-        if (_hueClient == null || _hueGroupRows == null) return;
-        var selected = _hueGroupRows.Where(r => r.IsSelected).ToList();
-        if (selected.Count == 0)
+        if (_hueClient == null) return;
+        var groupIds = SelectedGroupIds();
+        var lightIds = SelectedLightIdsForActions(includePlugs: true);
+        if (groupIds.Count == 0 && lightIds.Count == 0)
         {
-            LblHueBridgeStatus.Text = "Select at least one group first.";
+            LblHueBridgeStatus.Text = "Select at least one group, light, or plug first.";
             return;
         }
         BtnHueTest.IsEnabled = false;
         try
         {
-            foreach (var r in selected)
-                await _hueClient.SetGroupStateAsync(r.Id, on: true, mireds: 250, brightness254: 254);
+            // Bright neutral white burst, then drop to a warmer dim level.
+            // (For plugs we just toggle on/off; CT/bri are ignored by the
+            // bridge for plug-type devices.)
+            foreach (var id in groupIds)
+                await _hueClient.SetGroupStateAsync(id, on: true, mireds: 250, brightness254: 254);
+            foreach (var id in lightIds)
+                await _hueClient.SetLightStateAsync(id, on: true, mireds: 250, brightness254: 254);
             await System.Threading.Tasks.Task.Delay(700);
-            foreach (var r in selected)
-                await _hueClient.SetGroupStateAsync(r.Id, on: null, mireds: 350, brightness254: 180);
+            foreach (var id in groupIds)
+                await _hueClient.SetGroupStateAsync(id, on: null, mireds: 350, brightness254: 180);
+            foreach (var id in lightIds)
+                await _hueClient.SetLightStateAsync(id, on: null, mireds: 350, brightness254: 180);
         }
         finally { BtnHueTest.IsEnabled = true; }
+    }
+
+    // -------------------------------------------------------------------
+    // Quick Scenes (v0.6.55) - built-in + user-defined
+    // -------------------------------------------------------------------
+
+    /// <summary>View-model wrapper for one row in the Quick Scenes
+    /// ItemsControl. Holds the displayable name + tooltip, the underlying
+    /// QuickScene (or null for built-ins), and a flag for whether the
+    /// right-click context menu should appear.</summary>
+    private sealed class QuickSceneVm
+    {
+        public string Id { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string Tooltip { get; init; } = "";
+        public QuickScene? Custom { get; init; }   // null for built-ins
+        public Func<System.Threading.Tasks.Task>? Apply { get; init; }
+    }
+
+    /// <summary>Built-in scenes Underlit always offers. Order matters
+    /// for the visual layout (most useful first, Off last).</summary>
+    private QuickSceneVm[] BuildBuiltInQuickScenes() => new[]
+    {
+        new QuickSceneVm
+        {
+            Id = "builtin:reading", Name = "Reading",
+            Tooltip = "Bright neutral white (4500 K, full brightness). For focused work or reading.",
+            Apply = () => ApplyHueScene("Reading", kelvin: 4500, brightness254: 254, on: true),
+        },
+        new QuickSceneVm
+        {
+            Id = "builtin:relax", Name = "Relax",
+            Tooltip = "Warm dim (2700 K, 60%). Winding down without going full bedtime.",
+            Apply = () => ApplyHueScene("Relax", kelvin: 2700, brightness254: 153, on: true),
+        },
+        new QuickSceneVm
+        {
+            Id = "builtin:movie", Name = "Movie night",
+            Tooltip = "Deep warm dim (2200 K, 25%). Just enough to see your snacks.",
+            Apply = () => ApplyHueScene("Movie night", kelvin: 2200, brightness254: 64, on: true),
+        },
+        new QuickSceneVm
+        {
+            Id = "builtin:energize", Name = "Energize",
+            Tooltip = "Cool bright (6500 K, full brightness). For waking up or pushing through the afternoon slump.",
+            Apply = () => ApplyHueScene("Energize", kelvin: 6500, brightness254: 254, on: true),
+        },
+        new QuickSceneVm
+        {
+            Id = "builtin:resume", Name = "Resume schedule",
+            Tooltip = "Turn lights on at the schedule's current warmth. Counterpart to Off - use this to bring a bulb back into the schedule after you've turned it off.",
+            Apply = () => ApplyResumeScene(),
+        },
+        new QuickSceneVm
+        {
+            Id = "builtin:off", Name = "Off",
+            Tooltip = "Turn the selected lights off. Underlit won't bring them back on by itself - use Resume schedule, Google, Hue, or a wall switch.",
+            Apply = () => ApplyHueScene("Off", kelvin: null, brightness254: null, on: false),
+        },
+    };
+
+    /// <summary>v0.6.56: number of scenes shown by default before the
+    /// "Show more" expander kicks in. The first three built-ins
+    /// (Reading, Relax, Movie night) are the most useful day-to-day -
+    /// the rest (custom scenes, bridge imports, Off, etc.) live behind
+    /// the expander to keep the card compact.</summary>
+    private const int QuickScenesTopCount = 3;
+    private bool _quickScenesExpanded;
+
+    /// <summary>(Re)populate the Quick Scenes ItemsControls from the
+    /// built-in list + the user's CustomQuickScenes + scenes the bridge
+    /// already has stored from the Hue app. Splits the result so the
+    /// first <see cref="QuickScenesTopCount"/> show by default and the
+    /// rest only after the user expands.</summary>
+    private void BuildQuickScenesList()
+    {
+        var all = new List<QuickSceneVm>();
+        foreach (var b in BuildBuiltInQuickScenes()) all.Add(b);
+        foreach (var c in _snapshot.CustomQuickScenes ?? new List<QuickScene>())
+        {
+            all.Add(new QuickSceneVm
+            {
+                Id = c.Id,
+                Name = c.Name,
+                Tooltip = QuickSceneTooltip(c),
+                Custom = c,
+                Apply = () => ApplyCustomQuickScene(c),
+            });
+        }
+        if (_hueBridgeScenes != null)
+        {
+            foreach (var s in _hueBridgeScenes.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(s.Name)) continue;
+                all.Add(new QuickSceneVm
+                {
+                    Id = "bridge:" + s.Id,
+                    Name = s.Name,
+                    Tooltip = $"Hue scene (from your Hue app): {s.Name}. Activates the scene as it's stored on your bridge.",
+                    Custom = null,
+                    Apply = () => ActivateBridgeSceneAsync(s),
+                });
+            }
+        }
+
+        var top  = new System.Collections.ObjectModel.ObservableCollection<QuickSceneVm>(all.Take(QuickScenesTopCount));
+        var more = new System.Collections.ObjectModel.ObservableCollection<QuickSceneVm>(all.Skip(QuickScenesTopCount));
+
+        QuickScenesList.ItemsSource     = top;
+        QuickScenesMoreList.ItemsSource = more;
+
+        // The Show more / Show less button only matters if there's
+        // anything in the overflow list.
+        bool hasMore = more.Count > 0;
+        BtnQuickScenesShowMore.Visibility = hasMore ? Visibility.Visible : Visibility.Collapsed;
+        QuickScenesMoreList.Visibility = (hasMore && _quickScenesExpanded)
+            ? Visibility.Visible : Visibility.Collapsed;
+        BtnQuickScenesShowMore.Content = _quickScenesExpanded ? "Show less" : $"Show {more.Count} more";
+    }
+
+    private QuickSceneVm? FindQuickSceneVm(string id)
+    {
+        foreach (var src in new[] { QuickScenesList.ItemsSource, QuickScenesMoreList.ItemsSource })
+        {
+            if (src is System.Collections.IEnumerable items)
+            {
+                foreach (var item in items)
+                    if (item is QuickSceneVm v && v.Id == id) return v;
+            }
+        }
+        return null;
+    }
+
+    private void ToggleQuickScenesMore()
+    {
+        _quickScenesExpanded = !_quickScenesExpanded;
+        QuickScenesMoreList.Visibility = _quickScenesExpanded ? Visibility.Visible : Visibility.Collapsed;
+        if (QuickScenesMoreList.ItemsSource is System.Collections.ICollection c)
+            BtnQuickScenesShowMore.Content = _quickScenesExpanded ? "Show less" : $"Show {c.Count} more";
+        else
+            BtnQuickScenesShowMore.Content = _quickScenesExpanded ? "Show less" : "Show more";
+    }
+
+    private async System.Threading.Tasks.Task ActivateBridgeSceneAsync(HueScene s)
+    {
+        if (_hueClient == null) return;
+        try
+        {
+            bool ok = await _hueClient.ActivateSceneAsync(s.Id);
+            LblHueBridgeStatus.Text = ok
+                ? $"Activated bridge scene: {s.Name}"
+                : $"Bridge scene '{s.Name}' didn't apply.";
+        }
+        catch (Exception ex) { Logger.Warn($"ActivateSceneAsync failed for {s.Name}", ex); }
+    }
+
+    private static string QuickSceneTooltip(QuickScene s)
+    {
+        return s.Action switch
+        {
+            QuickSceneAction.TurnOff        => $"{s.Name}: turn the selected lights off.",
+            QuickSceneAction.ResumeSchedule => $"{s.Name}: turn the selected lights on at the schedule's current warmth.",
+            _                               => $"{s.Name}: {s.Kelvin} K at {s.BrightnessPercent}%.",
+        };
+    }
+
+    private async void OnQuickSceneClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        // v0.6.56: also search the "more" list since some scenes live
+        // there until the user expands.
+        var vm = FindQuickSceneVm(id);
+        if (vm?.Apply != null)
+        {
+            try { await vm.Apply(); }
+            catch (Exception ex) { Logger.Warn($"Quick Scene '{vm.Name}' failed", ex); }
+        }
+    }
+
+    private void OnQuickSceneRightClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var vm = FindQuickSceneVm(id);
+        if (vm?.Custom == null) return; // built-ins aren't editable
+
+        var menu = new ContextMenu();
+        var edit = new MenuItem { Header = "Edit..." };
+        edit.Click += (_, _) => OpenQuickSceneEditor(vm.Custom);
+        menu.Items.Add(edit);
+        var delete = new MenuItem { Header = "Delete" };
+        delete.Click += (_, _) => DeleteCustomQuickScene(vm.Custom);
+        menu.Items.Add(delete);
+        menu.PlacementTarget = fe;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>v0.6.55: open the modal editor for a custom Quick Scene.
+    /// Pass null to create a new scene; pass an existing one to edit it.</summary>
+    private void OpenQuickSceneEditor(QuickScene? scene)
+    {
+        var editor = new UI.QuickSceneEditor(scene);
+        editor.Owner = this;
+        if (editor.ShowDialog() != true) return;
+
+        var saved = editor.Result;
+        if (saved == null) return;
+
+        var list = _snapshot.CustomQuickScenes ?? new List<QuickScene>();
+        if (scene == null)
+        {
+            list.Add(saved);
+        }
+        else
+        {
+            int idx = list.FindIndex(c => c.Id == scene.Id);
+            if (idx >= 0) list[idx] = saved;
+            else list.Add(saved);
+        }
+        _snapshot.CustomQuickScenes = list;
+        PushSettings();
+        BuildQuickScenesList();
+    }
+
+    private void DeleteCustomQuickScene(QuickScene scene)
+    {
+        var list = _snapshot.CustomQuickScenes ?? new List<QuickScene>();
+        list.RemoveAll(c => c.Id == scene.Id);
+        _snapshot.CustomQuickScenes = list;
+        PushSettings();
+        BuildQuickScenesList();
+    }
+
+    private async System.Threading.Tasks.Task ApplyCustomQuickScene(QuickScene s)
+    {
+        switch (s.Action)
+        {
+            case QuickSceneAction.TurnOff:
+                await ApplyHueScene(s.Name, kelvin: null, brightness254: null, on: false);
+                break;
+            case QuickSceneAction.ResumeSchedule:
+                await ApplyResumeScene();
+                break;
+            default:
+                int bri = HueBriPercentToNative(s.BrightnessPercent);
+                await ApplyHueScene(s.Name, kelvin: s.Kelvin, brightness254: bri, on: true);
+                break;
+        }
+    }
+
+    /// <summary>v0.6.55: counterpart to Off. Turn selected lights back on
+    /// at the SCHEDULE's currently-targeted warmth (so the bulb instantly
+    /// matches the rest of the room) and let the next schedule tick keep
+    /// reasserting from there. We don't pass a brightness - the schedule
+    /// + the user's Hue brightness slider govern that.</summary>
+    private async System.Threading.Tasks.Task ApplyResumeScene()
+    {
+        // v0.7.0: the host's HueController owns the schedule now (including
+        // time-of-day colours and override tracking), so let it do this.
+        if (HueResumeRequested != null)
+        {
+            HueResumeRequested.Invoke();
+            LblHueBridgeStatus.Text = "Lights back on the schedule.";
+            return;
+        }
+
+        // Best-effort: read engine's TargetWarmth via the host. We don't
+        // have a direct reference, so fall back to the snapshot's last
+        // saved warmth which is close enough for a "wake up at the
+        // current schedule warmth" gesture.
+        int kelvin = Math.Clamp(_snapshot.WarmthKelvin > 0 ? _snapshot.WarmthKelvin : 4500, 1500, 6500);
+        int bri    = Math.Clamp(_snapshot.HueBrightness, 1, 254);
+        await ApplyHueScene("Resume schedule", kelvin: kelvin, brightness254: bri, on: true);
+    }
+
+    // -------------------------------------------------------------------
+    // Per-group colour profiles (v0.6.58)
+    // -------------------------------------------------------------------
+
+    private sealed class ColorProfileRowVm : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string Summary { get; init; } = "";
+        public LightColorGroup? Underlying { get; init; }
+
+        private bool _enabled;
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                if (Underlying != null) Underlying.Enabled = value;
+                PropertyChanged?.Invoke(this, new(nameof(Enabled)));
+                EnabledChanged?.Invoke();
+            }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event Action? EnabledChanged;
+    }
+
+    // ============================================================
+    // v0.6.73: lights timeline PROFILE selector + management.
+    //
+    // The selector is a ComboBox listing all LightProfiles in the
+    // snapshot; switching profiles updates ActiveLightProfileId, then
+    // rebuilds the colour-groups list + redraws the timeline against
+    // the newly-active profile's ColorGroups. Add / Rename / Delete /
+    // Reset live in the same row so the whole concept fits in one
+    // place at the top of the LIGHTS TIMELINE card.
+    // ============================================================
+
+    /// <summary>ComboBox item VM: stable Id binding plus a display
+    /// label that shows "(built-in)" for the recommended profile.</summary>
+    private sealed class LightsProfileItem
+    {
+        public string Id { get; init; } = "";
+        public string Label { get; init; } = "";
+    }
+
+    private bool _suppressProfileSelectorEvents;
+
+    private void WireLightsProfileSelector()
+    {
+        CboLightsProfile.SelectionChanged += OnLightsProfileSelectionChanged;
+        BtnLightsProfileAdd.Click    += (_, _) => OnLightsProfileAdd();
+        BtnLightsProfileRename.Click += (_, _) => OnLightsProfileRename();
+        BtnLightsProfileDelete.Click += (_, _) => OnLightsProfileDelete();
+        BtnLightsProfileReset.Click  += (_, _) => OnLightsProfileReset();
+        RefreshLightsProfileSelector();
+    }
+
+    /// <summary>Rebuild the ComboBox items from the current snapshot.
+    /// Suppresses SelectionChanged while repopulating so we don't
+    /// fire a "user switched profiles" event for our own setup work.</summary>
+    private void RefreshLightsProfileSelector()
+    {
+        if (CboLightsProfile == null) return;
+        _snapshot.EnsureLightProfilesPopulated();
+
+        _suppressProfileSelectorEvents = true;
+        try
+        {
+            var items = _snapshot.LightProfiles.Select(p => new LightsProfileItem
+            {
+                Id = p.Id,
+                Label = p.IsBuiltIn ? $"{p.Name} (built-in)" : p.Name,
+            }).ToList();
+            CboLightsProfile.ItemsSource = items;
+            CboLightsProfile.SelectedValue = _snapshot.ActiveLightProfileId;
+        }
+        finally
+        {
+            _suppressProfileSelectorEvents = false;
+        }
+
+        RefreshLightsProfileButtonStates();
+    }
+
+    private void RefreshLightsProfileButtonStates()
+    {
+        if (BtnLightsProfileDelete == null) return;
+        var active = _snapshot.ActiveLightProfile();
+        // Built-in profiles can be reset but never deleted (otherwise
+        // the user could end up with zero profiles and a broken UI).
+        BtnLightsProfileDelete.IsEnabled = !active.IsBuiltIn && _snapshot.LightProfiles.Count > 1;
+        BtnLightsProfileReset.IsEnabled  = active.IsBuiltIn;
+    }
+
+    private void OnLightsProfileSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressProfileSelectorEvents) return;
+        if (CboLightsProfile.SelectedValue is not string id) return;
+        if (id == _snapshot.ActiveLightProfileId) return;
+        _snapshot.ActiveLightProfileId = id;
+        // The active profile's ColorGroups now back _snapshot.ColorGroups,
+        // so the colour-groups list + timeline rerender against the
+        // newly-selected timeline.
+        RefreshLightsProfileButtonStates();
+        BuildColorProfilesList();
+        RedrawLightsTimeline();
+        PushSettings();
+    }
+
+    private void OnLightsProfileAdd()
+    {
+        // Seed the new profile by deep-copying the current one so the
+        // user has something to tweak (rather than starting empty).
+        var src = _snapshot.ActiveLightProfile();
+        var copy = new LightProfile
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = "Custom profile",
+            IsBuiltIn = false,
+            ColorGroups = src.ColorGroups
+                .Select(g => new LightColorGroup
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    Name = g.Name,
+                    Enabled = g.Enabled,
+                    LightIds = g.LightIds.ToList(),
+                    GroupIds = g.GroupIds.ToList(),
+                    Gradient = g.Gradient.Select(s => new HueGradientStop
+                    {
+                        Kelvin = s.Kelvin,
+                        Color = s.Color,
+                    }).ToList(),
+                    TimeOffsetMinutes = g.TimeOffsetMinutes,
+                })
+                .ToList(),
+        };
+        // Make the new name unique so the user can tell them apart at a glance.
+        int n = 2;
+        while (_snapshot.LightProfiles.Any(p =>
+                   p.Name.Equals(copy.Name, StringComparison.OrdinalIgnoreCase)))
+        {
+            copy.Name = $"Custom profile {n++}";
+        }
+        _snapshot.LightProfiles.Add(copy);
+        _snapshot.ActiveLightProfileId = copy.Id;
+        RefreshLightsProfileSelector();
+        BuildColorProfilesList();
+        RedrawLightsTimeline();
+        PushSettings();
+    }
+
+    private void OnLightsProfileRename()
+    {
+        var active = _snapshot.ActiveLightProfile();
+        var dlg = new InputBox
+        {
+            Owner = this,
+            Title = "Rename profile",
+            Prompt = "Profile name:",
+            Value = active.Name,
+        };
+        if (dlg.ShowDialog() != true) return;
+        var name = dlg.Value?.Trim();
+        if (string.IsNullOrEmpty(name)) return;
+        active.Name = name;
+        RefreshLightsProfileSelector();
+        PushSettings();
+    }
+
+    private void OnLightsProfileDelete()
+    {
+        var active = _snapshot.ActiveLightProfile();
+        if (active.IsBuiltIn || _snapshot.LightProfiles.Count <= 1) return;
+        var msg = $"Delete profile '{active.Name}'? Its colour groups will be lost.";
+        var res = System.Windows.MessageBox.Show(this, msg, "Delete profile",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (res != MessageBoxResult.Yes) return;
+        _snapshot.LightProfiles.RemoveAll(p => p.Id == active.Id);
+        _snapshot.ActiveLightProfileId = _snapshot.LightProfiles[0].Id;
+        RefreshLightsProfileSelector();
+        BuildColorProfilesList();
+        RedrawLightsTimeline();
+        PushSettings();
+    }
+
+    private void OnLightsProfileReset()
+    {
+        var active = _snapshot.ActiveLightProfile();
+        if (!active.IsBuiltIn) return;
+        var msg = $"Reset '{active.Name}' to its recommended factory contents? All colour groups in this profile will be discarded.";
+        var res = System.Windows.MessageBox.Show(this, msg, "Reset profile",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (res != MessageBoxResult.Yes) return;
+        active.ColorGroups = new List<LightColorGroup>();
+        BuildColorProfilesList();
+        RedrawLightsTimeline();
+        PushSettings();
+    }
+
+    private void BuildColorProfilesList()
+    {
+        var rows = new System.Collections.ObjectModel.ObservableCollection<ColorProfileRowVm>();
+        var profiles = _snapshot.ColorGroups ?? new List<LightColorGroup>();
+        foreach (var p in profiles)
+        {
+            var row = new ColorProfileRowVm
+            {
+                Id = p.Id,
+                Name = string.IsNullOrWhiteSpace(p.Name) ? "(unnamed profile)" : p.Name,
+                Summary = SummariseColorProfile(p),
+                Underlying = p,
+                Enabled = p.Enabled,
+            };
+            row.EnabledChanged += () => PushSettings();
+            rows.Add(row);
+        }
+        ColorProfilesList.ItemsSource = rows;
+        LblNoColorProfiles.Visibility = profiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private string SummariseColorProfile(LightColorGroup p)
+    {
+        int targetCount = p.LightIds.Count + p.GroupIds.Count;
+        string targets = targetCount == 0
+            ? "no lights"
+            : $"{targetCount} target{(targetCount == 1 ? "" : "s")}";
+        string stops = $"{p.Gradient.Count} stop{(p.Gradient.Count == 1 ? "" : "s")}";
+
+        // v0.6.75: include the group's collective kelvin range so the
+        // user can see at a glance which groups have full-spectrum bulbs
+        // and which are CT-limited. Computed by intersecting all member
+        // bulbs' CT capabilities; if any bulb has no CT control, that
+        // side of the range is dropped from the readout.
+        string range = ResolveGroupKelvinRange(p, out int? minK, out int? maxK) switch
+        {
+            "" => "",
+            var s => $" · {s}",
+        };
+
+        return $"{targets} · {stops}{range}";
+    }
+
+    /// <summary>v0.6.75: collective kelvin range for a colour group's
+    /// bulbs. Returns a human-readable string ("2200–6500 K") or empty
+    /// if the cache hasn't loaded yet. Also returns the raw min/max via
+    /// out params so the "Lights" popup can compare per-bulb caps to
+    /// the group min/max.</summary>
+    private string ResolveGroupKelvinRange(LightColorGroup p, out int? minK, out int? maxK)
+    {
+        minK = null;
+        maxK = null;
+        if (_hueLightCaps == null) return "";
+
+        // Expand the group's targets into individual light ids. Hue
+        // groups are not in our per-light cache, so we use the light
+        // rows to resolve members.
+        var lightIds = new HashSet<string>(p.LightIds, StringComparer.OrdinalIgnoreCase);
+        foreach (var gid in p.GroupIds)
+        {
+            if (_hueLightRows == null) continue;
+            // Member rows follow each group header. Resolving by name
+            // is brittle — use the position-based ordering BuildHueLightRows
+            // produced. Simpler: include all light rows whose Id matches
+            // a member of `gid`. We don't have group→member mapping here,
+            // so fall back to "any light row" (slight over-approximation
+            // but the kelvin range is a union so that's safe).
+            foreach (var row in _hueLightRows)
+            {
+                if (row.Kind == HueLightRow.RowKind.MemberLight)
+                    lightIds.Add(row.Id);
+            }
+        }
+
+        int? lowest = null;   // narrowest minK across bulbs (= the bulb that can't go as cool)
+        int? highest = null;  // narrowest maxK
+        foreach (var id in lightIds)
+        {
+            if (!_hueLightCaps.TryGetValue(id, out var cap)) continue;
+            if (cap.MinK.HasValue)
+                lowest = lowest.HasValue ? Math.Max(lowest.Value, cap.MinK.Value) : cap.MinK.Value;
+            if (cap.MaxK.HasValue)
+                highest = highest.HasValue ? Math.Min(highest.Value, cap.MaxK.Value) : cap.MaxK.Value;
+        }
+
+        minK = lowest;
+        maxK = highest;
+        if (!lowest.HasValue || !highest.HasValue) return "";
+        return $"{lowest.Value}–{highest.Value} K";
+    }
+
+    /// <summary>v0.6.75: inline "Lights" button on each group row.
+    /// Pops up a context menu listing each bulb in the group with its
+    /// individual kelvin range, so the user can see which specific bulb
+    /// is responsible for narrowing the group's collective range.</summary>
+    private void OnColorProfileLightsClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var profile = _snapshot.ColorGroups.FirstOrDefault(c => c.Id == id);
+        if (profile == null) return;
+
+        var menu = new ContextMenu { PlacementTarget = fe, IsOpen = true };
+        // Header: collective range.
+        ResolveGroupKelvinRange(profile, out var minK, out var maxK);
+        string header = minK.HasValue && maxK.HasValue
+            ? $"Group range: {minK.Value}–{maxK.Value} K (narrowed by the most-restrictive bulb)"
+            : "Group range: unknown (no CT data yet — refresh bulbs in Lights page)";
+        menu.Items.Add(new MenuItem { Header = header, IsEnabled = false });
+        menu.Items.Add(new Separator());
+
+        if (_hueLightCaps == null || _hueLightCaps.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "(no bulb data yet)", IsEnabled = false });
+            return;
+        }
+
+        if (profile.LightIds.Count == 0 && profile.GroupIds.Count == 0)
+        {
+            menu.Items.Add(new MenuItem { Header = "(no lights assigned)", IsEnabled = false });
+            return;
+        }
+
+        foreach (var lid in profile.LightIds)
+        {
+            string label;
+            if (_hueLightCaps.TryGetValue(lid, out var cap))
+            {
+                string range = cap.MinK.HasValue && cap.MaxK.HasValue
+                    ? $"{cap.MinK.Value}–{cap.MaxK.Value} K"
+                    : (cap.MinK.HasValue || cap.MaxK.HasValue
+                        ? "partial CT"
+                        : "no CT (plug or colour-only)");
+                label = $"{cap.Name}  ·  {range}";
+            }
+            else
+            {
+                label = $"Light {lid} (not in latest fetch)";
+            }
+            menu.Items.Add(new MenuItem { Header = label, IsEnabled = false });
+        }
+
+        foreach (var gid in profile.GroupIds)
+        {
+            menu.Items.Add(new MenuItem { Header = $"Hue group {gid} (members expand at push time)", IsEnabled = false });
+        }
+    }
+
+    /// <summary>v0.6.75: inline Edit button. Same as the right-click →
+    /// Edit menu item, just a more discoverable affordance for users
+    /// who don't think to right-click.</summary>
+    private void OnColorProfileEditClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var profile = _snapshot.ColorGroups.FirstOrDefault(c => c.Id == id);
+        if (profile != null) OpenColorProfileEditor(profile);
+    }
+
+    /// <summary>v0.6.75: inline Delete button. Same as right-click → Delete.</summary>
+    private void OnColorProfileDeleteClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var profile = _snapshot.ColorGroups.FirstOrDefault(c => c.Id == id);
+        if (profile == null) return;
+        var res = System.Windows.MessageBox.Show(this,
+            $"Remove the colour group '{profile.Name}'? Its assigned bulbs will fall back to the default warmth schedule.",
+            "Remove group",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (res != MessageBoxResult.Yes) return;
+        DeleteColorProfile(profile);
+    }
+
+    private void OpenColorProfileEditor(LightColorGroup? profile)
+    {
+        // Build the available-targets lists from whatever the user has
+        // already selected. The profile editor only offers things the
+        // user has opted Underlit into driving in the first place.
+        var availableLights = _hueLightRows?
+            .Where(r => r.Kind == HueLightRow.RowKind.MemberLight || r.Kind == HueLightRow.RowKind.UngroupedLight)
+            .Select(r => (r.Id, r.DisplayName))
+            .ToList() ?? new();
+        var availableGroups = _hueLightRows?
+            .Where(r => r.Kind == HueLightRow.RowKind.GroupHeader)
+            .Select(r => (r.Id, r.DisplayName))
+            .ToList() ?? new();
+
+        // v0.6.62: snapshot the schedule's 4 anchor kelvins so the
+        // editor can snap stop kelvins to them.
+        var anchorKelvins = new[]
+        {
+            _snapshot.WakeupStartKelvin,
+            _snapshot.WakeupEndKelvin,
+            _snapshot.BedtimeStartKelvin,
+            _snapshot.BedtimeEndKelvin,
+        };
+        var editor = new ColorProfileEditor(profile, availableLights, availableGroups, anchorKelvins);
+        editor.Owner = this;
+        if (editor.ShowDialog() != true) return;
+
+        var saved = editor.Result;
+        if (saved == null) return;
+
+        var list = _snapshot.ColorGroups ?? new List<LightColorGroup>();
+        if (profile == null)
+        {
+            list.Add(saved);
+        }
+        else
+        {
+            int idx = list.FindIndex(c => c.Id == profile.Id);
+            if (idx >= 0) list[idx] = saved;
+            else list.Add(saved);
+        }
+        _snapshot.ColorGroups = list;
+        PushSettings();
+        BuildColorProfilesList();
+        RedrawLightsTimeline(); // v0.6.61: timeline rows mirror profiles
+    }
+
+    private void DeleteColorProfile(LightColorGroup p)
+    {
+        var list = _snapshot.ColorGroups ?? new List<LightColorGroup>();
+        list.RemoveAll(c => c.Id == p.Id);
+        _snapshot.ColorGroups = list;
+        PushSettings();
+        BuildColorProfilesList();
+        RedrawLightsTimeline();
+    }
+
+    private void OnColorProfileRightClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var profile = _snapshot.ColorGroups?.FirstOrDefault(p => p.Id == id);
+        if (profile == null) return;
+
+        var menu = new ContextMenu();
+        var edit = new MenuItem { Header = "Edit..." };
+        edit.Click += (_, _) => OpenColorProfileEditor(profile);
+        menu.Items.Add(edit);
+        var delete = new MenuItem { Header = "Delete" };
+        delete.Click += (_, _) => DeleteColorProfile(profile);
+        menu.Items.Add(delete);
+        menu.PlacementTarget = fe;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    // -------------------------------------------------------------------
+    // Routines (v0.6.55)
+    // -------------------------------------------------------------------
+
+    private sealed class RoutineRowVm : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; init; } = "";
+        public string Name { get; init; } = "";
+        public string Summary { get; init; } = "";
+        public Routine? Underlying { get; init; }
+
+        private bool _enabled;
+        public bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled == value) return;
+                _enabled = value;
+                if (Underlying != null) Underlying.Enabled = value;
+                PropertyChanged?.Invoke(this, new(nameof(Enabled)));
+                EnabledChanged?.Invoke();
+            }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public event Action? EnabledChanged;
+    }
+
+    private void BuildRoutinesList()
+    {
+        var rows = new System.Collections.ObjectModel.ObservableCollection<RoutineRowVm>();
+        var routines = _snapshot.Routines ?? new List<Routine>();
+        foreach (var r in routines)
+        {
+            var row = new RoutineRowVm
+            {
+                Id = r.Id,
+                Name = string.IsNullOrWhiteSpace(r.Name) ? "(unnamed routine)" : r.Name,
+                Summary = SummariseRoutine(r),
+                Underlying = r,
+                Enabled = r.Enabled,
+            };
+            row.EnabledChanged += () => PushSettings();
+            rows.Add(row);
+        }
+        RoutinesList.ItemsSource = rows;
+        LblNoRoutines.Visibility = routines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static string SummariseRoutine(Routine r)
+    {
+        string when = r.TriggerKind switch
+        {
+            RoutineTriggerKind.RelativeToWakeup =>
+                r.TriggerOffsetMinutes == 0 ? "at wake time"
+                : r.TriggerOffsetMinutes < 0 ? $"{-r.TriggerOffsetMinutes} min before wake"
+                                               : $"{r.TriggerOffsetMinutes} min after wake",
+            RoutineTriggerKind.RelativeToBedtime =>
+                r.TriggerOffsetMinutes == 0 ? "at bedtime"
+                : r.TriggerOffsetMinutes < 0 ? $"{-r.TriggerOffsetMinutes} min before bedtime"
+                                               : $"{r.TriggerOffsetMinutes} min after bedtime",
+            _ => $"at {r.TriggerHour:D2}:{r.TriggerMinute:D2}",
+        };
+        string action = r.Action switch
+        {
+            RoutineAction.TurnOn    => "turn on",
+            RoutineAction.TurnOff   => "turn off",
+            RoutineAction.TurnOnFor => $"turn on for {r.DurationMinutes} min",
+            _ => "act",
+        };
+        string days = r.Days switch
+        {
+            RoutineDays.EveryDay => "every day",
+            RoutineDays.Weekdays => "weekdays",
+            RoutineDays.Weekend  => "weekends",
+            _ => "selected days",
+        };
+        int targetCount = r.TargetLightIds.Count + r.TargetGroupIds.Count;
+        string targets = targetCount == 0 ? "no targets" : $"{targetCount} target{(targetCount == 1 ? "" : "s")}";
+        return $"{when}, {days} - {action} ({targets})";
+    }
+
+    private void OpenRoutineEditor(Routine? routine)
+    {
+        var availableLights = _hueLightRows?
+            .Where(r => r.Kind == HueLightRow.RowKind.MemberLight || r.Kind == HueLightRow.RowKind.UngroupedLight)
+            .Select(r => (r.Id, r.DisplayName))
+            .ToList() ?? new();
+        var availablePlugs  = _huePlugRows?
+            .Select(r => (r.Id, r.DisplayName))
+            .ToList() ?? new();
+        var availableGroups = _hueLightRows?
+            .Where(r => r.Kind == HueLightRow.RowKind.GroupHeader)
+            .Select(r => (r.Id, r.DisplayName))
+            .ToList() ?? new();
+
+        var editor = new RoutineEditor(routine, availableLights, availablePlugs, availableGroups);
+        editor.Owner = this;
+        if (editor.ShowDialog() != true) return;
+
+        var saved = editor.Result;
+        if (saved == null) return;
+
+        var list = _snapshot.Routines ?? new List<Routine>();
+        if (routine == null)
+        {
+            list.Add(saved);
+        }
+        else
+        {
+            int idx = list.FindIndex(c => c.Id == routine.Id);
+            if (idx >= 0) list[idx] = saved;
+            else list.Add(saved);
+        }
+        _snapshot.Routines = list;
+        PushSettings();
+        BuildRoutinesList();
+    }
+
+    private void DeleteRoutine(Routine r)
+    {
+        var list = _snapshot.Routines ?? new List<Routine>();
+        list.RemoveAll(c => c.Id == r.Id);
+        _snapshot.Routines = list;
+        PushSettings();
+        BuildRoutinesList();
+    }
+
+    /// <summary>v0.6.55: drop a SAD-lamp routine template onto the user's
+    /// list. Defaults: TurnOnFor 25 min, at the active profile's wake
+    /// time, every day, no targets (user picks them by editing).</summary>
+    private void AddSadLampRoutineTemplate()
+    {
+        var p = _snapshot.ActiveProfile();
+        var routine = new Routine
+        {
+            Name = "SAD lamp",
+            Enabled = true,
+            TriggerKind = RoutineTriggerKind.RelativeToWakeup,
+            TriggerOffsetMinutes = 0,
+            TriggerHour = p.WakeupStart.Hour,
+            TriggerMinute = p.WakeupStart.Minute,
+            Days = RoutineDays.EveryDay,
+            Action = RoutineAction.TurnOnFor,
+            DurationMinutes = 25,
+        };
+        // Open the editor so the user picks targets immediately - a
+        // template with no targets does nothing.
+        OpenRoutineEditor(routine);
+    }
+
+    private void OnRoutineRightClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not string id) return;
+        var routine = _snapshot.Routines?.FirstOrDefault(r => r.Id == id);
+        if (routine == null) return;
+
+        var menu = new ContextMenu();
+        var edit = new MenuItem { Header = "Edit..." };
+        edit.Click += (_, _) => OpenRoutineEditor(routine);
+        menu.Items.Add(edit);
+        var delete = new MenuItem { Header = "Delete" };
+        delete.Click += (_, _) => DeleteRoutine(routine);
+        menu.Items.Add(delete);
+        menu.PlacementTarget = fe;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    /// <summary>v0.6.54: apply a one-shot Hue preset to every currently-
+    /// selected group + light. The scheduler keeps running underneath, so
+    /// the next baseline tick (within ~30s) reasserts the schedule's
+    /// warmth - these are momentary tweaks ("dim everything for the next
+    /// half-hour"), not a persistent mode change. Off is the exception:
+    /// turning a bulb off via this button respects the same manual-off
+    /// rule, so the schedule won't bring it back on automatically.</summary>
+    private async System.Threading.Tasks.Task ApplyHueScene(
+        string sceneName, int? kelvin, int? brightness254, bool on)
+    {
+        if (_hueClient == null) return;
+        var groupIds = SelectedGroupIds();
+        // For plugs, only on/off makes sense - the bridge ignores CT/bri.
+        // We include them for the on/off Quick Scenes (Off, Resume) so a
+        // SAD lamp on a plug responds; pure CT scenes effectively no-op
+        // them which is fine.
+        var lightIds = SelectedLightIdsForActions(includePlugs: true);
+        if (groupIds.Count == 0 && lightIds.Count == 0)
+        {
+            LblHueBridgeStatus.Text = $"{sceneName}: select at least one group or light first.";
+            return;
+        }
+
+        int? mireds = kelvin.HasValue ? HueBridgeClient.KelvinToMireds(kelvin.Value) : (int?)null;
+        // Push in parallel - groups are bridge-side fan-outs, individual
+        // lights get a direct PUT each. Catching any failures so a single
+        // unreachable bulb doesn't abort the rest.
+        var pushes = new List<System.Threading.Tasks.Task>();
+        foreach (var gid in groupIds)
+        {
+            pushes.Add(SafeSet(_hueClient.SetGroupStateAsync(
+                gid, on: on ? (bool?)true : (bool?)false,
+                mireds: mireds, brightness254: brightness254,
+                transitionDeciseconds: 4)));
+        }
+        foreach (var lid in lightIds)
+        {
+            pushes.Add(SafeSet(_hueClient.SetLightStateAsync(
+                lid, on: on ? (bool?)true : (bool?)false,
+                mireds: mireds, brightness254: brightness254,
+                transitionDeciseconds: 4)));
+        }
+        await System.Threading.Tasks.Task.WhenAll(pushes);
+        LblHueBridgeStatus.Text = $"Applied scene: {sceneName}";
+
+        static async System.Threading.Tasks.Task SafeSet(System.Threading.Tasks.Task<bool> t)
+        {
+            try { await t; } catch { /* one bulb's failure shouldn't tank the rest */ }
+        }
     }
 
     private void UnpairHue()
@@ -1747,8 +3837,13 @@ public partial class SettingsWindow : Window
         _snapshot.HueBridgeIp = null;
         _snapshot.HueBridgeUsername = null;
         _snapshot.HueSelectedGroupIds = new();
+        _snapshot.HueSelectedLightIds = new();
         HueGroupsList.ItemsSource = null;
+        HueLightsList.ItemsSource  = null;
+        HuePlugsList.ItemsSource   = null;
         _hueGroupRows = null;
+        _hueLightRows = null;
+        _huePlugRows  = null;
         TxtHueManualIp.Text = "";
         PushSettings();
         SetHueUiState(HueUiState.Disconnected);
@@ -1776,6 +3871,118 @@ public partial class SettingsWindow : Window
     /// OSD with the freshly-pushed glass parameters so the user can see the
     /// effect in real time, instead of waiting for the next hotkey press.</summary>
     public event Action? GlassPreviewRequested;
+
+    /// <summary>v0.6.53: 24h cycle simulator. Fires from the Schedule page's
+    /// "Simulate" button. The host responds by pausing the regular Scheduler
+    /// (so it doesn't fight the synthesized warmth) until
+    /// <see cref="SimulationEnded"/> fires. Per-tick warmth values are
+    /// delivered via <see cref="SimulationWarmthAt"/>.</summary>
+    public event Action? SimulationStarted;
+    public event Action? SimulationEnded;
+    /// <summary>Per-tick synthesized warmth during the 24h simulation.
+    /// The host applies it to the engine's schedule baseline, which fans
+    /// out to the gamma ramp + Hue lights via the existing event chain.</summary>
+    public event Action<int>? SimulationWarmthAt;
+    /// <summary>v0.7.0: simulated wall-clock time, raised right before
+    /// <see cref="SimulationWarmthAt"/> so time-of-day light stops can
+    /// follow the simulation.</summary>
+    public event Action<DateTime>? SimulationTimeAt;
+    /// <summary>v0.7.0: "Resume schedule" quick scene - the host takes back
+    /// overridden bulbs and switches the selected ones on.</summary>
+    public event Action? HueResumeRequested;
+
+    /// <summary>v0.6.56: live OSD preview pin. Fires true when the user
+    /// starts interacting with any OSD-affecting control (glass slider,
+    /// brightness highlight picker, backdrop dropdown, etc.); false when
+    /// focus leaves all such controls. Host calls Osd.SetPinned() to keep
+    /// the OSD visible during the tweak.</summary>
+    public event Action<bool>? OsdPreviewPinChanged;
+
+    /// <summary>v0.6.56: tracks which OSD-affecting controls are currently
+    /// "engaged" (mouse-down or keyboard-focused). When the set goes from
+    /// empty to non-empty we fire OsdPreviewPinChanged(true); from non-
+    /// empty to empty we fire false. Set semantics handle the case where
+    /// a single control fires both mouse and keyboard events on the same
+    /// interaction without us getting stuck pinned forever.</summary>
+    private readonly HashSet<object> _osdPinSources = new();
+
+    // ---- Throttled push for live OSD preview (v0.6.57) -----------------
+    /// <summary>v0.6.57: glass-slider ValueChanged fires at 60-100 Hz
+    /// during a mouse drag. PushSettings → host → OSD live-glass redraw
+    /// is too expensive to run that often (the user reported it feels
+    /// laggy). Coalesce into ~33 ms (~30 fps) buckets: first edit fires
+    /// immediately for instant feedback, subsequent edits within the
+    /// window collapse into a single trailing fire after the bucket.</summary>
+    private DispatcherTimer? _throttledPushTimer;
+    private DateTime _lastImmediatePushUtc = DateTime.MinValue;
+    private const int ThrottledPushIntervalMs = 33;
+    private bool _throttledPushPending;
+
+    /// <summary>v0.6.57: cancel any pending throttled push and fire it
+    /// immediately. Called on slider mouse-up so the final value is
+    /// always committed without an additional 33 ms wait.</summary>
+    private void FlushThrottledPush()
+    {
+        if (_throttledPushTimer != null && _throttledPushTimer.IsEnabled)
+        {
+            _throttledPushTimer.Stop();
+            _throttledPushPending = false;
+            _lastImmediatePushUtc = DateTime.UtcNow;
+            PushSettings();
+            GlassPreviewRequested?.Invoke();
+        }
+    }
+
+    private void SchedulePushAndPreview()
+    {
+        // Update the value-chip text immediately so the user sees the
+        // new number even when the OSD redraw is being throttled.
+        UpdateAllValueChips();
+
+        double sinceLast = (DateTime.UtcNow - _lastImmediatePushUtc).TotalMilliseconds;
+        if (sinceLast >= ThrottledPushIntervalMs && !_throttledPushPending)
+        {
+            _lastImmediatePushUtc = DateTime.UtcNow;
+            PushSettings();
+            GlassPreviewRequested?.Invoke();
+            return;
+        }
+        // Within the throttle window: schedule a trailing fire.
+        if (_throttledPushTimer == null)
+        {
+            _throttledPushTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(ThrottledPushIntervalMs)
+            };
+            _throttledPushTimer.Tick += (_, _) =>
+            {
+                _throttledPushTimer!.Stop();
+                _throttledPushPending = false;
+                _lastImmediatePushUtc = DateTime.UtcNow;
+                PushSettings();
+                GlassPreviewRequested?.Invoke();
+            };
+        }
+        _throttledPushPending = true;
+        _throttledPushTimer.Stop();
+        _throttledPushTimer.Start();
+    }
+
+    private void SetOsdPreviewPinFromControl(object source, bool pinned)
+    {
+        bool wasEngaged = _osdPinSources.Count > 0;
+        if (pinned) _osdPinSources.Add(source);
+        else        _osdPinSources.Remove(source);
+        bool nowEngaged = _osdPinSources.Count > 0;
+
+        if (wasEngaged != nowEngaged)
+        {
+            OsdPreviewPinChanged?.Invoke(nowEngaged);
+            // Re-show the OSD on the rising edge so the user sees the
+            // current look immediately, before they start tweaking.
+            if (nowEngaged) GlassPreviewRequested?.Invoke();
+        }
+    }
 
     /// <summary>Build a transient AppSettings from the schedule UI fields so the
     /// graph reflects unsaved edits. Doesn't touch <c>_snapshot</c>.</summary>
@@ -2075,61 +4282,116 @@ public partial class SettingsWindow : Window
     ///      or stale. This is the "Task Manager Enabled but doesn't actually
     ///      launch on boot" failure mode. Tell the user to click Repair.
     /// </summary>
-    private void RefreshAutoStartStatus()
+    /// <summary>v0.6.63: enable/disable the image-path + solid-colour
+    /// rows under each mode's background section based on the chosen
+    /// mode in the dropdown. Reduces visual noise (you only see the
+    /// inputs that are actually live).</summary>
+    private void UpdateBgUiVisibility()
     {
-        bool desired = ChkStartWithWindows.IsChecked == true;
-        if (!desired)
-        {
-            LblAutoStartStatus.Text = "Underlit will not start automatically with Windows.";
-            BtnAutoStartRepair.IsEnabled = false;
-            return;
-        }
+        bool lightImg   = CboLightBgChoice.SelectedIndex == (int)BackgroundChoice.Image;
+        bool lightColor = CboLightBgChoice.SelectedIndex == (int)BackgroundChoice.SolidColor;
+        TxtLightBgImagePath.IsEnabled = lightImg;
+        BtnLightBgBrowse.IsEnabled    = lightImg;
+        BtnLightBgColor.IsEnabled     = lightColor;
+        TxtLightBgImagePath.Opacity   = lightImg   ? 1.0 : 0.4;
+        BtnLightBgColor.Opacity       = lightColor ? 1.0 : 0.4;
 
-        bool regOk = AutoStart.IsRegistryEntryValid();
-        bool lnkOk = AutoStart.IsShortcutValid();
+        bool darkImg   = CboDarkBgChoice.SelectedIndex == (int)BackgroundChoice.Image;
+        bool darkColor = CboDarkBgChoice.SelectedIndex == (int)BackgroundChoice.SolidColor;
+        TxtDarkBgImagePath.IsEnabled = darkImg;
+        BtnDarkBgBrowse.IsEnabled    = darkImg;
+        BtnDarkBgColor.IsEnabled     = darkColor;
+        TxtDarkBgImagePath.Opacity   = darkImg   ? 1.0 : 0.4;
+        BtnDarkBgColor.Opacity       = darkColor ? 1.0 : 0.4;
+    }
 
-        if (regOk && lnkOk)
+    private void BrowseForBgImage(bool isLight)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
         {
-            LblAutoStartStatus.Text = "Underlit will launch with Windows. Registry entry verified.";
-            BtnAutoStartRepair.IsEnabled = true; // still allow a manual rewrite
+            Title = isLight ? "Pick a wallpaper for light mode" : "Pick a wallpaper for dark mode",
+            Filter = "Images (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false,
+        };
+        if (dlg.ShowDialog(this) != true) return;
+        if (isLight) TxtLightBgImagePath.Text = dlg.FileName;
+        else         TxtDarkBgImagePath.Text  = dlg.FileName;
+        PushSettings();
+    }
+
+    private void PickBgColor(bool isLight)
+    {
+        string current = isLight ? _snapshot.LightBackgroundColor : _snapshot.DarkBackgroundColor;
+        Color seed;
+        try { seed = (Color)ColorConverter.ConvertFromString(current); }
+        catch { seed = isLight ? Color.FromRgb(0xFF, 0xFF, 0xFF) : Color.FromRgb(0x40, 0x00, 0x10); }
+
+        using var dlg = new System.Windows.Forms.ColorDialog
+        {
+            FullOpen = true,
+            AnyColor = true,
+            Color = System.Drawing.Color.FromArgb(seed.R, seed.G, seed.B),
+        };
+        if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+        string hex = $"#FF{dlg.Color.R:X2}{dlg.Color.G:X2}{dlg.Color.B:X2}";
+        if (isLight)
+        {
+            _snapshot.LightBackgroundColor = hex;
+            LightBgColorSwatch.Background = HexToBrush(hex, Color.FromRgb(0xFF, 0xFF, 0xFF));
         }
         else
         {
-            // Stale or missing — surface the actual values so the user can
-            // see what Windows is currently pointing at vs. what it should
-            // be pointing at.
-            string reg = AutoStart.GetRegisteredCommand() ?? "(absent)";
-            string cur = AutoStart.GetCurrentExePath() ?? "(unknown)";
-            LblAutoStartStatus.Text =
-                $"Heads up: the Windows startup entry doesn't match this Underlit. " +
-                $"Click Repair to fix it.\n  registered: {reg}\n  this EXE:   {cur}";
-            BtnAutoStartRepair.IsEnabled = true;
+            _snapshot.DarkBackgroundColor = hex;
+            DarkBgColorSwatch.Background = HexToBrush(hex, Color.FromRgb(0x40, 0x00, 0x10));
         }
+        PushSettings();
     }
 
-    /// <summary>v0.6.50: force-rewrite both auto-start mechanisms to point
-    /// at the currently-running EXE. Mirrors the in-process changes Underlit
-    /// already does at every launch, but lets the user trigger a heal from
-    /// inside Settings without having to manually relaunch.</summary>
-    private void RepairAutoStart()
+    /// <summary>v0.6.56: drives the autostart row's tooltip text. The
+    /// inline status block + Repair button were removed - autostart now
+    /// self-heals on every launch and the row's tooltip surfaces the
+    /// current state when the user hovers.</summary>
+    private void RefreshAutoStartStatus()
     {
         bool desired = ChkStartWithWindows.IsChecked == true;
-        // Force a rewrite even if EnsureValid would have decided the entry
-        // is fine — the user is asking for a manual repair, so just do it.
-        AutoStart.Set(desired);
-        RefreshAutoStartStatus();
-
-        // Confirm to the user so they know the click did something. Show
-        // the diagnostic so support tickets can paste it directly.
-        MessageBox.Show(
-            this,
-            (desired
-                ? "Windows startup entry repaired. Underlit should now launch on the next reboot.\n\n"
-                : "Windows startup entry removed.\n\n")
-            + AutoStart.GetDiagnostics(),
-            "Auto-start",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        string tip;
+        if (!desired)
+        {
+            tip = "Underlit will not start automatically with Windows.";
+        }
+        else if (AutoStart.IsDevBuild())
+        {
+            string reg = AutoStart.GetRegisteredCommand() ?? "(absent)";
+            tip =
+                "You're running a dev build (bin\\Debug). Autostart is intentionally " +
+                "left alone so the registered path keeps pointing at your installed copy.\n" +
+                $"registered: {reg}";
+        }
+        else
+        {
+            bool regOk  = AutoStart.IsRegistryEntryValid();
+            bool taskOk = AutoStart.IsScheduledTaskRegistered();
+            if (regOk && taskOk)
+            {
+                tip = "Underlit will launch with Windows. Both the Run-key entry and the " +
+                      "scheduled-task backstop are registered and verified.";
+            }
+            else if (regOk)
+            {
+                tip = "Run-key registered. Scheduled-task backstop will be added on the next " +
+                      "launch automatically.";
+            }
+            else
+            {
+                string reg = AutoStart.GetRegisteredCommand() ?? "(absent)";
+                string cur = AutoStart.GetCurrentExePath() ?? "(unknown)";
+                tip = "Heads up: the Windows startup entry doesn't match this Underlit. " +
+                      "It will self-heal on next launch.\n" +
+                      $"registered: {reg}\nthis EXE: {cur}";
+            }
+        }
+        AutoStartRow.ToolTip = tip;
     }
 
     private void RestoreAllDefaults()
@@ -2163,6 +4425,40 @@ public partial class SettingsWindow : Window
     /// Returns JSON with a <c>tag_name</c> field which is what we
     /// compare against the running assembly version.</summary>
     private const string GitHubReleasesApiUrl = "https://api.github.com/repos/DietervanDortmont/underlit/releases/latest";
+
+    /// <summary>v0.6.56: where the Donate button goes. Default is GitHub
+    /// Sponsors against the same account that owns the repo. If you'd
+    /// rather use Ko-fi / Buy Me a Coffee / PayPal, swap this URL.</summary>
+    private const string DonateUrl = "https://github.com/sponsors/DietervanDortmont";
+
+    /// <summary>v0.6.54: feedback URL. Opens GitHub issue creation with a
+    /// prefilled template - users can edit it down before submitting, or
+    /// just hit "Submit new issue". A "feedback" label keeps these out
+    /// of the bug-report bucket so they don't get treated as crash reports.
+    /// Title and body are URL-encoded; GitHub limits the URL to 8 KB which
+    /// is plenty for our purposes.</summary>
+    private static string BuildFeedbackUrl()
+    {
+        string version = System.Reflection.Assembly.GetExecutingAssembly()
+            .GetName().Version?.ToString(3) ?? "?";
+        string body =
+            "## What were you trying to do?\n\n" +
+            "(Describe the workflow you wanted - e.g. 'I wish Underlit could dim my desk lamp at sunset', " +
+            "'I want IKEA bulbs to fade differently', 'I'd like a hotkey for X', etc.)\n\n" +
+            "## Why is the current Underlit not enough?\n\n" +
+            "(What did you try? What happened instead?)\n\n" +
+            "---\n" +
+            $"Underlit version: {version}\n" +
+            $"OS: {Environment.OSVersion.VersionString}\n";
+        string title = "Feedback: ";
+        string url = "https://github.com/DietervanDortmont/underlit/issues/new"
+            + "?labels=feedback"
+            + "&title=" + Uri.EscapeDataString(title)
+            + "&body="  + Uri.EscapeDataString(body);
+        return url;
+    }
+
+    private void OpenFeedbackUrl() => OpenUrl(BuildFeedbackUrl());
 
     /// <summary>Where Logger writes daily logs. Surfaced in the About
     /// footer so users posting bug reports can find them.</summary>
@@ -2478,10 +4774,41 @@ public partial class SettingsWindow : Window
         ChkScheduleEnabled.IsChecked   = _snapshot.ScheduleEnabled;
         ChkFollowAccent.IsChecked      = _snapshot.FollowWindowsAccent;
         ChkGlassLiveCapture.IsChecked  = _snapshot.GlassLiveCapture;
+        // v0.6.55: wind-down notification.
+        ChkWindDownEnabled.IsChecked   = _snapshot.WindDownNotificationEnabled;
+        SldWindDownMinutes.Value       = _snapshot.WindDownNotificationMinutesBeforeBedtime;
+        LblWindDownMinutes.Text        = ((int)SldWindDownMinutes.Value) + " min";
+        TxtWindDownMessage.Text        = _snapshot.WindDownNotificationMessage ?? "";
+        // v0.6.56: auto Windows theme.
+        ChkAutoTheme.IsChecked         = _snapshot.AutoSwitchWindowsTheme;
+        SldAutoThemeThreshold.Value    = _snapshot.AutoThemeKelvinThreshold;
+        LblAutoThemeThreshold.Text     = ((int)SldAutoThemeThreshold.Value) + " K";
+        // v0.6.63: per-mode wallpaper / colour fields.
+        CboLightBgChoice.SelectedIndex = (int)_snapshot.LightBackgroundChoice;
+        CboDarkBgChoice.SelectedIndex  = (int)_snapshot.DarkBackgroundChoice;
+        TxtLightBgImagePath.Text       = _snapshot.LightBackgroundImagePath ?? "";
+        TxtDarkBgImagePath.Text        = _snapshot.DarkBackgroundImagePath ?? "";
+        LightBgColorSwatch.Background  = HexToBrush(_snapshot.LightBackgroundColor, Color.FromRgb(0xFF, 0xFF, 0xFF));
+        DarkBgColorSwatch.Background   = HexToBrush(_snapshot.DarkBackgroundColor,  Color.FromRgb(0x40, 0x00, 0x10));
+        UpdateBgUiVisibility();
+        // v0.6.57: OSD shadow.
+        SldOsdShadowOpacity.Value      = _snapshot.OsdShadowOpacity;
+        SldOsdShadowBlur.Value         = _snapshot.OsdShadowBlur;
+        SldOsdShadowOffset.Value       = _snapshot.OsdShadowOffset;
+        SldOsdShadowAngle.Value        = _snapshot.OsdShadowAngle;
+        SldOsdShadowSpread.Value       = _snapshot.OsdShadowSpread;
+        SldOsdBarInset.Value           = _snapshot.OsdBarRightInsetDip;
+        LblOsdShadowOpacity.Text       = ((int)SldOsdShadowOpacity.Value) + " %";
+        LblOsdShadowBlur.Text          = ((int)SldOsdShadowBlur.Value)    + " px";
+        LblOsdShadowOffset.Text        = ((int)SldOsdShadowOffset.Value)  + " px";
+        LblOsdShadowAngle.Text         = ((int)SldOsdShadowAngle.Value)   + "°";
+        LblOsdShadowSpread.Text        = ((int)SldOsdShadowSpread.Value)  + " px";
+        LblOsdBarInset.Text            = ((int)SldOsdBarInset.Value)      + " dip";
         CboTransparency.SelectedIndex  = (int)_snapshot.TransparencyEffects;
         CboBackdrop.SelectedIndex      = (int)_snapshot.OsdBackdrop;
         CboBarStyle.SelectedIndex      = (int)_snapshot.OsdBarStyle;
         RefreshAccentSwatch();
+        RefreshSunIconSwatch();
 
         SldBrightnessStep.Value = _snapshot.BrightnessStep;
         SldWarmthStep.Value     = _snapshot.WarmthStep;
@@ -2520,9 +4847,11 @@ public partial class SettingsWindow : Window
         // stays in the bridge's native 1..254 range. Convert each direction.
         SldHueBrightness.Value          = HueBriNativeToPercent(_snapshot.HueBrightness);
         SldHueWarmthOffset.Value        = _snapshot.HueWarmthOffsetKelvin;
+        SldHueBulbFadeOnset.Value       = _snapshot.HueBulbFadeOnsetKelvin;
         ChkHueIgnoreBoost.IsChecked     = _snapshot.HueIgnoreBoost;
         LblHueBrightness.Text           = ((int)SldHueBrightness.Value) + "%";
         LblHueWarmthOffset.Text         = FormatKelvinOffset((int)SldHueWarmthOffset.Value);
+        LblHueBulbFadeOnset.Text        = ((int)SldHueBulbFadeOnset.Value) + " K";
         TxtHkHueBrDown.Value = _snapshot.HotkeyHueBrightnessDown ?? string.Empty;
         TxtHkHueBrUp.Value   = _snapshot.HotkeyHueBrightnessUp   ?? string.Empty;
         TxtHkHueWrDown.Value = _snapshot.HotkeyHueWarmthDown     ?? string.Empty;
@@ -2900,7 +5229,28 @@ public partial class SettingsWindow : Window
         // Hue Phase 3: live-pushed sliders + ignore-boost toggle + four hotkeys.
         _snapshot.HueBrightness            = HueBriPercentToNative(SldHueBrightness.Value);
         _snapshot.HueWarmthOffsetKelvin    = (int)SldHueWarmthOffset.Value;
+        _snapshot.HueBulbFadeOnsetKelvin   = (int)SldHueBulbFadeOnset.Value;
         _snapshot.HueIgnoreBoost           = ChkHueIgnoreBoost.IsChecked == true;
+
+        // v0.6.55: wind-down notification.
+        _snapshot.WindDownNotificationEnabled = ChkWindDownEnabled.IsChecked == true;
+        _snapshot.WindDownNotificationMinutesBeforeBedtime = (int)SldWindDownMinutes.Value;
+        _snapshot.WindDownNotificationMessage = TxtWindDownMessage.Text ?? "";
+        // v0.6.56: auto Windows theme.
+        _snapshot.AutoSwitchWindowsTheme   = ChkAutoTheme.IsChecked == true;
+        _snapshot.AutoThemeKelvinThreshold = (int)SldAutoThemeThreshold.Value;
+        // v0.6.63: per-mode background.
+        _snapshot.LightBackgroundChoice    = (BackgroundChoice)Math.Max(0, CboLightBgChoice.SelectedIndex);
+        _snapshot.DarkBackgroundChoice     = (BackgroundChoice)Math.Max(0, CboDarkBgChoice.SelectedIndex);
+        _snapshot.LightBackgroundImagePath = TxtLightBgImagePath.Text ?? "";
+        _snapshot.DarkBackgroundImagePath  = TxtDarkBgImagePath.Text ?? "";
+        // v0.6.57: OSD shadow.
+        _snapshot.OsdShadowOpacity         = (int)SldOsdShadowOpacity.Value;
+        _snapshot.OsdShadowBlur            = (int)SldOsdShadowBlur.Value;
+        _snapshot.OsdShadowOffset          = (int)SldOsdShadowOffset.Value;
+        _snapshot.OsdShadowAngle           = (int)SldOsdShadowAngle.Value;
+        _snapshot.OsdShadowSpread          = (int)SldOsdShadowSpread.Value;
+        _snapshot.OsdBarRightInsetDip      = (int)SldOsdBarInset.Value;
         _snapshot.HotkeyHueBrightnessDown  = TxtHkHueBrDown.Value.Trim();
         _snapshot.HotkeyHueBrightnessUp    = TxtHkHueBrUp.Value.Trim();
         _snapshot.HotkeyHueWarmthDown      = TxtHkHueWrDown.Value.Trim();

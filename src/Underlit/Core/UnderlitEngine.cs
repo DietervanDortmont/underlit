@@ -38,6 +38,20 @@ public sealed class UnderlitEngine : IDisposable
     // ---- Outputs / state ----
     public event Action<double, int>? LevelChanged; // (signed -100..+100, warmth K)
 
+    /// <summary>v0.6.78: fires whenever the dim-overlay opacity changes
+    /// (i.e. each ramp tick that crosses into / out of the extended-dim
+    /// range, or settles on a new target). The host forwards this to the
+    /// OSD so the OSD can paint a matching black tint on its glass
+    /// interior — without this, the OSD would render the desktop's
+    /// pre-overlay (un-dimmed) refraction, making the pill read as
+    /// brighter than the rest of the screen.</summary>
+    public event Action<double>? OverlayOpacityChanged;
+
+    /// <summary>v0.6.78: most recently applied overlay opacity (0..0.92).
+    /// Public so the host can query it once on subscribe without having
+    /// to wait for the next ramp tick.</summary>
+    public double CurrentOverlayOpacity { get; private set; }
+
     /// <summary>Cached Windows hardware brightness, 0..100.</summary>
     public int HardwareLevel => _hardwareLevel;
 
@@ -320,6 +334,19 @@ public sealed class UnderlitEngine : IDisposable
     {
         hwPct = Math.Clamp(hwPct, 0, 100);
 
+        // v0.6.79: if we've written hardware brightness recently, the panel
+        // hasn't physically settled to the target yet — WMI/DDC reports
+        // intermediate values during the 100-200 ms transition. Treating
+        // those as "external" changes was making the engine snap
+        // _hardwareLevel back to whatever the panel happened to read mid-
+        // transition, which is the exact "brightness doesn't end up at the
+        // right level consistently" symptom the user was hitting on rapid
+        // presses. Skip the sync if our last write attempt was less than
+        // ~1.5 s ago — by then the panel has settled and a poll-read is
+        // trustworthy as "the user actually moved Windows' slider".
+        if ((DateTime.UtcNow - _lastHwWriteAttempt).TotalMilliseconds < ExternalSyncGracePeriodMs)
+            return;
+
         var primaryId = _displays.FirstOrDefault(d => d.IsPrimary)?.StableId;
         if (primaryId != null
             && _lastAppliedHardwarePct.TryGetValue(primaryId, out var last)
@@ -582,6 +609,15 @@ public sealed class UnderlitEngine : IDisposable
 
         _gamma.Apply(gamma, _currentWarmthRendered);
         ApplyOverlayToAll(overlay);
+        // v0.6.78: surface the live overlay opacity so the OSD can mirror
+        // it as a black tint on its glass interior. Fires every ramp tick
+        // (cheap — just a delegate invocation per subscriber) so the OSD
+        // tracks the value through smooth ramps as well as snap changes.
+        if (Math.Abs(overlay - CurrentOverlayOpacity) > 0.001)
+        {
+            CurrentOverlayOpacity = overlay;
+            OverlayOpacityChanged?.Invoke(overlay);
+        }
     }
 
     // Coalesced hardware-write state.
@@ -599,6 +635,13 @@ public sealed class UnderlitEngine : IDisposable
     // get dropped — only the LAST one the user ended on is committed.
     private readonly object _hwLock = new();
     private bool _hwWriteInFlight;
+    /// <summary>v0.6.79: timestamp of the most recent WriteHardwareAsync
+    /// invocation. SyncFromExternalHardware uses this to suppress reads
+    /// while the panel is still physically transitioning to our latest
+    /// target — otherwise a mid-transition WMI read can look like an
+    /// "external change" and snap the engine to a stale value.</summary>
+    private DateTime _lastHwWriteAttempt = DateTime.MinValue;
+    private const int ExternalSyncGracePeriodMs = 1500;
     private (int Percent,
              List<DisplayInfo> Displays,
              Dictionary<string, double> PerMonOffsets,
@@ -606,6 +649,11 @@ public sealed class UnderlitEngine : IDisposable
 
     private void WriteHardwareAsync(int percent)
     {
+        // v0.6.79: stamp the time so the external-sync poller can tell
+        // we're still mid-write and stop fighting the value during the
+        // panel's transition window.
+        _lastHwWriteAttempt = DateTime.UtcNow;
+
         // Snapshot the inputs at the call site so the worker doesn't read
         // _displays / _settings / _lastAppliedHardwarePct from another thread.
         var snapshot = _displays.ToList();

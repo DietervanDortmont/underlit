@@ -16,6 +16,31 @@ internal static class Logger
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Underlit");
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "underlit.log");
+        RotateIfLarge();
+    }
+
+    /// <summary>Keep the log from growing forever (it reached 229 MB
+    /// before this existed). When the file passes <see cref="MaxBytes"/>
+    /// it is moved to underlit.old.log (replacing any previous one), so
+    /// at most ~2x MaxBytes is kept on disk. Checked at startup and every
+    /// <see cref="RotateCheckEvery"/> writes.</summary>
+    private const long MaxBytes = 5L * 1024 * 1024;
+    private const int RotateCheckEvery = 500;
+    private static int _writesSinceCheck;
+
+    private static void RotateIfLarge()
+    {
+        try
+        {
+            var fi = new FileInfo(_path);
+            if (!fi.Exists || fi.Length < MaxBytes) return;
+            var old = Path.Combine(fi.DirectoryName!, "underlit.old.log");
+            File.Move(_path, old, overwrite: true);
+        }
+        catch
+        {
+            // Rotation is best-effort.
+        }
     }
 
     public static void Info(string message) => Write("INFO ", message, null);
@@ -28,6 +53,11 @@ internal static class Logger
         {
             lock (_lock)
             {
+                if (++_writesSinceCheck >= RotateCheckEvery)
+                {
+                    _writesSinceCheck = 0;
+                    RotateIfLarge();
+                }
                 var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {level} {message}";
                 if (ex != null) line += Environment.NewLine + ex;
                 File.AppendAllText(_path, line + Environment.NewLine);

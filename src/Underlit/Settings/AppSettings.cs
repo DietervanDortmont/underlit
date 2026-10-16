@@ -63,7 +63,13 @@ public sealed class AppSettings
     public bool SmoothRamping { get; set; } = true;
 
     /// <summary>Ramp duration for software layers only. Hardware always snaps.</summary>
-    public int RampDurationMs { get; set; } = 80;
+    // v0.6.79: 40 ms default (was 80). The gamma/overlay transition over
+    // 80 ms was reading as "noticeable lag" on rapid hotkey presses,
+    // especially in the lower brightness range where the overlay drives
+    // the descent. 40 ms is short enough to feel snappy on press but long
+    // enough to avoid harsh snaps. The user can still dial 0 (snap) or
+    // a higher value via Settings → BRIGHTNESS → Software fade duration.
+    public int RampDurationMs { get; set; } = 40;
 
     public bool DisableWindowsNightLight { get; set; } = true;
 
@@ -109,6 +115,21 @@ public sealed class AppSettings
     /// brightness 100. Gives a "more brightness = deeper colour" cue.
     /// </summary>
     public string OsdBrightnessHighColor { get; set; } = "auto";
+
+    /// <summary>v0.6.69: user-pickable colour for the sun (brightness)
+    /// icon in the OSD pill. Default #FFFEC80F (warm amber-yellow),
+    /// matching the "candle flame" feel the OSD's other warmth-side
+    /// elements already lean toward. Stored as #AARRGGBB; the OSD's
+    /// own theme update path always honours this colour, ignoring the
+    /// luminance-based auto colour that used to drive the icon.</summary>
+    public string OsdSunIconColor { get; set; } = "#FFFEC80F";
+
+    /// <summary>v0.6.71: right-side inset for the bar inside the OSD
+    /// pill, in dip. Default 24. Smaller value = wider bar (extends
+    /// closer to the pill's right edge); larger = narrower bar.
+    /// Affects both the brightness and warmth indicators because
+    /// they share the same ContentRoot Grid column.</summary>
+    public int OsdBarRightInsetDip { get; set; } = 24;
 
     /// <summary>
     /// How the brightness / warmth indicator inside the OSD pill is drawn.
@@ -239,6 +260,198 @@ public sealed class AppSettings
     /// (opt-in per-group via the Lights settings page).</summary>
     public List<string> HueSelectedGroupIds { get; set; } = new();
 
+    /// <summary>v0.6.53: individual light ids selected for Underlit to control.
+    /// Distinct from <see cref="HueSelectedGroupIds"/>: lights selected here
+    /// get the per-bulb gamut-aware push (graceful fade-out for limited
+    /// bulbs, manual on/off respect for Google-Home coexistence). Group
+    /// selections are EXPANDED to their member lights at push time and
+    /// merged with this list so the same per-bulb logic applies. Empty by
+    /// default - opt-in per-light via the Lights settings page.</summary>
+    public List<string> HueSelectedLightIds { get; set; } = new();
+
+    /// <summary>v0.6.55: how much earlier than the bulb's own CT-max
+    /// limit the fade-out should start, in kelvin. The fade ramps
+    /// brightness 1 -> 0 between (bulb's CT max + this offset) and the
+    /// schedule's deepest-warm anchor, so a Tradfri tunable that maxes
+    /// at 2200 K with a 200 K offset starts dimming at 2400 K and is
+    /// fully off when the schedule reaches its deepest warmth. Increase
+    /// the value to make CT-limited bulbs ease into the fade earlier
+    /// (smoother), decrease toward zero for a sharper cliff at the
+    /// bulb's actual CT limit. Default 200 K - noticeable easing
+    /// without intruding on the bulb's normal CT range.</summary>
+    public int HueBulbFadeOnsetKelvin { get; set; } = 200;
+
+    /// <summary>v0.6.55: user-defined Quick Scenes. Built-in scenes
+    /// (Reading / Relax / Movie night / Energize / Resume / Off) are
+    /// always present; this list extends them with whatever the user
+    /// adds via the "+" button in the Quick Scenes card.</summary>
+    public List<QuickScene> CustomQuickScenes { get; set; } = new();
+
+    /// <summary>v0.6.55: opt-in wind-down notification. When enabled,
+    /// Underlit shows a tray balloon "Wind-down time" the configured
+    /// number of minutes BEFORE the active profile's bedtime. Off by
+    /// default - users have to choose to enable it.</summary>
+    public bool WindDownNotificationEnabled { get; set; } = false;
+    public int  WindDownNotificationMinutesBeforeBedtime { get; set; } = 30;
+    public string WindDownNotificationMessage { get; set; } =
+        "Wind-down time. Want to dim the lights and ease into bedtime?";
+
+    /// <summary>v0.6.55: time-triggered routines. Each routine fires at
+    /// a specific time-of-day (or relative to wakeup/bedtime) and applies
+    /// an action - typically toggling a Hue plug for the SAD-lamp use
+    /// case. Routines run independently of the warmth schedule.</summary>
+    public List<Routine> Routines { get; set; } = new();
+
+    /// <summary>v0.6.58: per-group colour profiles. Each entry is a
+    /// LightColorGroup with its own gradient + time offset that drives
+    /// a subset of the user's selected lights/groups. Empty by default
+    /// (= legacy single-gradient behaviour); users opt in by adding
+    /// their first group via the Lights settings page. The HueController
+    /// routes pushes through these when non-empty.
+    /// <para>v0.6.73: now backed by <see cref="LightProfiles"/>. When
+    /// at least one profile exists this returns the ACTIVE profile's
+    /// ColorGroups list, so HueController and downstream callers don't
+    /// have to know about the profile layer. The setter routes to the
+    /// active profile too. On legacy settings (before any profile was
+    /// ever created), a private backing list keeps the property
+    /// functional until the first <see cref="EnsureLightProfilesPopulated"/>
+    /// call wraps it into a "My profile" entry.</para></summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<LightColorGroup> ColorGroups
+    {
+        get
+        {
+            if (LightProfiles != null && LightProfiles.Count > 0)
+            {
+                var id = ActiveLightProfileId;
+                var active = (string.IsNullOrEmpty(id) ? null : LightProfiles.FirstOrDefault(p => p.Id == id))
+                             ?? LightProfiles[0];
+                return active.ColorGroups;
+            }
+            return _legacyColorGroupsBacking;
+        }
+        set
+        {
+            var v = value ?? new List<LightColorGroup>();
+            if (LightProfiles != null && LightProfiles.Count > 0)
+            {
+                var id = ActiveLightProfileId;
+                var active = (string.IsNullOrEmpty(id) ? null : LightProfiles.FirstOrDefault(p => p.Id == id))
+                             ?? LightProfiles[0];
+                active.ColorGroups = v;
+            }
+            else
+            {
+                _legacyColorGroupsBacking = v;
+            }
+        }
+    }
+
+    /// <summary>JSON-only field — kept solely so settings files written
+    /// before v0.6.73 (which had a top-level "ColorGroups" key but no
+    /// "LightProfiles") can round-trip. After deserialisation,
+    /// <see cref="EnsureLightProfilesPopulated"/> moves these into the
+    /// first LightProfile and the backing field is no longer used.</summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ColorGroups")]
+    public List<LightColorGroup> ColorGroupsJsonSlot
+    {
+        get => ColorGroups;
+        set => ColorGroups = value;
+    }
+
+    private List<LightColorGroup> _legacyColorGroupsBacking = new();
+
+    /// <summary>v0.6.73: every "lights timeline" the user can switch
+    /// between. Each LightProfile carries its own set of LightColorGroups
+    /// (= rows in the lights timeline), so the user can have a
+    /// "weekday morning" profile, an "evening wind-down" profile, etc.,
+    /// and swap between them from the LIGHTS TIMELINE card without
+    /// touching the underlying selected lights/groups.</summary>
+    public List<LightProfile> LightProfiles { get; set; } = new();
+    /// <summary>v0.6.73: id of the currently-active <see cref="LightProfile"/>.
+    /// Resolved at access time via <see cref="ActiveLightProfile"/>;
+    /// invalid ids silently fall back to the first profile.</summary>
+    public string ActiveLightProfileId { get; set; } = "";
+
+    /// <summary>v0.6.73: return the active <see cref="LightProfile"/>,
+    /// populating <see cref="LightProfiles"/> from legacy ColorGroups
+    /// (or creating a fresh "My profile" entry) if the list is empty.
+    /// Always returns a non-null profile.</summary>
+    public LightProfile ActiveLightProfile()
+    {
+        EnsureLightProfilesPopulated();
+        var id = ActiveLightProfileId;
+        return LightProfiles.FirstOrDefault(p => p.Id == id) ?? LightProfiles[0];
+    }
+
+    /// <summary>v0.6.73: make sure at least one LightProfile exists.
+    /// On a legacy settings file this wraps the deserialised
+    /// <see cref="_legacyColorGroupsBacking"/> into a single profile
+    /// named "My profile". Called from <see cref="Load"/> and from
+    /// <see cref="ActiveLightProfile"/> so it's safe to call multiple
+    /// times — second and subsequent calls are no-ops.</summary>
+    public void EnsureLightProfilesPopulated()
+    {
+        LightProfiles ??= new List<LightProfile>();
+        if (LightProfiles.Count == 0)
+        {
+            var first = new LightProfile
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Name = _legacyColorGroupsBacking.Count > 0 ? "My profile" : "Default",
+                IsBuiltIn = _legacyColorGroupsBacking.Count == 0,
+                ColorGroups = _legacyColorGroupsBacking.ToList(),
+            };
+            LightProfiles.Add(first);
+            ActiveLightProfileId = first.Id;
+            _legacyColorGroupsBacking = new List<LightColorGroup>();
+        }
+        if (string.IsNullOrEmpty(ActiveLightProfileId) ||
+            !LightProfiles.Any(p => p.Id == ActiveLightProfileId))
+        {
+            ActiveLightProfileId = LightProfiles[0].Id;
+        }
+    }
+
+    /// <summary>v0.6.56: auto-switch the Windows app + system theme
+    /// between light and dark based on the current target warmth.
+    /// Off by default (so we don't surprise existing users); when on,
+    /// crossing <see cref="AutoThemeKelvinThreshold"/> downward switches
+    /// to dark, upward switches to light. The theme apply is hammered
+    /// every 30 s and on every warmth change so flaky Windows builds
+    /// (and tools like AutoDark that occasionally lose) can't outlast it.</summary>
+    public bool AutoSwitchWindowsTheme { get; set; } = false;
+    public int AutoThemeKelvinThreshold { get; set; } = 4000;
+
+    /// <summary>v0.6.63: per-mode wallpaper / desktop-background switching
+    /// applied alongside the light/dark theme. None = leave wallpaper
+    /// alone; Image = set the configured image path; SolidColor =
+    /// remove wallpaper and paint the desktop with the configured
+    /// colour. Defaults to None for both modes so existing users see
+    /// no change unless they opt in.</summary>
+    public BackgroundChoice LightBackgroundChoice { get; set; } = BackgroundChoice.None;
+    public BackgroundChoice DarkBackgroundChoice  { get; set; } = BackgroundChoice.None;
+    public string LightBackgroundImagePath { get; set; } = "";
+    public string DarkBackgroundImagePath  { get; set; } = "";
+    /// <summary>Solid colour used when the corresponding mode's choice
+    /// is SolidColor. Stored as #AARRGGBB.</summary>
+    public string LightBackgroundColor { get; set; } = "#FFFFFFFF"; // pure white
+    public string DarkBackgroundColor  { get; set; } = "#FF400010"; // deep red
+
+    /// <summary>v0.6.57: OSD drop-shadow params. Always rendered (in all
+    /// backdrop modes) so the pill has contrast against light backgrounds.
+    /// Opacity 0..100 = none..opaque; BlurRadius 0..60 dip; Offset 0..30
+    /// dip; Angle 0..359 deg (270 = below).
+    /// v0.6.64: Spread 0..30 dip — grows the shadow's source pill outward
+    /// by that many dip on every side before the blur is applied (CSS
+    /// box-shadow "spread"). Useful when the user wants a bigger soft
+    /// halo without making the blur look smeary.</summary>
+    public int OsdShadowOpacity { get; set; } = 55;
+    public int OsdShadowBlur    { get; set; } = 22;
+    public int OsdShadowOffset  { get; set; } = 8;
+    public int OsdShadowAngle   { get; set; } = 270;
+    public int OsdShadowSpread  { get; set; } = 0;
+
     /// <summary>How Underlit maps the schedule warmth to Hue colour. Default is
     /// circadian (kelvin → mireds) which keeps the bulbs in their native colour-
     /// temperature space. Other options drive the bulbs out into RGB land for
@@ -326,6 +539,58 @@ public sealed class AppSettings
     /// <summary>How much HueWarmthOffsetKelvin changes per hotkey press.
     /// Defaults to 200 K to match the screen warmth step.</summary>
     public int HueWarmthStep { get; set; } = 200;
+
+    /// <summary>v0.7.0: where the lamps get their colour from.
+    /// ScreenWarmth = the old behaviour (follow the screen's kelvin curve,
+    /// coloured through the kelvin gradient). TimeOfDay = each timeline
+    /// row has its own colour stops placed directly on a 24 h clock.</summary>
+    public HueColorSource HueColorSource { get; set; } = HueColorSource.ScreenWarmth;
+
+    /// <summary>v0.7.0: time-of-day colour stops for lights that aren't
+    /// claimed by a colour group (the "Default" row). Colour groups carry
+    /// their own <see cref="LightColorGroup.TimeStops"/>. Always at least
+    /// one stop; an empty / null list is reseeded with
+    /// <see cref="DefaultTimeStops"/>.</summary>
+    public List<HueTimeStop> HueTimeStops
+    {
+        get
+        {
+            if (_hueTimeStops is null || _hueTimeStops.Count == 0)
+                _hueTimeStops = DefaultTimeStops();
+            return _hueTimeStops;
+        }
+        set => _hueTimeStops = value;
+    }
+    private List<HueTimeStop>? _hueTimeStops;
+
+    /// <summary>Starter day: deep red -> orange -> warm white -> white in
+    /// the morning, the reverse in the evening. Stops are anchored to wake-up / bedtime so they move
+    /// when the schedule does.</summary>
+    public static List<HueTimeStop> DefaultTimeStops() => new()
+    {
+        // Morning: deep red -> orange -> warm white -> white.
+        new HueTimeStop { Anchor = HueTimeAnchor.WakeTime, Minutes = -60,  Color = "#FFB00010", BrightnessPercent = 8 },
+        new HueTimeStop { Anchor = HueTimeAnchor.WakeTime, Minutes = -40,  Color = "#FFFF7A00", BrightnessPercent = 35 },
+        new HueTimeStop { Anchor = HueTimeAnchor.WakeTime, Minutes = -20,  Color = "#FFFFD7A0", BrightnessPercent = 70 },
+        new HueTimeStop { Anchor = HueTimeAnchor.WakeTime, Minutes = 0,    Color = "#FFFFFFFF", BrightnessPercent = 100 },
+        // Evening: the same in reverse, ending at a dim deep red.
+        new HueTimeStop { Anchor = HueTimeAnchor.Bedtime,  Minutes = -240, Color = "#FFFFFFFF", BrightnessPercent = 100 },
+        new HueTimeStop { Anchor = HueTimeAnchor.Bedtime,  Minutes = -150, Color = "#FFFFD7A0", BrightnessPercent = 85 },
+        new HueTimeStop { Anchor = HueTimeAnchor.Bedtime,  Minutes = -75,  Color = "#FFFF7A00", BrightnessPercent = 55 },
+        new HueTimeStop { Anchor = HueTimeAnchor.Bedtime,  Minutes = 0,    Color = "#FFB00010", BrightnessPercent = 20 },
+    };
+
+    /// <summary>v0.7.0: what happens after something other than Underlit
+    /// (Google Home, the Hue app, a dimmer switch) changes a light's
+    /// colour or brightness. Underlit always stops driving that bulb at
+    /// first; this decides when it takes it back.</summary>
+    public HueOverrideRelease HueOverrideRelease { get; set; } = HueOverrideRelease.UntilLightOff;
+
+    /// <summary>v0.7.1: time-of-day mode. How far white-only bulbs (which
+    /// can't make orange or red) keep following the colour before they've
+    /// dimmed out completely. 0 = bow out as soon as the colour leaves
+    /// white; 100 = hang on until deep orange. See BulbColorMapper.</summary>
+    public int HueWhiteBulbFollowPercent { get; set; } = 30;
 
     // ---- Schedule helpers ----
 
@@ -527,6 +792,9 @@ public sealed class AppSettings
 
                     loaded.EnsureProfilesInitialized();
                     loaded.EnsureScheduleCurveDerived();
+                    // v0.6.73: wrap any legacy ColorGroups (from JSON
+                    // written before this version) into a LightProfile.
+                    loaded.EnsureLightProfilesPopulated();
                     return loaded;
                 }
             }
@@ -538,6 +806,7 @@ public sealed class AppSettings
         var fresh = new AppSettings();
         fresh.EnsureProfilesInitialized();
         fresh.EnsureScheduleCurveDerived();
+        fresh.EnsureLightProfilesPopulated();
         return fresh;
     }
 
@@ -680,4 +949,242 @@ public sealed class HueGradientStop
 {
     public int Kelvin { get; set; } = 6500;
     public string Color { get; set; } = "#FFFFFFFF";
+}
+
+/// <summary>v0.7.0: see <see cref="AppSettings.HueColorSource"/>.</summary>
+public enum HueColorSource
+{
+    ScreenWarmth = 0,
+    TimeOfDay    = 1,
+}
+
+/// <summary>v0.7.0: see <see cref="AppSettings.HueOverrideRelease"/>.</summary>
+public enum HueOverrideRelease
+{
+    /// <summary>Take the bulb back once it has been switched off (by
+    /// anyone) and is on again.</summary>
+    UntilLightOff = 0,
+    /// <summary>Same as UntilLightOff, and also take it back at the next
+    /// colour stop (time-of-day mode) or schedule ramp point.</summary>
+    UntilNextStop = 1,
+    /// <summary>Only take it back when the user picks "Resume lights
+    /// schedule" (tray menu or the Resume quick scene).</summary>
+    UntilResume   = 2,
+}
+
+/// <summary>What a <see cref="HueTimeStop"/>'s time is measured from.</summary>
+public enum HueTimeAnchor
+{
+    /// <summary><see cref="HueTimeStop.Minutes"/> = minutes after midnight.</summary>
+    Clock    = 0,
+    /// <summary>Minutes relative to the active schedule's wake-up time.</summary>
+    WakeTime = 1,
+    /// <summary>Minutes relative to the active schedule's bedtime.</summary>
+    Bedtime  = 2,
+}
+
+/// <summary>v0.7.0: one colour stop on the 24 h lights timeline. The
+/// lamps fade smoothly from one stop to the next (wrapping past
+/// midnight). BrightnessPercent 0 (or a black colour) means "off".</summary>
+public sealed class HueTimeStop
+{
+    public HueTimeAnchor Anchor { get; set; } = HueTimeAnchor.Clock;
+    /// <summary>Clock: minute of the day (0..1439). WakeTime / Bedtime:
+    /// signed offset in minutes from that anchor.</summary>
+    public int Minutes { get; set; } = 12 * 60;
+    public string Color { get; set; } = "#FFFFFFFF";
+    public int BrightnessPercent { get; set; } = 100;
+    /// <summary>True = keep this stop's colour until the next stop and
+    /// switch there; false (default) = fade smoothly into the next stop.</summary>
+    public bool Hold { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsOff => BrightnessPercent <= 0 || IsBlack(Color);
+
+    private static bool IsBlack(string hex)
+    {
+        if (string.IsNullOrEmpty(hex) || hex[0] != '#') return false;
+        try
+        {
+            int off = hex.Length == 9 ? 3 : 1;
+            int r = Convert.ToInt32(hex.Substring(off, 2), 16);
+            int g = Convert.ToInt32(hex.Substring(off + 2, 2), 16);
+            int b = Convert.ToInt32(hex.Substring(off + 4, 2), 16);
+            return r + g + b < 24;
+        }
+        catch { return false; }
+    }
+
+    public HueTimeStop Copy() => new()
+    {
+        Anchor = Anchor, Minutes = Minutes, Color = Color, BrightnessPercent = BrightnessPercent, Hold = Hold,
+    };
+}
+
+/// <summary>v0.6.55: a one-click Hue scene the user can apply to all
+/// currently-selected groups + lights. Built-in scenes are baked into
+/// SettingsWindow as constants; the user's own additions live in
+/// <see cref="AppSettings.CustomQuickScenes"/> and round-trip via JSON.</summary>
+public sealed class QuickScene
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+
+    /// <summary>How this scene affects the selected lights when applied.
+    /// SetCtBri = turn on, push the scene's Kelvin and Brightness;
+    /// TurnOff = send on:false (sticky - schedule won't auto-revive);
+    /// ResumeSchedule = send on:true and let the next schedule tick
+    /// reassert the schedule's current warmth.</summary>
+    public QuickSceneAction Action { get; set; } = QuickSceneAction.SetCtBri;
+
+    public int Kelvin { get; set; } = 4500;
+    /// <summary>0..100. Converted to bridge-native 1..254 at apply time.</summary>
+    public int BrightnessPercent { get; set; } = 100;
+}
+
+public enum QuickSceneAction
+{
+    SetCtBri       = 0,
+    TurnOff        = 1,
+    ResumeSchedule = 2,
+}
+
+/// <summary>v0.6.63: how the auto-theme switcher should change the
+/// desktop background when toggling light/dark.
+///   None       - leave the wallpaper alone (default)
+///   Image      - set the configured image file as the wallpaper
+///   SolidColor - clear wallpaper, paint the desktop with the configured colour</summary>
+public enum BackgroundChoice
+{
+    None       = 0,
+    Image      = 1,
+    SolidColor = 2,
+}
+
+/// <summary>v0.6.55: time-triggered automation. Fires once a day when
+/// the local clock crosses the trigger time. Common use: turn a Hue
+/// plug ON at wake time, OFF after N minutes (the SAD-lamp pattern).</summary>
+public sealed class Routine
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>How the trigger time is interpreted. AbsoluteTime fires
+    /// at HHmm wall-clock; RelativeToWakeup / RelativeToBedtime offset
+    /// from the active profile's anchor (negative = before).</summary>
+    public RoutineTriggerKind TriggerKind { get; set; } = RoutineTriggerKind.AbsoluteTime;
+    public int TriggerHour   { get; set; } = 7;
+    public int TriggerMinute { get; set; } = 0;
+    /// <summary>For Relative triggers: minutes offset (negative = before
+    /// the anchor). E.g. -10 with TriggerKind=RelativeToWakeup fires 10
+    /// minutes before the user's WakeupStart.</summary>
+    public int TriggerOffsetMinutes { get; set; } = 0;
+    /// <summary>Days of the week the routine fires (bit flags). 0x7F =
+    /// every day; 0x3E = Mon-Fri only; 0x41 = weekend only.</summary>
+    public RoutineDays Days { get; set; } = RoutineDays.EveryDay;
+
+    /// <summary>Light/group/plug ids the routine acts on. Mixed types
+    /// allowed; the host figures out which API to use per id.</summary>
+    public List<string> TargetLightIds { get; set; } = new();
+    public List<string> TargetGroupIds { get; set; } = new();
+
+    /// <summary>What the routine does at trigger time.</summary>
+    public RoutineAction Action { get; set; } = RoutineAction.TurnOn;
+    /// <summary>For TurnOnFor: how long the lights stay on before being
+    /// turned off again. Ignored for TurnOn / TurnOff.</summary>
+    public int DurationMinutes { get; set; } = 25;
+    /// <summary>For TurnOn / TurnOnFor: optional CT/bri override. Null
+    /// = leave the bridge to its last value (or full bright for plugs).</summary>
+    public int? Kelvin { get; set; }
+    public int? BrightnessPercent { get; set; }
+}
+
+public enum RoutineTriggerKind
+{
+    AbsoluteTime       = 0,
+    RelativeToWakeup   = 1,
+    RelativeToBedtime  = 2,
+}
+
+public enum RoutineAction
+{
+    TurnOn    = 0,
+    TurnOff   = 1,
+    /// <summary>Turn on, then automatically turn off after
+    /// <see cref="Routine.DurationMinutes"/> minutes. The SAD-lamp pattern.</summary>
+    TurnOnFor = 2,
+}
+
+/// <summary>v0.6.58: a colour profile that drives a subset of the
+/// user's lights with its own gradient and time offset. Lets the user
+/// say "the kitchen group dims 30 minutes earlier than the living
+/// room" or "the bedroom uses an entirely different colour palette".
+///
+/// <para>Lights/groups not assigned to any LightColorGroup are driven
+/// by the legacy global gradient (= same as before this feature
+/// existed). When the user adds at least one group, only the lights
+/// they explicitly assign to it get the per-group treatment.</para></summary>
+/// <summary>v0.6.73: a "lights timeline profile" — a named collection of
+/// <see cref="LightColorGroup"/> entries that drive the user's Hue lights
+/// together. Switching the active profile swaps the entire timeline
+/// (all rows) at once. A user can keep a recommended built-in profile
+/// for everyday use and create additional Custom profiles for specific
+/// scenarios. See <see cref="AppSettings.LightProfiles"/> and
+/// <see cref="AppSettings.ActiveLightProfileId"/>.</summary>
+public sealed class LightProfile
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "Custom profile";
+    /// <summary>True for the recommended/default profile. Built-in
+    /// profiles can be reset to factory defaults but not deleted.</summary>
+    public bool IsBuiltIn { get; set; } = false;
+    /// <summary>The colour groups (= timeline rows) belonging to this
+    /// profile. Switching profiles swaps in this list.</summary>
+    public List<LightColorGroup> ColorGroups { get; set; } = new();
+}
+
+public sealed class LightColorGroup
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "New group";
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Hue light ids the group drives directly.</summary>
+    public List<string> LightIds { get; set; } = new();
+    /// <summary>Hue group ids the group drives. Expanded to member lights
+    /// at push time, deduped with <see cref="LightIds"/>.</summary>
+    public List<string> GroupIds { get; set; } = new();
+
+    /// <summary>Gradient to apply to this group, kelvin → colour. Same
+    /// shape as the legacy multi-stop gradient.</summary>
+    public List<HueGradientStop> Gradient { get; set; } = new();
+
+    /// <summary>v0.7.0: time-of-day colour stops used when
+    /// <see cref="AppSettings.HueColorSource"/> is TimeOfDay. Empty =
+    /// seeded from the Default row's stops the first time the row is shown.</summary>
+    public List<HueTimeStop> TimeStops { get; set; } = new();
+
+    /// <summary>How many minutes earlier (negative) or later (positive)
+    /// this group's colour curve fires relative to the schedule. -30 =
+    /// the group hits its 6 PM colour at 5:30 PM. Stored in minutes;
+    /// the controller applies it as a wall-clock shift when computing
+    /// the group's effective kelvin.</summary>
+    public int TimeOffsetMinutes { get; set; } = 0;
+}
+
+[Flags]
+public enum RoutineDays
+{
+    None      = 0,
+    Sunday    = 1 << 0,
+    Monday    = 1 << 1,
+    Tuesday   = 1 << 2,
+    Wednesday = 1 << 3,
+    Thursday  = 1 << 4,
+    Friday    = 1 << 5,
+    Saturday  = 1 << 6,
+    Weekdays  = Monday | Tuesday | Wednesday | Thursday | Friday,
+    Weekend   = Saturday | Sunday,
+    EveryDay  = Weekdays | Weekend,
 }

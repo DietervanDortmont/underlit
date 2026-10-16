@@ -44,6 +44,17 @@ public partial class OsdWindow : Window
     private Mode _mode = Mode.Brightness;
 
     private DispatcherTimer? _hideTimer;
+    /// <summary>v0.6.56: when true, the OSD never auto-hides. Used by
+    /// the Settings window so the user can fine-tune OSD-affecting
+    /// sliders without the OSD vanishing mid-tweak. Toggled via
+    /// <see cref="SetPinned"/> and unpinned automatically when focus
+    /// leaves the relevant controls.</summary>
+    private bool _pinned;
+    /// <summary>v0.6.77: true between StartExitAnimation and the
+    /// Hide()-on-fade-complete callback. Lets Flash() detect that the
+    /// OSD is mid-exit and snap it back to fully-visible instead of
+    /// letting the fade-out complete + auto-hide.</summary>
+    private bool _exitInProgress;
     private const int ShowDurationMs = 1300;
 
     // ---- Dynamic-Island entry/exit animation tunables ----
@@ -88,7 +99,20 @@ public partial class OsdWindow : Window
     /// 300×66 at the top of the 300×160 WindowRoot; pill is at PillContainer
     /// y=10..56 (10 dip shadow above + 46 dip pill + 10 dip shadow below).
     /// </summary>
-    private const double PillBottomYDip = 56;
+    /// <summary>v0.6.59: VisibleClip is offset from the window's top so
+    /// the OSD's drop shadow has room to render above the pill without
+    /// getting clipped by the window's top edge.
+    /// v0.6.64: bumped from 20 to 60 dip so the user can crank the
+    /// shadow blur/offset sliders up without the halo getting cropped
+    /// by the window's top edge.</summary>
+    private const double VisibleClipTopMarginDip = 60;
+    /// <summary>Pill bottom in VisibleClip-local coordinates. Inside the
+    /// clip the pill sits at clip-y 10..56, height 46.</summary>
+    private const double PillBottomInClipDip = 56;
+    /// <summary>Pill bottom in WINDOW coordinates. = clip top margin +
+    /// pill bottom in clip. Used to anchor the window so the visible
+    /// pill sits above the taskbar at the user-configured gap.</summary>
+    private const double PillBottomYDip = VisibleClipTopMarginDip + PillBottomInClipDip;
     /// <summary>Default gap between pill bottom and taskbar top, in dip.
     /// v0.6.35: now also overridable per-user via
     /// <see cref="AppSettings.OsdGapAboveTaskbarDip"/>; this constant is the
@@ -158,6 +182,10 @@ public partial class OsdWindow : Window
     // ---- Visual settings (set by host) ----
     private bool _followWindowsAccent = true;
     private Color? _customAccent;
+    /// <summary>v0.6.69: user-pickable brightness-icon (sun) colour.
+    /// Overrides the luminance-based "auto" colour the icon used to
+    /// take from the OSD's backdrop. Default = #FFFEC80F (amber).</summary>
+    private Color _sunIconColor = Color.FromArgb(0xFF, 0xFE, 0xC8, 0x0F);
     private bool _useTransparency = true;
     private BackdropStyle _backdrop = BackdropStyle.Subtle;
     private GlassParams _glass = new();
@@ -205,7 +233,20 @@ public partial class OsdWindow : Window
     // Animated clip + slide for the Dynamic-Island-style entry. Created on first
     // SourceInitialized; animated on every Flash()/StartExitAnimation().
     private RectangleGeometry? _entryClip;
+    /// <summary>v0.6.60: parallel slide so the shadow rides up alongside
+    /// the pill instead of snapping to its rest position.
+    /// v0.6.68: applied to ShadowImage (pre-rendered bitmap), which
+    /// slides up + fades in during the entry animation. The bitmap
+    /// itself doesn't morph; the visible pill morphs underneath it.</summary>
+    private TranslateTransform? _shadowSlide;
     private TranslateTransform? _entrySlide;
+    /// <summary>v0.6.69: ScaleTransform used by <see cref="ShowBrightnessAtBound"/>
+    /// to produce a tiny rubber-band "pop" when the user tries to step
+    /// brightness past the min or max. Resting ScaleX = 1.0; the pop
+    /// briefly bumps it to ~1.05 and springs back. CenterX is set per
+    /// pop to the opposite edge so the pill stretches toward the
+    /// direction of pressure rather than ballooning symmetrically.</summary>
+    private ScaleTransform? _popScale;
 
     // ---- Liquid Glass live engine ----
     // Created lazily after the window is first shown (we need an HWND to set
@@ -287,6 +328,11 @@ public partial class OsdWindow : Window
         _backdrop = backdrop;
         _glass = glass.Clone();
 
+        // v0.6.68: corner radius is baked into the pre-rendered shadow
+        // bitmap, so we re-render here when the user changes corner
+        // radius. Costs ~5-10 ms; OK during settings push.
+        RebuildShadowBitmap();
+
         // Mode flip handling: if the user just turned live OFF, tear down WGC right
         // away so no yellow border can be triggered on the next Show(). If they turned
         // it ON, the next RefreshGlass() will lazily re-init WGC.
@@ -324,6 +370,14 @@ public partial class OsdWindow : Window
         // windows by default; we don't want any of it.
         Acrylic.DisableSystemRounding(Hwnd);
 
+        // v0.6.72: exclude the OSD pill from screen captures. Used to be
+        // applied only inside LiveGlassController.TryEnableLive (because
+        // the WGC capture needed it to avoid a feedback loop) — but the
+        // user benefit is much broader: the pill never shows up in
+        // screenshots, recordings, or Teams/Loom shares regardless of
+        // whether live glass is on. Idempotent + cheap to call here.
+        WindowDisplayAffinity.ExcludeFromCapture(Hwnd);
+
         // Set up the animated clip + slide that drive the Dynamic-Island-style
         // entry/exit. We seed the clip with the FULL pill rect so the OSD looks
         // normal during the initial Show()/Hide() pair UnderlitHost does at
@@ -343,7 +397,287 @@ public partial class OsdWindow : Window
         ClipRoot.Clip = _entryClip;
 
         _entrySlide = new TranslateTransform();
-        ClipRoot.RenderTransform = _entrySlide;
+        // v0.6.69: bounds-hit pop. A ScaleTransform stacked with the
+        // slide; ShowBrightnessAtBound briefly animates ScaleX with the
+        // CenterX pinned to the opposite edge (so the pill stretches
+        // toward the direction of pressure, then springs back). Resting
+        // ScaleX = 1.0 = identity, so this is invisible until used.
+        _popScale = new ScaleTransform { ScaleX = 1.0, ScaleY = 1.0 };
+        var grp = new TransformGroup();
+        grp.Children.Add(_popScale);
+        grp.Children.Add(_entrySlide);
+        ClipRoot.RenderTransform = grp;
+
+        // v0.6.60: parallel slide so the shadow rides up with the pill.
+        // v0.6.68: the shadow is now a pre-rendered bitmap on an Image
+        // element. Slide rides ShadowImage; bitmap rebuild happens on
+        // SetOsdShadow (settings change) or UpdateVisualSettings (corner
+        // radius change). No more OpacityMask, no more cutout artifact.
+        _shadowSlide = new TranslateTransform();
+        ShadowImage.RenderTransform = _shadowSlide;
+    }
+
+    // ====================================================================
+    // v0.6.68: pre-rendered shadow bitmap.
+    //
+    // We give up the live DropShadowEffect approach and instead rasterise
+    // the shadow into a bitmap whenever a setting changes. This lets us
+    // post-process the pixels — specifically, soft-fade the pill interior
+    // to alpha 0 so the opaque source doesn't bleed through the
+    // translucent glass, AND the inner edge is a smooth gradient instead
+    // of a hard cutout line.
+    // ====================================================================
+
+    /// <summary>Last shadow params we rendered the bitmap with — including
+    /// the visible pill rect so per-frame rect animation re-renders.
+    /// Used to short-circuit RebuildShadowBitmap when nothing changed.</summary>
+    private (int opacity, int blur, int offset, int angle, int spread,
+             double cornerR, double rx, double ry, double rw, double rh) _lastShadowParams;
+
+    /// <summary>Current shadow params, set by <see cref="SetOsdShadow"/>
+    /// and read by <see cref="RebuildShadowBitmap"/>.</summary>
+    private int _shadowOpacityPct = 55;
+    private int _shadowBlurDip    = 22;
+    private int _shadowOffsetDip  = 8;
+    private int _shadowAngleDeg   = 270;
+    private int _shadowSpreadDip;
+
+    private const int  ShadowBitmapWidth        = 480;
+    private const int  ShadowBitmapHeight       = 200;
+    private const int  ShadowPillLeft           = 100;
+    private const int  ShadowPillTop            = 70;
+    /// <summary>v0.6.69: tight 1.5 dip fade band at the inner pill edge —
+    /// just enough to anti-alias the boundary without producing a visible
+    /// inner shadow. The previous 6 dip soft fade was producing a faint
+    /// "rim darkness" through the translucent glass; with this narrower
+    /// band the user sees only the outward halo, and the pill morph
+    /// rebuilds the bitmap per frame so the inner edge always tracks
+    /// the visible pill outline.</summary>
+    private const double ShadowInnerFadeWidthDip = 1.5;
+
+    /// <summary>v0.6.69: dependency property that drives the per-frame
+    /// shadow rebuild during the entry/exit animation. Animating this
+    /// rect (RectAnimation) re-renders the bitmap with that pill size
+    /// as the source — so the halo's inner edge always tracks the
+    /// visible pill outline as the pill morphs from seed circle to
+    /// full pill. Default value is the full pill at rest.</summary>
+    public static readonly DependencyProperty ShadowPillRectProperty =
+        DependencyProperty.Register(
+            nameof(ShadowPillRect), typeof(Rect), typeof(OsdWindow),
+            new PropertyMetadata(
+                new Rect(ShadowPillLeft, ShadowPillTop,
+                         LiveGlassController.PillWidthDip,
+                         LiveGlassController.PillHeightDip),
+                OnShadowPillRectChanged));
+
+    public Rect ShadowPillRect
+    {
+        get => (Rect)GetValue(ShadowPillRectProperty);
+        set => SetValue(ShadowPillRectProperty, value);
+    }
+
+    private static void OnShadowPillRectChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is OsdWindow w) w.RebuildShadowBitmap();
+    }
+
+    /// <summary>v0.6.69: rest rect — the full pill outline in bitmap-local
+    /// coords. Used as the To target of the entry RectAnimation and as
+    /// the resting value the shadow snaps to outside animations.</summary>
+    private static Rect ShadowFullVisibleRect() => new Rect(
+        ShadowPillLeft, ShadowPillTop,
+        LiveGlassController.PillWidthDip,
+        LiveGlassController.PillHeightDip);
+
+    /// <summary>v0.6.69: start rect — the seed circle, horizontally
+    /// centred at the visible pill's centre. From here the
+    /// RectAnimation morphs to <see cref="ShadowFullVisibleRect"/>.</summary>
+    private static Rect ShadowSeedVisibleRect()
+    {
+        double d = LiveGlassController.PillHeightDip; // 46
+        const double centerX = 240;                   // (480 / 2)
+        return new Rect(centerX - d / 2.0, ShadowPillTop, d, d);
+    }
+
+    /// <summary>Rebuild <see cref="ShadowImage"/>.Source from the current
+    /// shadow params + <see cref="_glass"/> corner radius + the current
+    /// value of <see cref="ShadowPillRect"/>. Costs ~3–6 ms on the UI
+    /// thread.
+    /// <para>v0.6.69: now called per-frame during the entry/exit
+    /// animation (driven by <see cref="ShadowPillRectProperty"/>'s
+    /// change handler) so the shadow halo's inner edge tracks the
+    /// visible pill outline as it morphs. The cache short-circuit
+    /// keeps things efficient outside of animation — rebuilds only
+    /// happen when one of the params (or the rect) actually changed.</para></summary>
+    private void RebuildShadowBitmap()
+    {
+        if (ShadowImage == null) return;
+        double cornerR = (LiveGlassController.PillHeightDip / 2.0) * (_glass.CornerRadius / 100.0);
+        Rect visibleRect = ShadowPillRect;
+
+        // Include the visible-pill rect in the cache key so a per-frame
+        // rect animation actually re-renders, while same-settings calls
+        // short-circuit.
+        var key = (_shadowOpacityPct, _shadowBlurDip, _shadowOffsetDip,
+                   _shadowAngleDeg, _shadowSpreadDip, cornerR,
+                   visibleRect.X, visibleRect.Y, visibleRect.Width, visibleRect.Height);
+        if (key.Equals(_lastShadowParams) && ShadowImage.Source != null) return;
+        _lastShadowParams = key;
+
+        if (_shadowOpacityPct <= 0)
+        {
+            ShadowImage.Source = null;
+            return;
+        }
+
+        // 1. Build a Border containing the source pill, expanded by the
+        //    spread amount (CSS box-shadow "spread" semantics). Border
+        //    + measure/arrange is more reliable than DrawingVisual.Effect
+        //    when rasterising via RenderTargetBitmap — DrawingVisual's
+        //    Effect property is silently dropped on some WPF builds when
+        //    the visual isn't attached to a live PresentationSource.
+        //
+        //    v0.6.69: source pill is now derived from the animated
+        //    visibleRect rather than fixed constants, so the bitmap
+        //    morphs with the pill during the entry/exit animation.
+        int s = Math.Clamp(_shadowSpreadDip, 0, 60);
+        double srcWidth  = visibleRect.Width  + 2 * s;
+        double srcHeight = visibleRect.Height + 2 * s;
+        double srcLeft   = visibleRect.X - s;
+        double srcTop    = visibleRect.Y - s;
+        double srcRadius = cornerR + s;
+
+        var pillBorder = new System.Windows.Controls.Border
+        {
+            Width        = srcWidth,
+            Height       = srcHeight,
+            CornerRadius = new CornerRadius(srcRadius),
+            Background   = System.Windows.Media.Brushes.Black,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment   = VerticalAlignment.Top,
+            Margin       = new Thickness(srcLeft, srcTop, 0, 0),
+            Effect       = new System.Windows.Media.Effects.DropShadowEffect
+            {
+                BlurRadius  = Math.Clamp(_shadowBlurDip,   0, 80),
+                ShadowDepth = Math.Clamp(_shadowOffsetDip, 0, 40),
+                Direction   = ((_shadowAngleDeg % 360) + 360) % 360,
+                Opacity     = Math.Clamp(_shadowOpacityPct, 0, 100) / 100.0,
+                Color       = System.Windows.Media.Colors.Black,
+            },
+        };
+        var container = new System.Windows.Controls.Grid
+        {
+            Width  = ShadowBitmapWidth,
+            Height = ShadowBitmapHeight,
+        };
+        container.Children.Add(pillBorder);
+        var arrangeBounds = new Rect(0, 0, ShadowBitmapWidth, ShadowBitmapHeight);
+        container.Measure(arrangeBounds.Size);
+        container.Arrange(arrangeBounds);
+        container.UpdateLayout();
+
+        // 2. Rasterise. Pbgra32 (premultiplied BGRA) is the only format
+        //    RenderTargetBitmap supports for live composition.
+        var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            ShadowBitmapWidth, ShadowBitmapHeight, 96, 96,
+            System.Windows.Media.PixelFormats.Pbgra32);
+        rtb.Render(container);
+
+        // 3. Pixel pass — soft-fade alpha to 0 across a ShadowInnerFadeWidthDip
+        //    band inside the visible pill outline. Pixels deep inside the
+        //    pill (> fade width from outline) become fully transparent;
+        //    pixels in the fade band are linearly scaled; pixels outside
+        //    the pill outline are untouched (full halo).
+        //
+        //    IMPORTANT: the mask must use the EXPANDED pill geometry
+        //    (srcLeft/srcTop/srcWidth/srcHeight/srcRadius), not the
+        //    original PillWidthDip × PillHeightDip. The source border
+        //    rendered in step 1 was expanded by `s` pixels in every
+        //    direction; if we mask using the un-expanded pill rect, the
+        //    ring of solid black between the original pill outline and
+        //    the expanded source border never gets faded — and that's
+        //    exactly what shows up as a hard black border that grows
+        //    with the Spread slider. Using the expanded geometry here
+        //    fades the entire source pill body, leaving only the
+        //    DropShadowEffect-produced halo.
+        int stride = ShadowBitmapWidth * 4;
+        byte[] buf = new byte[stride * ShadowBitmapHeight];
+        rtb.CopyPixels(buf, stride, 0);
+
+        var maskRect = new Rect(srcLeft, srcTop, srcWidth, srcHeight);
+
+        // Only scan the rows/cols covering the pill (plus a tiny margin) -
+        // the rest of the bitmap is unaffected and skipping it saves CPU.
+        int y0 = Math.Max(0, (int)maskRect.Y - 2);
+        int y1 = Math.Min(ShadowBitmapHeight, (int)(maskRect.Y + maskRect.Height) + 2);
+        int x0 = Math.Max(0, (int)maskRect.X - 2);
+        int x1 = Math.Min(ShadowBitmapWidth, (int)(maskRect.X + maskRect.Width) + 2);
+
+        for (int y = y0; y < y1; y++)
+        {
+            int row = y * stride;
+            for (int x = x0; x < x1; x++)
+            {
+                double inset = InsideDistanceFromOutline(x + 0.5, y + 0.5, maskRect, srcRadius);
+                if (inset <= 0) continue; // outside the pill outline — leave halo alone
+                double fade;
+                if (inset >= ShadowInnerFadeWidthDip) fade = 0.0;
+                else fade = 1.0 - (inset / ShadowInnerFadeWidthDip);
+
+                int idx = row + x * 4;
+                // Pbgra32 is premultiplied, so we scale ALL four channels.
+                buf[idx    ] = (byte)(buf[idx    ] * fade); // B
+                buf[idx + 1] = (byte)(buf[idx + 1] * fade); // G
+                buf[idx + 2] = (byte)(buf[idx + 2] * fade); // R
+                buf[idx + 3] = (byte)(buf[idx + 3] * fade); // A
+            }
+        }
+
+        var wb = new System.Windows.Media.Imaging.WriteableBitmap(
+            ShadowBitmapWidth, ShadowBitmapHeight, 96, 96,
+            System.Windows.Media.PixelFormats.Pbgra32, null);
+        wb.WritePixels(
+            new System.Windows.Int32Rect(0, 0, ShadowBitmapWidth, ShadowBitmapHeight),
+            buf, stride, 0);
+        wb.Freeze();
+        ShadowImage.Source = wb;
+    }
+
+    /// <summary>Returns how far (px,py) is INSIDE the rounded rect's
+    /// outline. Zero or negative if outside the outline, positive if
+    /// inside (= distance from outline going inward). Used for the soft
+    /// inner fade — pixels close to the outline get a smooth alpha
+    /// ramp rather than a hard cutoff.</summary>
+    private static double InsideDistanceFromOutline(double px, double py, Rect r, double radius)
+    {
+        // Quick reject — outside the axis-aligned bounding box.
+        if (px < r.X || px > r.X + r.Width || py < r.Y || py > r.Y + r.Height)
+            return 0;
+
+        // Distance to each rectangular edge (positive == inside).
+        double dL = px - r.X;
+        double dR = r.X + r.Width  - px;
+        double dT = py - r.Y;
+        double dB = r.Y + r.Height - py;
+
+        // In a corner zone? The two-axis check identifies the four
+        // quarter-circle regions; outside those we're on a straight
+        // edge and the nearest-edge distance is just the min of the
+        // four.
+        bool inCornerX = dL < radius || dR < radius;
+        bool inCornerY = dT < radius || dB < radius;
+        if (inCornerX && inCornerY)
+        {
+            double cx = (dL < radius) ? r.X + radius : r.X + r.Width  - radius;
+            double cy = (dT < radius) ? r.Y + radius : r.Y + r.Height - radius;
+            double dx = px - cx;
+            double dy = py - cy;
+            double fromCenter = Math.Sqrt(dx * dx + dy * dy);
+            if (fromCenter > radius) return 0; // outside the rounded corner
+            return radius - fromCenter;
+        }
+
+        return Math.Min(Math.Min(dL, dR), Math.Min(dT, dB));
     }
 
     /// <summary>
@@ -580,15 +914,29 @@ public partial class OsdWindow : Window
     /// </summary>
     private void ApplyGapDependentGeometry()
     {
-        const double pillHeight = 46;  // PillBottomYDip - paddingTop = 56 - 10
+        const double pillHeight = 46;
         double gap = Math.Max(0, _taskbarGapDip);
 
         _slideFromBelowDip = pillHeight + gap;
-        VisibleClip.Height = PillBottomYDip + gap;
-        // Window's drawable region needs to be exactly as tall as
-        // VisibleClip — anything past that is clipped anyway (and would
-        // overlap the taskbar/screen edge if it weren't).
+        // VisibleClip.Height is its OWN internal extent: pill-bottom-in-
+        // clip + gap. The window-coord pill bottom (PillBottomYDip) is
+        // PillBottomInClipDip + the clip's top margin.
+        VisibleClip.Height = PillBottomInClipDip + gap;
+        // Window must hold the entire VisibleClip below its top margin.
         Height = PillBottomYDip + gap;
+
+        // v0.6.70: VisibleClip has ClipToBounds=false in XAML so the
+        // bounds-hit pop can stretch the pill horizontally without
+        // getting cropped at x=300. We install a custom Clip here that
+        // clips at y=VisibleClip.Height (preserving the "behind taskbar"
+        // mask) but allows generous horizontal extension (±60 dip past
+        // the 300 dip width). Has to be re-applied whenever the height
+        // changes — which is right here, with the gap.
+        const double horizontalSlack = 60;
+        VisibleClip.Clip = new RectangleGeometry(new Rect(
+            -horizontalSlack, 0,
+            VisibleClip.Width + 2 * horizontalSlack,
+            VisibleClip.Height));
 
         // The OS-level window region tracks the new height; the animation
         // slides through the full window rect.
@@ -617,10 +965,50 @@ public partial class OsdWindow : Window
     public void ShowBrightness(double levelSigned)
     {
         SetMode(Mode.Brightness);
-        IconText.Text = "\uE706";
+        // v0.6.70: SetMode shows the filled-sun Path (SunIconFilled),
+        // not the Fluent Icons glyph in IconText. The glyph is kept
+        // only for ShowPaused's pause/play indicators.
         _lastBrightness = levelSigned;
         UpdateBrightnessBar(levelSigned);
         Flash();
+    }
+
+    /// <summary>v0.6.69: same as <see cref="ShowBrightness"/> but fires a
+    /// tiny rubber-band "pop" because the user tried to step past the
+    /// min or max bound. <paramref name="direction"/> is +1 for "up
+    /// past max" (pill stretches to the right) and -1 for "down past
+    /// min" (stretches to the left). The pop adds ~5 % temporary
+    /// elongation toward the direction of pressure, then springs back \u2014
+    /// matches Apple's "I heard you but can't go further" feedback on
+    /// scroll bounds.</summary>
+    public void ShowBrightnessAtBound(double levelSigned, int direction)
+    {
+        ShowBrightness(levelSigned);
+        if (_popScale == null) return;
+
+        // Pop centre is on the OPPOSITE edge so the pill grows toward
+        // the direction of pressure. The pill within PillContainer-
+        // local coordinates spans (PaddingDip, PaddingDip,
+        // PillWidthDip, PillHeightDip) \u2014 so left edge x = PaddingDip,
+        // right edge x = PaddingDip + PillWidthDip.
+        double leftEdge  = LiveGlassController.PaddingDip;
+        double rightEdge = LiveGlassController.PaddingDip + LiveGlassController.PillWidthDip;
+        _popScale.CenterY = LiveGlassController.PaddingDip + LiveGlassController.PillHeightDip / 2.0;
+        _popScale.CenterX = direction > 0 ? leftEdge : rightEdge;
+
+        var anim = new DoubleAnimationUsingKeyFrames();
+        // v0.6.70: gentler push (2.5 % instead of 5 %) so the inner
+        // glass refraction barely stretches, and the rubber-band feel
+        // stays subtle. Snap-back uses a soft QuadraticEase instead of
+        // BackEase — the slight extra "overshoot" of BackEase was
+        // reading as wobbliness rather than rubberband.
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.025,
+            KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(70)),
+            new CubicEase { EasingMode = EasingMode.EaseOut }));
+        anim.KeyFrames.Add(new EasingDoubleKeyFrame(1.0,
+            KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(260)),
+            new QuadraticEase { EasingMode = EasingMode.EaseOut }));
+        _popScale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
     }
 
     public void ShowWarmth(int kelvin)
@@ -634,6 +1022,11 @@ public partial class OsdWindow : Window
     public void ShowPaused(bool paused)
     {
         SetMode(Mode.Brightness);
+        // v0.6.70: swap from the filled-sun Path to the IconText glyph
+        // for pause/play, then restore on the next ShowBrightness via
+        // SetMode resetting visibility to "sun shown, text hidden".
+        SunIconFilled.Visibility = Visibility.Collapsed;
+        IconText.Visibility      = Visibility.Visible;
         IconText.Text = paused ? "\uE769" : "\uE768";
         _lastBrightness = paused ? 0 : 100;
         UpdateBrightnessBar(_lastBrightness);
@@ -665,7 +1058,11 @@ public partial class OsdWindow : Window
         bool brightness = m == Mode.Brightness;
         BrightnessBar.Visibility = brightness ? Visibility.Visible : Visibility.Collapsed;
         WarmthBar.Visibility     = brightness ? Visibility.Collapsed : Visibility.Visible;
-        IconText.Visibility      = brightness ? Visibility.Visible : Visibility.Collapsed;
+        // v0.6.70: brightness mode shows the custom filled sun by default;
+        // ShowPaused overrides afterwards to swap to the pause/play
+        // glyph in IconText.
+        SunIconFilled.Visibility = brightness ? Visibility.Visible : Visibility.Collapsed;
+        IconText.Visibility      = Visibility.Collapsed;
         CandleIcon.Visibility    = brightness ? Visibility.Collapsed : Visibility.Visible;
 
         // Mirror brightness/warmth visibility onto the solid-fill layer too —
@@ -792,6 +1189,18 @@ public partial class OsdWindow : Window
         {
             FillLeft.Width  = leftWidth;
             FillRight.Width = rightWidth;
+        }
+
+        // v0.6.71: MidMarker is a "below-OS-min" indicator — hide it
+        // above the threshold. Previously rendered at all brightness
+        // levels; at full brightness during the bounds-pop animation
+        // the scale transform briefly showed it as a tiny line bisecting
+        // the bar. Hiding it above 50 removes the visual noise without
+        // sacrificing the cue when the user actually goes below OS min.
+        if (MidMarker != null)
+        {
+            MidMarker.Visibility = display < OsMinThreshold
+                ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -979,7 +1388,11 @@ public partial class OsdWindow : Window
         // Don't replace those Background brushes here; the next UpdateBrightnessBar
         // tick picks up any accent change and snap-updates the brush in place.
         MidMarker.Background   = new SolidColorBrush(p.MidMarker);
-        IconText.Foreground    = new SolidColorBrush(p.Icon);
+        // v0.6.69: sun (brightness) icon honours the user-pickable
+        // colour instead of the palette's auto colour. Candle (warmth)
+        // icon still follows the palette/luminance auto colour so it
+        // stays readable across light + dark backgrounds.
+        IconText.Foreground    = new SolidColorBrush(_sunIconColor);
         CandleIcon.Fill        = new SolidColorBrush(p.Icon);
         WarmthTrack.Background = new SolidColorBrush(p.Track);
         WarmthStartStop.Color  = p.WarmthStart;
@@ -1128,7 +1541,10 @@ public partial class OsdWindow : Window
         const byte iconAlpha = 0xC0;   // 75% — frosted-glass translucency
         var iconColor = Color.FromArgb(iconAlpha, channel, channel, channel);
 
-        IconText.Foreground = new SolidColorBrush(iconColor);
+        // v0.6.69: sun icon uses the user-pickable colour. The candle
+        // (warmth) icon still uses the luminance-based auto colour so
+        // it stays legible on any glass backdrop.
+        IconText.Foreground = new SolidColorBrush(_sunIconColor);
         CandleIcon.Fill     = new SolidColorBrush(iconColor);
         MidMarker.Background = new SolidColorBrush(
             Color.FromArgb(0xA8, channel, channel, channel));
@@ -1236,6 +1652,7 @@ public partial class OsdWindow : Window
 
         if (!IsVisible)
         {
+            _exitInProgress = false;
             // INITIAL SHOW: run the full Dynamic-Island entry animation.
             // (On re-press while visible we deliberately skip this so the OSD
             // doesn't shrink back to a circle and re-pop on every key tap.)
@@ -1246,6 +1663,13 @@ public partial class OsdWindow : Window
             // Cancel any animations leftover from the previous hide cycle.
             _entryClip!.BeginAnimation(RectangleGeometry.RectProperty, null);
             _entrySlide!.BeginAnimation(TranslateTransform.YProperty, null);
+            _shadowSlide!.BeginAnimation(TranslateTransform.YProperty, null);
+            ShadowImage.BeginAnimation(OpacityProperty, null);
+            // v0.6.77: ShadowPillRect no longer animates per-frame, but
+            // we still clear any stale animation in case it's holding
+            // an old value from a previous show.
+            BeginAnimation(ShadowPillRectProperty, null);
+            ShadowPillRect = ShadowFullVisibleRect();
             BeginAnimation(OpacityProperty, null);
 
             // Match the clip's corner radius to the user's chosen pill corner
@@ -1258,6 +1682,13 @@ public partial class OsdWindow : Window
             // Seed the start state, then Show() and animate to rest.
             _entryClip.Rect = SeedCircleRect();
             _entrySlide.Y   = _slideFromBelowDip;
+            _shadowSlide.Y  = _slideFromBelowDip;
+            // v0.6.69: the shadow bitmap morphs with the pill via the
+            // ShadowPillRect dependency property (RectAnimation rebuilds
+            // the bitmap per frame). Seed it to the start rect now;
+            // RebuildShadowBitmap runs on the property change.
+            ShadowPillRect  = ShadowSeedVisibleRect();
+            ShadowImage.Opacity = 0;
             Opacity         = 0;
             Show();
             // Place us at the right z-order layer (just below the taskbar if
@@ -1303,11 +1734,62 @@ public partial class OsdWindow : Window
 
             _entryClip.BeginAnimation(RectangleGeometry.RectProperty, rectAnim);
             _entrySlide.BeginAnimation(TranslateTransform.YProperty, slideAnim);
+            // v0.6.77: dropped the per-frame ShadowPillRect rebuild.
+            // Each rebuild rasterised the 480×200 shadow bitmap with a
+            // DropShadowEffect at ~5-10 ms a pop on the UI thread — over
+            // the 320 ms entry that was ~75 ms of cumulative blocking,
+            // exactly the lag the user could feel before the OSD would
+            // appear. Shadow now stays at the rest pill rect (rendered
+            // once on SetOsdShadow) and just slides + fades in alongside
+            // the pill morph. The shape mismatch during the brief morph
+            // is barely perceptible because the halo is Gaussian-soft
+            // and the eye is tracking the pill, not the halo's outline.
+            var shadowSlideAnim = new DoubleAnimation
+            {
+                From = _slideFromBelowDip,
+                To   = 0,
+                Duration = TimeSpan.FromMilliseconds(EntryDurationMs),
+                EasingFunction = spring,
+            };
+            var shadowFadeIn = new DoubleAnimation
+            {
+                From = 0,
+                To   = 1.0,
+                BeginTime = TimeSpan.FromMilliseconds(MorphLeadMs),
+                Duration  = TimeSpan.FromMilliseconds(EntryDurationMs - MorphLeadMs),
+                EasingFunction = smooth,
+            };
+            _shadowSlide.BeginAnimation(TranslateTransform.YProperty, shadowSlideAnim);
+            ShadowImage.BeginAnimation(OpacityProperty, shadowFadeIn);
             BeginAnimation(OpacityProperty, fadeIn);
         }
         // else: already visible (mid-show re-press) — leave the current geometry
         // alone and just refresh the hide timer below. The new value is already
         // showing because UpdateBrightnessBar/UpdateWarmthBar ran before Flash().
+        //
+        // v0.6.77: if the OSD is mid-exit (fade-out animation still running
+        // toward Opacity=0), the previous code path would let that fade
+        // complete and auto-hide — so the next key press felt sluggish:
+        // user saw the OSD fading out, pressed a key, OSD finished fading
+        // out then a fresh entry animation had to start from scratch.
+        // Now we detect that case, cancel every active exit animation,
+        // and snap the OSD back to its fully-visible rest state. The
+        // hide timer (started below regardless) gives the user the full
+        // ShowDurationMs to look at the value before the next exit.
+        else if (_exitInProgress)
+        {
+            _exitInProgress = false;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1.0;
+            ShadowImage.BeginAnimation(OpacityProperty, null);
+            ShadowImage.Opacity = 1.0;
+            _entryClip!.BeginAnimation(RectangleGeometry.RectProperty, null);
+            _entryClip.Rect = FullPillRect();
+            _entrySlide!.BeginAnimation(TranslateTransform.YProperty, null);
+            _entrySlide.Y = 0;
+            _shadowSlide!.BeginAnimation(TranslateTransform.YProperty, null);
+            _shadowSlide.Y = 0;
+        }
 
         // DispatcherTimer's parameterless ctor uses Background priority, which is
         // BELOW Render — meaning a 60 fps live-glass render loop at Render priority
@@ -1322,7 +1804,116 @@ public partial class OsdWindow : Window
             _hideTimer?.Stop();
             StartExitAnimation();
         };
-        _hideTimer.Start();
+        // v0.6.56: don't arm the hide timer when pinned by the Settings
+        // window's live-preview mode.
+        if (!_pinned) _hideTimer.Start();
+    }
+
+    /// <summary>v0.6.56: lock the OSD visible (true) or release it back
+    /// to its normal auto-hide behaviour (false). Settings window calls
+    /// SetPinned(true) when the user starts interacting with an OSD-
+    /// affecting slider, false when focus leaves all such controls.</summary>
+    public void SetPinned(bool pinned)
+    {
+        _pinned = pinned;
+        if (pinned)
+        {
+            _hideTimer?.Stop();
+        }
+        else
+        {
+            // Restart the hide countdown so the OSD goes away soon
+            // after the user releases the slider.
+            _hideTimer?.Stop();
+            _hideTimer?.Start();
+        }
+    }
+
+    /// <summary>v0.6.57: live-update the universal pill shadow's
+    /// visual params from settings.
+    /// <para>v0.6.68: the shadow is now a pre-rendered bitmap (see
+    /// <see cref="RebuildShadowBitmap"/>) rather than a live
+    /// DropShadowEffect. This method stashes the new params and
+    /// triggers a bitmap rebuild — which is short-circuited if nothing
+    /// actually changed, so calling it on every slider tick is safe.
+    /// The rebuild costs ~5-10 ms on the UI thread.</para></summary>
+    /// <summary>v0.6.69: live-update the sun icon's colour. Called from
+    /// the host whenever settings change. If the OSD is currently
+    /// showing brightness, the icon repaints immediately; otherwise the
+    /// new colour takes effect on the next brightness show.</summary>
+    public void SetSunIconColor(Color color)
+    {
+        _sunIconColor = color;
+        var brush = new SolidColorBrush(color);
+        if (IconText != null)
+        {
+            IconText.Foreground = brush;
+        }
+        // v0.6.70: the filled-sun Path uses the same colour as the
+        // glyph would (one source of truth — the user's pick).
+        if (SunIconFilled != null)
+        {
+            SunIconFilled.Fill = brush;
+        }
+    }
+
+    /// <summary>v0.6.78: paint a matching black tint on top of the OSD
+    /// pill's glass interior so the OSD reads at the same brightness as
+    /// the dimmed desktop. The desktop dim is the per-monitor
+    /// OverlayWindow's opacity; UnderlitHost forwards
+    /// <see cref="UnderlitEngine.CurrentOverlayOpacity"/> here on every
+    /// change. Capped at 0.92 mirroring OverlayWindow.SetDimOpacity so
+    /// the OSD never becomes a fully-black pill (which would defeat the
+    /// purpose of showing the brightness value).</summary>
+    public void SetDimOverlayLevel(double opacity)
+    {
+        if (DimTint == null) return;
+        DimTint.Opacity = Math.Clamp(opacity, 0.0, 0.92);
+    }
+
+    /// <summary>v0.6.71: set the right-side inset of the ContentRoot
+    /// Grid inside the OSD pill. Smaller value = the bar (and warmth
+    /// indicator) extends closer to the pill's right edge.
+    /// Left margin stays at the icon's column reserve so the icon
+    /// position is preserved.</summary>
+    public void SetBarRightInset(int rightInsetDip)
+    {
+        int inset = Math.Clamp(rightInsetDip, 12, 120);
+        if (ContentRoot == null) return;
+        var m = ContentRoot.Margin;
+        ContentRoot.Margin = new Thickness(m.Left, m.Top, inset, m.Bottom);
+        // Bar fill widths are recalculated against the (possibly
+        // changed) BarRoot.ActualWidth.
+        if (_mode == Mode.Brightness) UpdateBrightnessBar(_lastBrightness);
+        else                          UpdateWarmthBar(_lastWarmth);
+    }
+
+    public void SetOsdShadow(int opacity0to100, int blurRadiusDip, int offsetDip, int angleDeg, int spreadDip)
+    {
+        try
+        {
+            _shadowOpacityPct = Math.Clamp(opacity0to100, 0, 100);
+            _shadowBlurDip    = Math.Clamp(blurRadiusDip, 0, 80);
+            _shadowOffsetDip  = Math.Clamp(offsetDip,    0, 40);
+            _shadowAngleDeg   = ((angleDeg % 360) + 360) % 360;
+            _shadowSpreadDip  = Math.Clamp(spreadDip,    0, 60);
+
+            // v0.6.69: settings push outside of animation snaps the
+            // pill rect to its rest (full pill) value so the rebuild
+            // below renders the correct shape. Mid-animation calls
+            // will be immediately overridden by the next animation tick.
+            BeginAnimation(ShadowPillRectProperty, null);
+            ShadowPillRect = ShadowFullVisibleRect();
+            RebuildShadowBitmap();
+
+            // Hide the Image entirely at zero opacity to skip the render.
+            if (ShadowImage != null)
+            {
+                ShadowImage.Visibility = opacity0to100 <= 0
+                    ? Visibility.Collapsed : Visibility.Visible;
+            }
+        }
+        catch { /* never let a shadow tweak crash the OSD */ }
     }
 
     /// <summary>
@@ -1371,6 +1962,7 @@ public partial class OsdWindow : Window
             if (Opacity <= 0.01)
             {
                 Hide();
+                _exitInProgress = false; // exit reached its end naturally
                 // Stop the WGC render ticker while the OSD is invisible — no point
                 // burning frames nobody can see.
                 _liveGlass?.StopLiveTicker();
@@ -1379,6 +1971,26 @@ public partial class OsdWindow : Window
 
         _entryClip!.BeginAnimation(RectangleGeometry.RectProperty, rectAnim);
         _entrySlide!.BeginAnimation(TranslateTransform.YProperty, slideAnim);
+        // v0.6.77: dropped the per-frame ShadowPillRect collapse on exit
+        // (same reason as the entry — every frame rebuild was burning
+        // ~5-10 ms of UI thread). Shadow now just slides down + fades
+        // out alongside the pill exit.
+        var shadowSlideAnim = new DoubleAnimation
+        {
+            From = 0,
+            To   = _slideFromBelowDip,
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs),
+            EasingFunction = ease,
+        };
+        var shadowFadeOut = new DoubleAnimation
+        {
+            To = 0.0,
+            Duration = TimeSpan.FromMilliseconds(ExitDurationMs - MorphLeadMs),
+            EasingFunction = ease,
+        };
+        _shadowSlide!.BeginAnimation(TranslateTransform.YProperty, shadowSlideAnim);
+        ShadowImage.BeginAnimation(OpacityProperty, shadowFadeOut);
         BeginAnimation(OpacityProperty, fadeOut);
+        _exitInProgress = true;
     }
 }

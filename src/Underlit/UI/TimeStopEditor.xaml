@@ -1,0 +1,221 @@
+<Window x:Class="Underlit.UI.TimeStopEditor"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Colour stop"
+        Width="460" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="#FF1C1C1E"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        FontSize="13"
+        Foreground="White"
+        UseLayoutRounding="True">
+    <!--
+        v0.7.0: editor for one time-of-day colour stop on the lights
+        timeline. Same self-contained dark palette as QuickSceneEditor so it
+        renders correctly without the SettingsWindow's runtime theme brushes.
+    -->
+    <Window.Resources>
+        <SolidColorBrush x:Key="TSE.CardBorder" Color="#1FFFFFFF"/>
+        <SolidColorBrush x:Key="TSE.TextDim"    Color="#99FFFFFF"/>
+
+        <Style x:Key="TSEButton" TargetType="Button">
+            <Setter Property="Background" Value="#FFE5E5EA"/>
+            <Setter Property="Foreground" Value="#FF1A1A1C"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="18,5"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MinWidth" Value="80"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border CornerRadius="8" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="TSESecondaryButton" TargetType="Button" BasedOn="{StaticResource TSEButton}">
+            <Setter Property="Background" Value="#33FFFFFF"/>
+            <Setter Property="Foreground" Value="White"/>
+        </Style>
+        <Style x:Key="TSEDangerButton" TargetType="Button" BasedOn="{StaticResource TSEButton}">
+            <Setter Property="Background" Value="#33FF453A"/>
+            <Setter Property="Foreground" Value="#FFFF6961"/>
+        </Style>
+        <Style x:Key="TSELabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="TSEHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TSE.TextDim}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <!-- Round preset swatch. Tag carries the hex colour. -->
+        <Style x:Key="SwatchButton" TargetType="Button">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Margin" Value="0,0,8,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border CornerRadius="13" Background="{TemplateBinding Background}"
+                                BorderBrush="#55FFFFFF" BorderThickness="1"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Padding="24,20">
+        <StackPanel>
+            <TextBlock x:Name="LblTitle" FontSize="18" FontWeight="SemiBold" Text="Colour stop"/>
+            <TextBlock x:Name="LblRow" Style="{StaticResource TSEHint}" Margin="0,2,0,16"/>
+
+            <!-- Time -->
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="90"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource TSELabel}" Text="Time"/>
+                <TextBox Grid.Column="1" x:Name="TxtTime" Padding="8,5"
+                         Background="#22FFFFFF" Foreground="White" CaretBrush="White"
+                         BorderBrush="{StaticResource TSE.CardBorder}" BorderThickness="1"
+                         ToolTip="24-hour time, e.g. 21:15"/>
+                <ComboBox Grid.Column="2" x:Name="CboAnchor" Margin="8,0,0,0" Padding="8,4">
+                    <ComboBoxItem Content="Fixed clock time"/>
+                    <ComboBoxItem x:Name="CbiWake" Content="Moves with wake-up"/>
+                    <ComboBoxItem x:Name="CbiBed" Content="Moves with bedtime"/>
+                </ComboBox>
+            </Grid>
+            <TextBlock x:Name="LblAnchorHint" Style="{StaticResource TSEHint}" Margin="100,0,0,14"/>
+
+            <!-- Colour -->
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource TSELabel}" Text="Colour" VerticalAlignment="Top" Margin="0,6,0,0"/>
+                <StackPanel Grid.Column="1">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button x:Name="BtnColor" Width="64" Height="34" Cursor="Hand"
+                                ToolTip="Pick any colour">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Sw" CornerRadius="8" Background="{TemplateBinding Background}"
+                                            BorderBrush="#66FFFFFF" BorderThickness="1"/>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="BtnColorPick" Margin="10,0,0,0" Padding="12,4" MinWidth="0"
+                                Style="{StaticResource TSESecondaryButton}" Content="Custom..."/>
+                        <TextBlock x:Name="LblHex" Style="{StaticResource TSEHint}" Margin="10,0,0,0"
+                                   VerticalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                    <WrapPanel x:Name="PresetPanel"/>
+                    <!-- v0.7.1: live picker. Dragging here updates the bulbs as you go
+                         (the Windows "Custom..." dialog only applies when it closes). -->
+                    <Grid x:Name="SvArea" Height="110" Margin="0,2,0,8" Cursor="Cross" ClipToBounds="True">
+                        <Border x:Name="SvHueFill" CornerRadius="6" Background="Red"/>
+                        <Border CornerRadius="6">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#FFFFFFFF" Offset="0"/>
+                                    <GradientStop Color="#00FFFFFF" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Border CornerRadius="6">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#00000000" Offset="0"/>
+                                    <GradientStop Color="#FF000000" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Canvas IsHitTestVisible="False">
+                            <Ellipse x:Name="SvMarker" Width="14" Height="14" Stroke="White" StrokeThickness="2">
+                                <Ellipse.Effect>
+                                    <DropShadowEffect BlurRadius="3" ShadowDepth="0" Opacity="0.9"/>
+                                </Ellipse.Effect>
+                            </Ellipse>
+                        </Canvas>
+                    </Grid>
+                    <Grid x:Name="HueStrip" Height="16" Margin="0,0,0,8" Cursor="Hand" ClipToBounds="True">
+                        <Border CornerRadius="8">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#FFFF0000" Offset="0"/>
+                                    <GradientStop Color="#FFFFFF00" Offset="0.1667"/>
+                                    <GradientStop Color="#FF00FF00" Offset="0.3333"/>
+                                    <GradientStop Color="#FF00FFFF" Offset="0.5"/>
+                                    <GradientStop Color="#FF0000FF" Offset="0.6667"/>
+                                    <GradientStop Color="#FFFF00FF" Offset="0.8333"/>
+                                    <GradientStop Color="#FFFF0000" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Canvas IsHitTestVisible="False">
+                            <Rectangle x:Name="HueMarker" Width="6" Height="16" RadiusX="2" RadiusY="2"
+                                       Stroke="White" StrokeThickness="2"/>
+                        </Canvas>
+                    </Grid>
+                    <Grid Margin="0,0,0,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource TSEHint}" Text="Whites" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <Grid Grid.Column="1" x:Name="WhiteStrip" Height="16" Cursor="Hand"
+                              ToolTip="Warm to cool white (2000 to 6500 K). White-only bulbs can follow these.">
+                            <Border x:Name="WhiteStripFill" CornerRadius="8"/>
+                        </Grid>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+
+            <!-- Brightness -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="100"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="56"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Style="{StaticResource TSELabel}" Text="Brightness"/>
+                <Slider Grid.Column="1" x:Name="SldBri" Minimum="0" Maximum="100"
+                        SmallChange="1" LargeChange="10" IsSnapToTickEnabled="True" TickFrequency="1"
+                        VerticalAlignment="Center"/>
+                <TextBlock Grid.Column="2" x:Name="LblBri" Style="{StaticResource TSELabel}" HorizontalAlignment="Right"/>
+            </Grid>
+
+            <CheckBox x:Name="ChkHold" Foreground="White" Margin="100,0,0,4"
+                      Content="Hold this colour until the next stop (no fade)"/>
+            <CheckBox x:Name="ChkPreview" Foreground="White" Margin="100,4,0,4" IsChecked="True"
+                      Content="Show it on the lights while I edit"/>
+            <TextBlock Style="{StaticResource TSEHint}" Margin="100,0,0,18"
+                       Text="The lights fade from each stop into the next. Brightness 0 turns them off. Bulbs that only do white get the closest white."/>
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="BtnDelete" Style="{StaticResource TSEDangerButton}" Content="Delete stop"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="BtnCancel" Margin="0,0,8,0" Style="{StaticResource TSESecondaryButton}" Content="Cancel" IsCancel="True"/>
+                    <Button x:Name="BtnSave" Style="{StaticResource TSEButton}" Content="Save" IsDefault="True"/>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

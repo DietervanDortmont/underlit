@@ -19,9 +19,12 @@ public sealed class TrayIcon : IDisposable
     public event Action? OpenSettings;
     public event Action? TogglePaused;
     public event Action? Quit;
+    /// <summary>v0.7.0: take back lights Google / the Hue app changed.</summary>
+    public event Action? ResumeLights;
 
     private readonly NotifyIcon _ni;
     private readonly ToolStripMenuItem _toggleItem;
+    private readonly ToolStripMenuItem _resumeLightsItem;
     private readonly Icon _icon;
 
     public TrayIcon()
@@ -37,6 +40,11 @@ public sealed class TrayIcon : IDisposable
         var menu = new ContextMenuStrip();
         _toggleItem = new ToolStripMenuItem("Pause dimming", null, (_, _) => TogglePaused?.Invoke());
         menu.Items.Add(_toggleItem);
+        _resumeLightsItem = new ToolStripMenuItem("Resume lights schedule", null, (_, _) => ResumeLights?.Invoke())
+        {
+            ToolTipText = "Take back lights that Google Home, the Hue app or a switch changed.",
+        };
+        menu.Items.Add(_resumeLightsItem);
         menu.Items.Add(new ToolStripMenuItem("Settings…", null, (_, _) => OpenSettings?.Invoke()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Quit Underlit", null, (_, _) => Quit?.Invoke()));
@@ -48,8 +56,38 @@ public sealed class TrayIcon : IDisposable
         };
     }
 
+    /// <summary>v0.7.0: show how many lights are currently left alone
+    /// because something else changed them.</summary>
+    private int _lastOverrideCount = -1;
+    public void SetLightsOverridden(int count)
+    {
+        if (count == _lastOverrideCount) return;
+        _lastOverrideCount = count;
+        _resumeLightsItem.Text = count > 0
+            ? $"Resume lights schedule ({count} light{(count == 1 ? "" : "s")} left alone)"
+            : "Resume lights schedule";
+        _resumeLightsItem.Font = new Font(_resumeLightsItem.Font, count > 0 ? FontStyle.Bold : FontStyle.Regular);
+        _ni.Text = count > 0 ? $"Underlit - {count} light{(count == 1 ? "" : "s")} under manual control" : "Underlit";
+    }
+
     public void SetPausedLabel(bool paused)
         => _toggleItem.Text = paused ? "Resume dimming" : "Pause dimming";
+
+    /// <summary>v0.6.55: surface a balloon notification near the tray
+    /// icon. Used by the wind-down notification scheduler in
+    /// UnderlitHost - clean tray-anchored UX without taking a hard
+    /// dependency on the WinRT toast packages.</summary>
+    public void ShowBalloon(string title, string body, int timeoutMs = 5000)
+    {
+        try
+        {
+            _ni.BalloonTipTitle = title;
+            _ni.BalloonTipText  = body;
+            _ni.BalloonTipIcon  = ToolTipIcon.Info;
+            _ni.ShowBalloonTip(timeoutMs);
+        }
+        catch (Exception ex) { Underlit.Logger.Warn("TrayIcon.ShowBalloon failed", ex); }
+    }
 
     /// <summary>
     /// Draws the Underlit logo at the requested pixel size and returns a managed Icon.

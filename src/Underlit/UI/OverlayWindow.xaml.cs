@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Interop;
 using Underlit.Display;
+using Underlit.Sys;
 
 namespace Underlit.UI;
 
@@ -72,6 +73,16 @@ public partial class OverlayWindow : Window
 
         // Also force no-activate on show.
         NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOWNOACTIVATE);
+
+        // v0.6.72: hide the dim overlay from screenshots / recordings.
+        // WDA_EXCLUDEFROMCAPTURE keeps the overlay visible on the monitor
+        // (the user's extended-dim brightness still applies) but every
+        // modern screen-capture client — Snipping Tool, Win+Shift+S, Game
+        // Bar, OBS, Teams/Loom share — captures the desktop content
+        // UNDER the overlay rather than the dimmed pixels. Means the
+        // user no longer has to disable dim before grabbing a clean
+        // screenshot.
+        WindowDisplayAffinity.ExcludeFromCapture(hwnd);
     }
 
     public void SetDimOpacity(double opacity)
@@ -79,5 +90,30 @@ public partial class OverlayWindow : Window
         // Never go fully opaque — an all-black screen is dangerous (user can't see
         // to turn it off). Cap at 0.92.
         Opacity = Math.Clamp(opacity, 0.0, 0.92);
+    }
+
+    /// <summary>v0.6.74: re-assert HWND_TOPMOST. Some shell UI elements —
+    /// notably Windows Search (Win key) and the Action Center — register
+    /// themselves at a slightly higher topmost tier than normal user
+    /// topmost windows and end up rendering above our dim overlay. The
+    /// user sees the rest of the desktop dimmed but Search at full
+    /// brightness, which looks like a bug.
+    ///
+    /// <para>The fix used by f.lux, Iris, Lights Out, and similar apps
+    /// is exactly this: every ~500 ms while dim is active, call
+    /// SetWindowPos with HWND_TOPMOST so we get re-inserted at the top
+    /// of the topmost z-order group. Cheap (it's a single SWP call
+    /// per monitor) and idempotent — if we're already on top the call
+    /// is a no-op.</para></summary>
+    public void ReassertTopmost()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        NativeMethods.SetWindowPos(
+            hwnd, NativeMethods.HWND_TOPMOST,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE
+            | NativeMethods.SWP_NOSIZE
+            | NativeMethods.SWP_NOACTIVATE);
     }
 }
